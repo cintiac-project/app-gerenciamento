@@ -422,12 +422,12 @@ async function sbGetFreshToken(){
 }
 
 async function sbFetch(path, opts={}){
-  const token = (await sbGetFreshToken()) || SUPABASE_ANON_KEY;
+  const token = (await sbGetFreshToken()) || SUPABASE_PUBLISHABLE_KEY;
   const resp = await Promise.race([
     fetch(SUPABASE_URL+"/rest/v1/"+path, {
       method: opts.method||"GET",
       headers: {
-        "apikey": SUPABASE_ANON_KEY,
+        "apikey": SUPABASE_PUBLISHABLE_KEY,
         "Authorization": "Bearer "+token,
         "Content-Type": "application/json",
         "Prefer": opts.prefer||"return=representation",
@@ -464,7 +464,7 @@ async function sbWrite(path, {method="POST", body, prefer="return=representation
     fetch(SUPABASE_URL+"/rest/v1/"+path, {
       method,
       headers: {
-        "apikey": SUPABASE_ANON_KEY,
+        "apikey": SUPABASE_PUBLISHABLE_KEY,
         "Authorization": "Bearer "+token,
         "Content-Type": "application/json",
         "Prefer": prefer
