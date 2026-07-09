@@ -368,10 +368,10 @@
    Valores em: Supabase → Project Settings → Data API
    ============================================================ */
 const SUPABASE_URL      = "https://athqftngjwsyhsakhspl.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF0aHFmdG5nandzeWhzYWtoc3BsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE4NTE1OTMsImV4cCI6MjA5NzQyNzU5M30.mIJkjWmI2Y92vPMoo1FScIJeQgPh_Q4wa0qlg0oIao0";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_ILi8XrMQQSARGXPQALBkbQ_hBJA6geV";
 /* ============================================================ */
 
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: {
     persistSession: false,   // não salva sessão no localStorage — evita travamento por token expirado
     autoRefreshToken: false, // não tenta renovar token em background — evita query pendurada
