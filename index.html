@@ -497,10 +497,21 @@ function sbDelete(table, id){
 function sbDeleteWhere(table, filterQS){
   return sbWrite(table+"?"+filterQS, {method:"DELETE", prefer:"return=minimal"});
 }
+  function sbDelete(table, id){
+  return sbWrite(table+"?"+qsEq("id",id), {method:"DELETE", prefer:"return=minimal"});
+}
+function sbDeleteWhere(table, filterQS){
+  return sbWrite(table+"?"+filterQS, {method:"DELETE", prefer:"return=minimal"});
+}
 function sbUpsert(table, body, opts={}){
   const qs = opts.onConflict? "?on_conflict="+encodeURIComponent(opts.onConflict) : "";
   return sbWrite(table+qs, {method:"POST", body,
     prefer:opts.prefer||"resolution=merge-duplicates,return=representation"});
+}
+  async function excluirHorasEmLote(ids) {
+  if (!ids || ids.length === 0) return;
+  const idsStr = ids.join(',');
+  await sbDeleteWhere("horas", `id=in.(${idsStr})`);
 }
 function toCamel(obj){
   if(Array.isArray(obj)) return obj.map(toCamel);
@@ -2580,7 +2591,7 @@ function viewHoras(v){
       <h3>Pré-requisitos</h3><p>Para apontar horas, cadastre primeiro a <b>equipe interna</b> e ao menos um <b>projeto</b>.</p></div></div>`;
     return;
   }
-  ST.search.horas=ST.search.horas||{mes:"",colab:"",proj:"",de:"",ate:""};
+  ST.search.horas=ST.search.horas||{mes:"", colab:"", proj:"", de:"", ate:"", selecionados: []};
   const f=ST.search.horas;
   const myId=currentColabId();
   let lista=DB.data.horas.slice();
@@ -7121,35 +7132,49 @@ function viewHoras(v){
   $("#csv-modelo").onclick=()=>baixarModeloCSV();
   $("#csv-import").onclick=()=>$("#csv-file").click();
   $("#csv-file").onchange=(e)=>importarCSVHoras(e);
+  
   if(!getInternos().length||!DB.data.projetos.length){
     v.innerHTML=`<div class="card"><div class="empty"><span class="ic">◷</span>
       <h3>Pré-requisitos</h3><p>Para apontar horas, cadastre primeiro a <b>equipe interna</b> e ao menos um <b>projeto</b>.</p></div></div>`;
     return;
   }
-  ST.search.horas=ST.search.horas||{mes:"",colab:"",proj:"",de:"",ate:""};
-  const f=ST.search.horas;
-  const myId=currentColabId();
-  let lista=DB.data.horas.slice();
-  if(myId) lista=lista.filter(h=>h.colaboradorId===myId);  // colaborador só vê suas horas
-  if(f.mes) lista=lista.filter(h=>monthKey(h.data)===f.mes);
-  if(f.colab && !myId) lista=lista.filter(h=>h.colaboradorId===f.colab);
-  if(f.proj) lista=lista.filter(h=>h.projetoId===f.proj);
-  if(f.de) lista=lista.filter(h=>h.data && h.data>=f.de);
-  if(f.ate) lista=lista.filter(h=>h.data && h.data<=f.ate);
+  
+  ST.search.horas = ST.search.horas || {mes:"", colab:"", proj:"", de:"", ate:"", selecionados: []};
+  const f = ST.search.horas;
+  const myId = currentColabId();
+  let lista = DB.data.horas.slice();
+  if(myId) lista = lista.filter(h=>h.colaboradorId===myId);
+  if(f.mes) lista = lista.filter(h=>monthKey(h.data)===f.mes);
+  if(f.colab && !myId) lista = lista.filter(h=>h.colaboradorId===f.colab);
+  if(f.proj) lista = lista.filter(h=>h.projetoId===f.proj);
+  if(f.de) lista = lista.filter(h=>h.data && h.data>=f.de);
+  if(f.ate) lista = lista.filter(h=>h.data && h.data<=f.ate);
   lista.sort((a,b)=>(b.data||"").localeCompare(a.data||""));
 
-  const totalH=lista.reduce((s,h)=>s+(+h.horas||0),0);
-  const meses=[...new Set(DB.data.horas.map(h=>monthKey(h.data)).filter(Boolean))].sort().reverse();
+  const totalH = lista.reduce((s,h)=>s+(+h.horas||0),0);
+  const meses = [...new Set(DB.data.horas.map(h=>monthKey(h.data)).filter(Boolean))].sort().reverse();
 
-  const rows=lista.map(h=>`<tr>
-    <td style="font-size:12px">${fmtDate(h.data)}</td>
-    <td style="font-weight:600">${esc(nomeColab(h.colaboradorId))}</td>
-    <td>${esc(nomeProjeto(h.projetoId))}</td>
-    <td>${h.atividadeId?esc(nomeAtividade(h.atividadeId)):'<span style="color:var(--ink-faint)">—</span>'}</td>
-    <td><span class="tag" style="background:${corCategoria(h.categoriaId)}22;color:${corCategoria(h.categoriaId)}">${esc(nomeCategoria(h.categoriaId))}</span></td>
-    <td class="num" style="font-weight:600">${fmtH(h.horas)}</td>
-    <td class="actions"><button class="btn-icon" data-edh="${h.id}">✎</button>
-      <button class="btn-icon del" data-dlh="${h.id}">🗑</button></td></tr>`).join("");
+  // Função para verificar se todos os itens visíveis estão selecionados
+  const todosSelecionados = lista.length > 0 && lista.every(h => f.selecionados.includes(h.id));
+  const temSelecionados = f.selecionados.length > 0;
+
+  const rows = lista.map(h => {
+    const checked = f.selecionados.includes(h.id) ? 'checked' : '';
+    return `<tr>
+      <td style="width:36px;text-align:center">
+        <input type="checkbox" class="hora-checkbox" data-id="${h.id}" ${checked}>
+      </td>
+      <td style="font-size:12px">${fmtDate(h.data)}</td>
+      <td style="font-weight:600">${esc(nomeColab(h.colaboradorId))}</td>
+      <td>${esc(nomeProjeto(h.projetoId))}</td>
+      <td>${h.atividadeId?esc(nomeAtividade(h.atividadeId)):'<span style="color:var(--ink-faint)">—</span>'}</td>
+      <td><span class="tag" style="background:${corCategoria(h.categoriaId)}22;color:${corCategoria(h.categoriaId)}">${esc(nomeCategoria(h.categoriaId))}</span></td>
+      <td class="num" style="font-weight:600">${fmtH(h.horas)}</td>
+      <td class="actions">
+        <button class="btn-icon" data-edh="${h.id}">✎</button>
+        <button class="btn-icon del" data-dlh="${h.id}">🗑</button>
+      </td></tr>`;
+  }).join("");
 
   v.innerHTML=`
   ${myId?`<div class="help-banner" style="background:var(--accent-soft);border-color:#bcdcd9;color:#1f6f6b"><span>👤</span><span>Você está vendo apenas <b>seus próprios apontamentos</b>.</span></div>`:""}
@@ -7171,21 +7196,117 @@ function viewHoras(v){
     <div class="spacer"></div>
     <span class="field-inline">Total filtrado: <b style="color:var(--ink)">${fmtH(totalH)}</b></span>
   </div>
+  
+  <div class="toolbar" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line-soft)">
+    <div class="field-inline">
+      <input type="checkbox" id="select-all-horas" ${todosSelecionados ? 'checked' : ''}>
+      <label for="select-all-horas" style="cursor:pointer;font-weight:500">Selecionar todos</label>
+    </div>
+    <div class="field-inline" style="color:var(--ink-soft)">
+      ${temSelecionados ? `${f.selecionados.length} selecionado(s)` : 'Nenhum selecionado'}
+    </div>
+    <div class="spacer"></div>
+    ${temSelecionados ? `<button class="btn danger" id="delete-selected">🗑 Excluir selecionados (${f.selecionados.length})</button>` : ''}
+    ${temSelecionados ? `<button class="btn ghost sm" id="clear-selection">✕ Limpar seleção</button>` : ''}
+  </div>
+  
   ${lista.length?`<div class="card table-wrap"><table><thead><tr>
+    <th style="width:36px">#</th>
     <th>Data</th><th>Colaborador</th><th>Projeto</th><th>Atividade</th><th>Categoria</th>
     <th class="num">Horas</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
    :`<div class="card"><div class="empty"><span class="ic">◷</span><h3>Nenhum apontamento</h3>
      <p>Registre as horas executadas pela equipe nas atividades dos projetos.</p>
      <button class="btn" id="ah2">+ Apontar horas</button></div></div>`}`;
 
-  $("#f-mes").onchange=e=>{ f.mes=e.target.value; viewHoras(v); };
-  if($("#f-colab")) $("#f-colab").onchange=e=>{ f.colab=e.target.value; viewHoras(v); };
-  $("#f-proj").onchange=e=>{ f.proj=e.target.value; viewHoras(v); };
-  $("#f-de").onchange=e=>{ f.de=e.target.value; viewHoras(v); };
-  $("#f-ate").onchange=e=>{ f.ate=e.target.value; viewHoras(v); };
-  if($("#f-clr-data")) $("#f-clr-data").onclick=()=>{ f.de=""; f.ate=""; viewHoras(v); };
+  // --- EVENTOS ---
+  
+  // Filtros
+  $("#f-mes").onchange=e=>{ f.mes=e.target.value; f.selecionados=[]; viewHoras(v); };
+  if($("#f-colab")) $("#f-colab").onchange=e=>{ f.colab=e.target.value; f.selecionados=[]; viewHoras(v); };
+  $("#f-proj").onchange=e=>{ f.proj=e.target.value; f.selecionados=[]; viewHoras(v); };
+  $("#f-de").onchange=e=>{ f.de=e.target.value; f.selecionados=[]; viewHoras(v); };
+  $("#f-ate").onchange=e=>{ f.ate=e.target.value; f.selecionados=[]; viewHoras(v); };
+  if($("#f-clr-data")) $("#f-clr-data").onclick=()=>{ f.de=""; f.ate=""; f.selecionados=[]; viewHoras(v); };
+  
+  // Checkbox individual
+  v.querySelectorAll(".hora-checkbox").forEach(cb => {
+    cb.onchange = function() {
+      const id = this.dataset.id;
+      if (this.checked) {
+        if (!f.selecionados.includes(id)) f.selecionados.push(id);
+      } else {
+        f.selecionados = f.selecionados.filter(x => x !== id);
+      }
+      viewHoras(v); // Re-renderiza para atualizar contadores
+    };
+  });
+  
+  // Selecionar todos
+  const selectAll = document.getElementById('select-all-horas');
+  if (selectAll) {
+    selectAll.onchange = function() {
+      if (this.checked) {
+        f.selecionados = lista.map(h => h.id);
+      } else {
+        f.selecionados = [];
+      }
+      viewHoras(v);
+    };
+  }
+  
+  // Limpar seleção
+  const clearBtn = document.getElementById('clear-selection');
+  if (clearBtn) {
+    clearBtn.onclick = function() {
+      f.selecionados = [];
+      viewHoras(v);
+    };
+  }
+  
+  // Excluir selecionados
+  const deleteBtn = document.getElementById('delete-selected');
+  if (deleteBtn) {
+    deleteBtn.onclick = function() {
+      if (f.selecionados.length === 0) return;
+      const count = f.selecionados.length;
+      confirmar(
+        `Excluir ${count} apontamento(s) de horas?`,
+        `Esta ação é irreversível. ${count} registro(s) serão removidos definitivamente do banco de dados.`,
+        async () => {
+          try {
+            // Pega os IDs selecionados
+            const idsParaExcluir = [...f.selecionados];
+            
+            // Remove do banco de dados um por um (ou em lote)
+            for (const id of idsParaExcluir) {
+              await sbDelete("horas", id);
+            }
+            
+            // Remove da memória
+            DB.data.horas = DB.data.horas.filter(h => !idsParaExcluir.includes(h.id));
+            
+            // Limpa a seleção
+            f.selecionados = [];
+            
+            toast(`${idsParaExcluir.length} apontamento(s) excluído(s) com sucesso.`);
+            render(); // Recarrega a página
+          } catch (error) {
+            console.error("Erro ao excluir em lote:", error);
+            toast("Erro ao excluir: " + (error.message || error));
+            
+          }
+        }
+      );
+    };
+  }
+  
+  // Exportar CSV
   if($("#csv-export")) $("#csv-export").onclick=()=>exportarHorasCSV(lista);
+  
+  // Botão "Apontar horas" (dentro do empty state)
   if($("#ah2")) $("#ah2").onclick=()=>formHoras();
+  
+  // Botões de edição/exclusão individual
   v.querySelectorAll("[data-edh]").forEach(b=>b.onclick=()=>{
     const x=DB.data.horas.find(y=>y.id===b.dataset.edh);
     if(myId && x.colaboradorId!==myId){ toast("Você só pode editar seus próprios apontamentos."); return; }
@@ -7198,7 +7319,10 @@ function viewHoras(v){
       const hid=b.dataset.dlh;
       DB.data.horas=DB.data.horas.filter(x=>x.id!==hid);
       await sbDelete("horas", hid);
-      toast("Apontamento excluído."); render();
+      toast("Apontamento excluído.");
+      // Remove da seleção se estiver lá
+      f.selecionados = f.selecionados.filter(id => id !== hid);
+      render();
     });
   });
 }
