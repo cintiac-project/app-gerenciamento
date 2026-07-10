@@ -4246,7 +4246,12 @@ function formProjeto(p){
       v.receita=parseFloat(v.receita)||0;
       if(edit){
         Object.assign(p,v);
-        await sbUpdate("projetos", p.id, toSnake(v));
+        // envia só os campos deste formulário — o objeto 'p' em memória também
+        // carrega raci/stakeholders/riscos/reunioes, que não são colunas da
+        // tabela 'projetos' (ficam em tabelas próprias) e não podem ir no update.
+        const payload={};
+        fields.forEach(f=>{ payload[f.key]=v[f.key]; });
+        await sbUpdate("projetos", p.id, toSnake(payload));
         toast("Projeto atualizado.");
       } else {
         const novo=Object.assign({id:uid(),stakeholders:[],riscos:[],raci:{}},v);
