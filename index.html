@@ -4226,22 +4226,23 @@ function openForm(cfg){
 /* ---- FORM: PROJETO ---- */
 function formProjeto(p){
   const edit=!!p;
+  const fields=[
+    {key:"nome",label:"Nome do projeto",required:true,full:true,placeholder:"Ex.: Implantação do Sistema X"},
+    {key:"codigo",label:"Código / Sigla",placeholder:"Ex.: PRJ-2026-01"},
+    {key:"cliente",label:"Cliente / Área demandante",placeholder:"Ex.: Diretoria Comercial"},
+    {key:"gerente",label:"Gerente responsável",placeholder:"Nome do gestor do projeto"},
+    {key:"dataInicio",label:"Data de início",type:"date"},
+    {key:"dataFim",label:"Data de término prevista",type:"date"},
+    {key:"receita",label:"Receita / Valor do projeto (R$)",type:"number",min:0,
+      placeholder:"0,00",help:"Valor total contratado do projeto"},
+    {key:"descricao",label:"Descrição / Escopo",type:"textarea",full:true,
+      placeholder:"Objetivo e escopo resumido do projeto"}
+  ];
   openForm({
     title:edit?"Editar projeto":"Novo projeto",
     wide:true,
     values:p||{status:"Planejado",dataInicio:todayStr()},
-    fields:[
-      {key:"nome",label:"Nome do projeto",required:true,full:true,placeholder:"Ex.: Implantação do Sistema X"},
-      {key:"codigo",label:"Código / Sigla",placeholder:"Ex.: PRJ-2026-01"},
-      {key:"cliente",label:"Cliente / Área demandante",placeholder:"Ex.: Diretoria Comercial"},
-      {key:"gerente",label:"Gerente responsável",placeholder:"Nome do gestor do projeto"},
-      {key:"dataInicio",label:"Data de início",type:"date"},
-      {key:"dataFim",label:"Data de término prevista",type:"date"},
-      {key:"receita",label:"Receita / Valor do projeto (R$)",type:"number",min:0,
-        placeholder:"0,00",help:"Valor total contratado do projeto"},
-      {key:"descricao",label:"Descrição / Escopo",type:"textarea",full:true,
-        placeholder:"Objetivo e escopo resumido do projeto"}
-    ],
+    fields,
     onSave:async(v)=>{
       v.receita=parseFloat(v.receita)||0;
       if(edit){
