@@ -766,6 +766,15 @@ function colabBadge(c){ return c && c.tipo==="parceiro" ? ' <span class="tag" st
 function nomeCategoria(id){ const c=getCategoria(id); return c?c.nome:"—"; }
 function corCategoria(id){ const c=getCategoria(id); return c?c.cor:"#8a98a6"; }
 function nomeRubrica(id){ const r=getRubrica(id); return r?r.nome:"—"; }
+/* linha auxiliar "3 × R$ 150,00" exibida sob o valor total de um lançamento
+   financeiro, só quando fizer diferença mostrar (quantidade≠1 ou valor
+   unitário diferente do total, ex.: lançamentos antigos sem quebra). */
+function detalheQtdValor(f){
+  const qtd=+f.quantidade||0, vu=+f.valorUnitario||0;
+  if(!qtd||!vu) return "";
+  if(qtd===1 && Math.abs(vu-(+f.valor||0))<0.005) return "";
+  return `<div style="font-size:10.5px;color:var(--ink-faint)">${fmtNum(qtd,qtd%1?2:0)} × ${fmtBRL(vu)}</div>`;
+}
 function nomeAtividade(id){ const a=getAtividade(id); return a?a.nome:"—"; }
 
 const STATUS_PROJ=["Planejado","Em andamento","Em risco","Concluído","Cancelado"];
@@ -1995,7 +2004,7 @@ function projFinanceiro(c,p){
       <td><span class="badge ${f.tipo==="receita"?"b-ok":"b-danger"}">${f.tipo==="receita"?"Receita":"Despesa"}</span></td>
       <td>${esc(f.descricao||"—")}<div style="font-size:11px;color:var(--ink-faint)">${esc(nomeRubrica(f.rubricaId))}</div></td>
       <td>${venc?`<span class="badge b-danger">Vencido</span>`:statusBadge(f.status==="realizado"?"Realizado":"Previsto")}</td>
-      <td class="num" style="color:${f.tipo==="receita"?"var(--ok)":"var(--danger)"};font-weight:600">${f.tipo==="receita"?"+":"−"}${fmtBRL(f.valor)}</td>
+      <td class="num" style="color:${f.tipo==="receita"?"var(--ok)":"var(--danger)"};font-weight:600">${f.tipo==="receita"?"+":"−"}${fmtBRL(f.valor)}${detalheQtdValor(f)}</td>
       <td class="actions"><button class="btn-icon" data-edf="${f.id}">✎</button>
         <button class="btn-icon del" data-dlf="${f.id}">🗑</button></td></tr>`;
   }).join("");
@@ -2971,7 +2980,7 @@ function viewFinanceiro(v){
     <td><span class="badge ${x.tipo==="receita"?"b-ok":"b-danger"}">${x.tipo==="receita"?"Receita":"Despesa"}</span></td>
     <td>${esc(x.descricao||"—")}<div style="font-size:11px;color:var(--ink-faint)">${esc(nomeRubrica(x.rubricaId))}</div></td>
     <td>${venc?'<span class="badge b-danger">Vencido</span>':statusBadge(x.status==="realizado"?"Realizado":"Previsto")}</td>
-    <td class="num" style="color:${x.tipo==="receita"?"var(--ok)":"var(--danger)"};font-weight:600">${x.tipo==="receita"?"+":"−"}${fmtBRL(x.valor)}</td>
+    <td class="num" style="color:${x.tipo==="receita"?"var(--ok)":"var(--danger)"};font-weight:600">${x.tipo==="receita"?"+":"−"}${fmtBRL(x.valor)}${detalheQtdValor(x)}</td>
     <td class="actions"><button class="btn-icon" data-edf="${x.id}">✎</button>
       <button class="btn-icon del" data-dlf="${x.id}">🗑</button></td></tr>`;
   }).join("");
@@ -4118,9 +4127,9 @@ function confirmarComOpcao(titulo,texto,opcaoLabel,onOk){
 function openForm(cfg){
   const fields=cfg.fields, vals=Object.assign({},cfg.values||{});
   function fieldHtml(f){
-    const v=vals[f.key];
+    const v=(f.computed&&f.computeFn)?f.computeFn(vals):vals[f.key];
     const req=f.required?'<span class="req"> *</span>':"";
-    const dis=f.disabled?"disabled":"";
+    const dis=(f.disabled||f.computed)?"disabled":"";
     let input="";
     if(f.type==="select"){
       const opts=(f.dynamic?f.optionsFn(vals):f.options)||[];
@@ -4185,7 +4194,20 @@ function openForm(cfg){
       }
     });
   }
-  $("#f-grid").addEventListener("change",()=>{ collect(); refreshDynamic(); });
+  // recalcula campos "computed" (ex.: valor total = quantidade × valor unitário)
+  // a partir dos valores atuais e reflete no input desabilitado correspondente.
+  function recomputeComputed(){
+    fields.forEach(f=>{
+      if(!(f.computed&&f.computeFn)) return;
+      const el=$("#f-grid").querySelector(`[data-k="${f.key}"]`);
+      if(!el) return;
+      const val=f.computeFn(vals);
+      vals[f.key]=val;
+      el.value=(val==null||isNaN(val))?"":val;
+    });
+  }
+  $("#f-grid").addEventListener("input",()=>{ collect(); recomputeComputed(); });
+  $("#f-grid").addEventListener("change",()=>{ collect(); refreshDynamic(); recomputeComputed(); });
   $("#f-grid").querySelectorAll("[data-k-indet]").forEach(chk=>{
     chk.onchange=()=>{
       const key=chk.dataset.kIndet;
@@ -4201,7 +4223,7 @@ function openForm(cfg){
   $("#m-cancel").onclick=closeModal;
   $("#m-save").onclick=async()=>{
     collect();
-    const faltando=fields.filter(f=>f.required&&!f.disabled&&!String(vals[f.key]||"").trim());
+    const faltando=fields.filter(f=>f.required&&!f.disabled&&!f.computed&&!String(vals[f.key]||"").trim());
     if(faltando.length){
       const err=$("#f-err");
       err.textContent="Preencha os campos obrigatórios: "+faltando.map(f=>f.label).join(", ")+".";
@@ -4410,10 +4432,19 @@ function formHoras(h){
 /* ---- FORM: FINANCEIRO ---- */
 function formFinanceiro(projetoId,f){
   const edit=!!f;
+  // compatibilidade com lançamentos antigos (só tinham "valor"): assume
+  // quantidade 1 e valor unitário = valor total, então o cálculo automático
+  // não muda nada do que já estava salvo.
+  const initial=f
+    ? Object.assign({},f,{
+        quantidade: f.quantidade!=null && f.quantidade!=="" ? f.quantidade : 1,
+        valorUnitario: f.valorUnitario!=null && f.valorUnitario!=="" ? f.valorUnitario : (+f.valor||0)
+      })
+    : {projetoId:projetoId||"",tipo:"despesa",status:"previsto",data:todayStr(),quantidade:1,valorUnitario:""};
   openForm({
     title:edit?"Editar lançamento":"Novo lançamento financeiro",
     wide:true,
-    values:f||{projetoId:projetoId||"",tipo:"despesa",status:"previsto",data:todayStr()},
+    values:initial,
     fields:[
       {key:"projetoId",label:"Projeto",type:"select",required:true,
         options:DB.data.projetos.map(p=>({value:p.id,label:p.nome}))},
@@ -4425,11 +4456,19 @@ function formFinanceiro(projetoId,f){
         options:[{value:"previsto",label:"Previsto (a realizar)"},{value:"realizado",label:"Realizado"}]},
       {key:"data",label:"Data / Vencimento",type:"date",required:true,
         help:"Usada para alertas de prazo financeiro"},
-      {key:"valor",label:"Valor (R$)",type:"number",required:true,min:0,placeholder:"0,00"},
+      {key:"quantidade",label:"Quantidade",type:"number",required:true,min:0,step:"any",
+        placeholder:"1",help:"Ex.: nº de licenças, diárias, itens…"},
+      {key:"valorUnitario",label:"Valor unitário (R$)",type:"number",required:true,min:0,
+        placeholder:"0,00"},
+      {key:"valor",label:"Valor total (R$)",type:"number",computed:true,
+        computeFn:vv=>Math.round(((parseFloat(vv.quantidade)||0)*(parseFloat(vv.valorUnitario)||0))*100)/100,
+        help:"Calculado automaticamente: quantidade × valor unitário"},
       {key:"descricao",label:"Descrição",full:true,placeholder:"Ex.: Pagamento fornecedor de licenças"}
     ],
     onSave:async(v)=>{
-      v.valor=parseFloat(v.valor)||0;
+      v.quantidade=parseFloat(v.quantidade)||0;
+      v.valorUnitario=parseFloat(v.valorUnitario)||0;
+      v.valor=Math.round(v.quantidade*v.valorUnitario*100)/100;
       if(edit){
         Object.assign(f,v);
         await sbUpdate("financeiro", f.id, toSnake(v));
