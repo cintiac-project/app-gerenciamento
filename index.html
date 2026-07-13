@@ -922,13 +922,16 @@ function calcularAlertas(){
 
    Premissas (definidas com o gestor):
    - Cada atividade tem um campo opcional "horasPrevistas" (estimativa de
-     esforço total, informada manualmente ao criar/editar a atividade).
+     esforço, informada manualmente ao criar/editar a atividade).
    - As pessoas "alocadas" numa atividade são: o Responsável do cronograma
      + todas as pessoas marcadas como "R" (Responsável/Executor) na matriz
      RACI daquela atividade, dentro do mesmo projeto.
-   - horasPrevistas é dividida igualmente entre as pessoas alocadas e,
-     para cada pessoa, dividida igualmente pelos dias ÚTEIS (seg-sex) entre
-     dataInicioPrev e dataFimPrev da atividade.
+   - horasPrevistas NÃO é dividida entre as pessoas alocadas: cada uma
+     delas (Responsável e cada "R") é considerada dedicando essa
+     quantidade INTEIRA de horas à atividade — ex.: 3 pessoas alocadas e
+     40h previstas = 40h de ocupação para CADA uma das 3, não 13,3h.
+   - Para cada pessoa, essas horas previstas são distribuídas igualmente
+     pelos dias ÚTEIS (seg-sex) entre dataInicioPrev e dataFimPrev da atividade.
    - Capacidade padrão: 8h úteis por dia, por pessoa, IGUAL para todas.
    - A ocupação é sempre calculada de forma GLOBAL (todas as atividades de
      todos os projetos), porque uma pessoa pode estar cheia por causa de
@@ -977,8 +980,7 @@ function construirMapaOcupacaoGlobal(){
     if(!pessoas.length) return;
     const dias=diasUteisEntre(a.dataInicioPrev,a.dataFimPrev);
     if(!dias.length) return;
-    const horasPorPessoa=horasPrev/pessoas.length;
-    const horasPorPessoaPorDia=horasPorPessoa/dias.length;
+    const horasPorPessoaPorDia=horasPrev/dias.length;
     pessoas.forEach(pid=>{
       mapa[pid]=mapa[pid]||{};
       dias.forEach(d=>{
@@ -1000,7 +1002,7 @@ function detalheOcupacaoDia(colaboradorId,dia){
     if(!pessoas.includes(colaboradorId)) return;
     const dias=diasUteisEntre(a.dataInicioPrev,a.dataFimPrev);
     if(!dias.includes(dia)) return;
-    const horasDia=(horasPrev/pessoas.length)/dias.length;
+    const horasDia=horasPrev/dias.length;
     out.push({projetoId:a.projetoId, projetoNome:nomeProjeto(a.projetoId), atividadeId:a.id, atividadeNome:a.nome, horas:horasDia});
   });
   return out;
@@ -1809,7 +1811,8 @@ function projOcupacao(c,p){
 
   const explicacao=`<div class="help-banner"><span>ℹ️</span><span>
     Calculado a partir das <b>horas previstas</b> de cada atividade (informe esse campo ao criar/editar
-    atividades no Cronograma), divididas entre o Responsável e as pessoas marcadas como "R" na Matriz RACI,
+    atividades no Cronograma). Cada pessoa alocada — o Responsável e cada pessoa marcada como "R" na Matriz
+    RACI — é considerada dedicando essa quantidade INTEIRA de horas (não é dividida entre elas), distribuída
     ao longo dos dias úteis entre início e término previstos. Capacidade considerada:
     <b>${CAPACIDADE_DIARIA_PADRAO}h/dia por pessoa</b>. O cálculo é <b>global</b> — um conflito pode vir de
     outro projeto em que a pessoa também esteja alocada, não só deste.</span></div>`;
@@ -2081,7 +2084,8 @@ function projStakeholders(c,p){
 
 /* ---- MATRIZ RACI ---- */
 function projRaci(c,p){
-  const ats=DB.data.atividades.filter(a=>a.projetoId===p.id);
+  const ats=DB.data.atividades.filter(a=>a.projetoId===p.id)
+    .sort((a,b)=>(a.dataInicioPrev||"").localeCompare(b.dataInicioPrev||""));
   // ordena: internos primeiro, depois parceiros
   const colabs=[...getInternos(),...getParceiros()];
   p.raci=p.raci||{};
@@ -2847,8 +2851,9 @@ function viewOcupacaoEquipe(v){
   if(!DB.data.atividades.some(a=>(+a.horasPrevistas||0)>0)){
     v.innerHTML=`<div class="help-banner"><span>ℹ️</span><span>
       A ocupação é calculada a partir das <b>horas previstas</b> das atividades de cada projeto
-      (campo preenchido no Cronograma Físico), divididas entre o Responsável e as pessoas marcadas
-      como "R" na Matriz RACI, ao longo dos dias úteis entre início e término previstos.</span></div>
+      (campo preenchido no Cronograma Físico). O Responsável e cada pessoa marcada como "R" na
+      Matriz RACI recebem essa quantidade INTEIRA de horas (sem dividir entre eles), distribuída
+      ao longo dos dias úteis entre início e término previstos.</span></div>
       <div class="card"><div class="empty"><span class="ic">🕐</span>
       <h3>Ainda não há horas previstas lançadas</h3>
       <p>Preencha "Horas previstas" nas atividades dos projetos do portfólio para que este painel
@@ -2905,8 +2910,9 @@ function viewOcupacaoEquipe(v){
   v.innerHTML=`
   <div class="help-banner"><span>ℹ️</span><span>
     Visão consolidada de <b>todos os projetos do portfólio</b> em que ${myId?"você está":"a pessoa está"} alocada.
-    As horas vêm das <b>horas previstas</b> das atividades (Cronograma Físico de cada projeto), divididas pelos
-    dias úteis e pelas pessoas responsáveis/executoras (RACI "R"). Capacidade considerada:
+    As horas vêm das <b>horas previstas</b> das atividades (Cronograma Físico de cada projeto): o Responsável e
+    cada pessoa marcada como "R" na RACI recebem essa quantidade INTEIRA de horas (sem dividir entre eles),
+    distribuída pelos dias úteis entre início e término previstos. Capacidade considerada:
     <b>${CAPACIDADE_DIARIA_PADRAO}h/dia</b>.</span></div>
 
   <div class="toolbar">
@@ -4207,7 +4213,11 @@ function openForm(cfg){
     });
   }
   $("#f-grid").addEventListener("input",()=>{ collect(); recomputeComputed(); });
-  $("#f-grid").addEventListener("change",()=>{ collect(); refreshDynamic(); recomputeComputed(); });
+  $("#f-grid").addEventListener("change",(e)=>{
+    collect(); refreshDynamic(); recomputeComputed();
+    const key=e.target && e.target.dataset ? e.target.dataset.k : null;
+    if(key && cfg.onFieldChange) cfg.onFieldChange(vals, key, $("#f-grid"));
+  });
   $("#f-grid").querySelectorAll("[data-k-indet]").forEach(chk=>{
     chk.onchange=()=>{
       const key=chk.dataset.kIndet;
@@ -4305,17 +4315,26 @@ function formAtividade(projetoId,a){
       {key:"dataInicioPrev",label:"Início previsto",type:"date",allowIndeterminate:true},
       {key:"dataFimPrev",label:"Término previsto",type:"date",allowIndeterminate:true},
       {key:"status",label:"Situação",type:"select",
-        options:STATUS_ATIV.map(s=>({value:s,label:s}))},
+        options:STATUS_ATIV.map(s=>({value:s,label:s})),
+        help:"Marcar como \"Concluída\" preenche automaticamente 100% em % Concluído."},
       {key:"progresso",label:"% Concluído",type:"number",min:0,
         help:"Valor de 0 a 100",placeholder:"0"},
       {key:"horasPrevistas",label:"Horas previstas (estimativa de esforço)",type:"number",min:0,step:"0.5",
         placeholder:"Ex.: 40",
-        help:"Opcional. Usado para calcular a ocupação da equipe no calendário (aba \"Ocupação da Equipe\"). Dividido entre o Responsável e as pessoas marcadas como \"R\" na RACI, ao longo dos dias úteis entre início e término previstos."}
+        help:"Opcional. Usado para calcular a ocupação da equipe no calendário (aba \"Ocupação da Equipe\"). Considera essa quantidade de horas TANTO para o Responsável QUANTO para cada pessoa marcada como \"R\" na RACI (não é dividido entre eles), ao longo dos dias úteis entre início e término previstos."}
     ],
+    onFieldChange:(vv,key,gridEl)=>{
+      if(key==="status" && vv.status==="Concluída"){
+        vv.progresso=100;
+        const inp=gridEl.querySelector('[data-k="progresso"]');
+        if(inp) inp.value=100;
+      }
+    },
     onSave:async(v)=>{
       v.progresso=Math.max(0,Math.min(100,parseFloat(v.progresso)||0));
       v.horasPrevistas=parseFloat(v.horasPrevistas)||0;
-      if(v.progresso>=100) v.status="Concluída";
+      if(v.status==="Concluída") v.progresso=100;
+      else if(v.progresso>=100) v.status="Concluída";
       if(edit){
         Object.assign(a,v);
         await sbUpdate("atividades", a.id, toSnake(v));
