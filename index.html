@@ -3058,8 +3058,11 @@ function viewFinanceiro(v){
 function viewEquipe(v){
   setTopAction(`<button class="btn">+ Nova pessoa</button>`,()=>formColab());
   // botão secundário para sincronizar usuários que entraram sem profile
+  // (usa insertAdjacentHTML, não innerHTML+=, para não recriar o botão
+  // "+ Nova pessoa" já existente e destruir o onclick que acabou de ser
+  // atribuído a ele em setTopAction acima)
   const topbar=document.getElementById("topbar-actions");
-  if(topbar) topbar.innerHTML+=`<button class="btn ghost" id="btn-sync-users" style="margin-left:6px">↻ Sincronizar usuários</button>`;
+  if(topbar) topbar.insertAdjacentHTML("beforeend",`<button class="btn ghost" id="btn-sync-users" style="margin-left:6px">↻ Sincronizar usuários</button>`);
   const internos=getInternos();
   const parceiros=getParceiros();
   function rowsFor(list){
@@ -4546,16 +4549,31 @@ function formHoras(h){
         toast("Apontamento atualizado.");
         await DB.load();
       } else {
-        // criação: usa a função do servidor, que cria a atividade se preciso
-        // e sempre grava vinculado ao usuário autenticado (mesmo se for colaborador)
-        await sb.rpc("registrar_horas", {
-          p_data: v.data,
-          p_projeto_id: v.projetoId,
-          p_nome_atividade: nomeAtiv,
-          p_categoria_id: v.categoriaId,
-          p_horas: v.horas,
-          p_descricao: v.descricao||""
-        });
+        // criação: resolve/cria a atividade via RPC (mesma usada na edição,
+        // funciona mesmo para colaborador comum) e insere o apontamento
+        // diretamente, sempre vinculado ao colaborador SELECIONADO NO
+        // FORMULÁRIO (v.colaboradorId) — não ao usuário autenticado.
+        // Isso corrige o caso em que o gestor aponta horas em nome de outra
+        // pessoa da equipe: antes, a RPC registrar_horas ignorava o
+        // colaborador escolhido e sempre gravava no usuário logado (o
+        // próprio gestor), o que também fazia a atividade do cronograma
+        // ficar associada à pessoa errada.
+        let atividadeId=null;
+        if(nomeAtiv && v.projetoId){
+          const existente=DB.data.atividades.find(a=>
+            a.projetoId===v.projetoId && (a.nome||"").trim().toLowerCase()===nomeAtiv.toLowerCase());
+          if(existente){ atividadeId=existente.id; }
+          else{
+            const { data:novoId } = await sb.rpc("resolver_atividade", {
+              p_projeto_id: v.projetoId, p_nome_atividade: nomeAtiv, p_categoria_id: v.categoriaId
+            });
+            atividadeId=novoId;
+          }
+        }
+        await sbInsert("horas", toSnake({
+          id:uid(), data:v.data, colaboradorId:v.colaboradorId, projetoId:v.projetoId,
+          atividadeId, categoriaId:v.categoriaId, horas:v.horas, descricao:v.descricao||""
+        }));
         toast("Horas registradas.");
       }
       await DB.load(); render();
