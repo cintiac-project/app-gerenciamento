@@ -3918,9 +3918,15 @@ function importarCSVHoras(event){
       const resultado={ok:0, erro:0, novasAtividades:0, mensagens:[]};
       const novasAtividadesParaInserir=[];
       const novasHorasParaInserir=[];
-      linhas.slice(1).forEach((linha,idx)=>{
+      const linhasParaProcessar=linhas.slice(1);
+      // usa for..of (em vez de forEach) porque o corpo precisa de "await" para
+      // salvar o RACI da atividade nova; forEach nunca aguarda callbacks async,
+      // e o "await" dentro de uma arrow function não-async é um erro de sintaxe
+      // que impedia o navegador de sequer carregar o script inteiro.
+      for(let idx=0; idx<linhasParaProcessar.length; idx++){
+        const linha=linhasParaProcessar[idx];
         const lnNum=idx+2;
-        if(!linha.trim()) return;
+        if(!linha.trim()) continue;
         const c=parseCSVLine(linha,sep);
         const dataRaw=(c[cols.data]||"").trim();
         const colabRaw=(cols.colab>=0?(c[cols.colab]||""):"").trim();
@@ -3936,11 +3942,11 @@ function importarCSVHoras(event){
         const m2=dataRaw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
         if(m1) data=`${m1[3]}-${m1[2]}-${m1[1]}`;
         else if(m2) data=dataRaw;
-        else { resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: data inválida "${dataRaw}"`); return; }
+        else { resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: data inválida "${dataRaw}"`); continue; }
         // valida que é uma data real (não 99/99/2026 etc.)
         const dt=new Date(data+"T00:00:00");
         if(isNaN(dt.getTime()) || data.slice(0,7)!==dt.toISOString().slice(0,7)){
-          resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: data inválida "${dataRaw}"`); return;
+          resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: data inválida "${dataRaw}"`); continue;
         }
 
         // colaborador: prioridade ao logado (se for colaborador), senão usa coluna do CSV
@@ -3952,20 +3958,20 @@ function importarCSVHoras(event){
         if(!colab){
           resultado.erro++;
           resultado.mensagens.push(`Linha ${lnNum}: colaborador "${colabRaw}" não encontrado.`);
-          return;
+          continue;
         }
 
         // projeto
         const proj=DB.data.projetos.find(p=>(p.nome||"").trim().toLowerCase()===projRaw.toLowerCase());
-        if(!proj){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: projeto "${projRaw}" não cadastrado.`); return; }
+        if(!proj){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: projeto "${projRaw}" não cadastrado.`); continue; }
 
         // categoria
         const cat=DB.data.categorias.find(x=>(x.nome||"").trim().toLowerCase()===catRaw.toLowerCase());
-        if(!cat){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: categoria "${catRaw}" não cadastrada.`); return; }
+        if(!cat){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: categoria "${catRaw}" não cadastrada.`); continue; }
 
         // horas: aceita vírgula ou ponto decimal
         const horas=parseFloat(horasRaw.replace(",","."))||0;
-        if(horas<=0){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: horas inválidas "${horasRaw}".`); return; }
+        if(horas<=0){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: horas inválidas "${horasRaw}".`); continue; }
 
         // atividade: existente ou cria nova
         let atividadeId=null;
@@ -3994,7 +4000,7 @@ function importarCSVHoras(event){
         DB.data.horas.push(novaHora);
         novasHorasParaInserir.push(novaHora);
         resultado.ok++;
-      });
+      }
 
       if(novasAtividadesParaInserir.length)
         await sbInsert("atividades", novasAtividadesParaInserir.map(toSnake));
@@ -5052,6 +5058,19 @@ function traduzErroAuth(msg){
    ============================================================ */
 document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeModal(); });
 
+// Trava contra execuções concorrentes/duplicadas de iniciarApp: o listener
+// onAuthStateChange dispara SIGNED_IN automaticamente logo depois de
+// signInWithPassword/signUp, então iniciarApp acaba sendo chamada quase ao
+// mesmo tempo pelo handler do formulário de login E pelo listener. Sem essa
+// trava, a 2ª execução repete a busca/criação de perfil em paralelo com a 1ª;
+// se o perfil ainda não existir, o 2º INSERT esbarra no 1º (conflito de
+// chave), lança erro, cai no catch e chama showAuthErr — que, encontrando a
+// tela de login já escondida (porque a 1ª chamada já tinha logado com
+// sucesso), força tudo de volta para a tela de login mesmo com o app já
+// carregado. É esse "voltar sozinho pro login" que dá a impressão de que o
+// app não está logando.
+let _iniciandoAppUserId = null;
+
 async function iniciarApp(session){
   console.log("[PMO] iniciarApp, session:", session?"presente":"ausente");
   if(!session){
@@ -5066,6 +5085,17 @@ async function iniciarApp(session){
     renderAuthForm("login");
     return;
   }
+  // já há uma inicialização em andamento para este mesmo usuário — ignora a chamada duplicada
+  if(_iniciandoAppUserId === session.user.id){
+    console.log("[PMO] iniciarApp já em andamento para este usuário, ignorando chamada duplicada");
+    return;
+  }
+  // usuário já autenticado e app já carregado — nada a fazer
+  if(USER.current && USER.session && USER.session.user.id === session.user.id){
+    console.log("[PMO] usuário já autenticado e app já carregado, ignorando chamada duplicada");
+    return;
+  }
+  _iniciandoAppUserId = session.user.id;
   console.log("[PMO] user:", session.user.id, session.user.email);
   try{
     console.log("[PMO] buscando profile via REST direto...");
@@ -5122,6 +5152,8 @@ async function iniciarApp(session){
   }catch(e){
     console.error("[PMO] ERRO:", e);
     showAuthErr("Erro: "+(e.message||e));
+  } finally {
+    if(_iniciandoAppUserId === session.user.id) _iniciandoAppUserId = null;
   }
 }
 
