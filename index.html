@@ -888,7 +888,7 @@ function calcularAlertas(){
   DB.data.atividades.forEach(a=>{
     if(!a.dataFimPrev || a.status==="Concluída" || a.status==="Cancelada" || (+a.progresso||0)>=100) return;
     const d=daysBetween(hoje,a.dataFimPrev);
-    const resp=a.responsavelId?nomeColab(a.responsavelId):null;
+    const resp=responsaveisRaci(getProjeto(a.projetoId),a.id).join(", ");
     if(d<0) out.push({tipo:"fisico",sev:"danger",dias:d,
       titulo:`Atividade atrasada: ${a.nome}`,
       desc:`${nomeProjeto(a.projetoId)} · venceu há ${Math.abs(d)} dia(s) · ${a.progresso||0}% concluído`,
@@ -923,13 +923,13 @@ function calcularAlertas(){
    Premissas (definidas com o gestor):
    - Cada atividade tem um campo opcional "horasPrevistas" (estimativa de
      esforço, informada manualmente ao criar/editar a atividade).
-   - As pessoas "alocadas" numa atividade são: o Responsável do cronograma
-     + todas as pessoas marcadas como "R" (Responsável/Executor) na matriz
-     RACI daquela atividade, dentro do mesmo projeto.
+   - As pessoas "alocadas" numa atividade são: todas as pessoas marcadas
+     como "R" (Responsável/Executor) na matriz RACI daquela atividade,
+     dentro do mesmo projeto. (O campo responsavelId foi removido.)
    - horasPrevistas NÃO é dividida entre as pessoas alocadas: cada uma
-     delas (Responsável e cada "R") é considerada dedicando essa
-     quantidade INTEIRA de horas à atividade — ex.: 3 pessoas alocadas e
-     40h previstas = 40h de ocupação para CADA uma das 3, não 13,3h.
+     delas (cada "R") é considerada dedicando essa quantidade INTEIRA de
+     horas à atividade — ex.: 3 pessoas alocadas e 40h previstas = 40h de
+     ocupação para CADA uma das 3, não 13,3h.
    - Para cada pessoa, essas horas previstas são distribuídas igualmente
      pelos dias ÚTEIS (seg-sex) entre dataInicioPrev e dataFimPrev da atividade.
    - Capacidade padrão: 8h úteis por dia, por pessoa, IGUAL para todas.
@@ -955,10 +955,9 @@ function diasUteisEntre(dataIni,dataFim){
   return dias;
 }
 
-/* pessoas alocadas numa atividade: responsável + "R" da RACI (dedup) */
+/* pessoas alocadas numa atividade: TODAS as pessoas marcadas como "R" na RACI */
 function pessoasAlocadasAtividade(a){
   const ids=new Set();
-  if(a.responsavelId) ids.add(a.responsavelId);
   const p=getProjeto(a.projetoId);
   if(p && p.raci && p.raci[a.id]){
     Object.entries(p.raci[a.id]).forEach(([pessoaId,papel])=>{
@@ -1698,6 +1697,13 @@ function projResumo(c,p){
 }
 
 /* ---- CRONOGRAMA FÍSICO ---- */
+function responsaveisRaci(p,atividadeId){
+  if(!p || !p.raci) return [];
+  const raci=(p.raci[atividadeId])||{};
+  return Object.entries(raci)
+    .filter(([,papel])=>papel==="R")
+    .map(([pessoaId])=>nomeColab(pessoaId));
+}
 function projCronograma(c,p){
   const podeEditar=isGestor();
   const ats=DB.data.atividades.filter(a=>a.projetoId===p.id)
@@ -1709,9 +1715,10 @@ function projCronograma(c,p){
     const horasAtiv=DB.data.horas.filter(h=>h.atividadeId===a.id).reduce((s,h)=>s+(+h.horas||0),0);
     const dIni=a.dataInicioPrev?fmtDate(a.dataInicioPrev):"Indeterminada";
     const dFim=a.dataFimPrev?fmtDate(a.dataFimPrev):"Indeterminada";
+    const responsaveis = responsaveisRaci(p,a.id);
     return `<tr>
       <td><div style="font-weight:600">${esc(a.nome)}</div>
-        <div style="font-size:11px;color:var(--ink-faint)">${esc(nomeCategoria(a.categoriaId))} · Resp.: ${esc(a.responsavelId?nomeColab(a.responsavelId):"—")}${horasAtiv?` · ${horasAtiv}h apontadas`:""}${(+a.horasPrevistas||0)>0?` · ${fmtNum(+a.horasPrevistas,1)}h previstas`:""}</div></td>
+        <div style="font-size:11px;color:var(--ink-faint)">${esc(nomeCategoria(a.categoriaId))} · Resp.: ${responsaveis.join(", ")||"—"}${horasAtiv?` · ${horasAtiv}h apontadas`:""}${(+a.horasPrevistas||0)>0?` · ${fmtNum(+a.horasPrevistas,1)}h previstas`:""}</div></td>
       <td style="font-size:12px">${dIni} → ${dFim}</td>
       <td>${atrasada?`<span class="badge b-danger">Atrasada</span>`:statusBadge(a.status||"Não iniciada")}</td>
       <td><div style="display:flex;align-items:center;gap:8px">
@@ -1726,7 +1733,12 @@ function projCronograma(c,p){
   <div class="toolbar">
     <span class="section-title" style="margin:0">Atividades do cronograma</span>
     <div class="spacer"></div>
-    ${podeEditar?'<button class="btn" id="add-ativ">+ Nova atividade</button>':""}
+    ${podeEditar?`
+    <button class="btn" id="add-ativ">+ Nova atividade</button>
+    <button class="btn ghost sm" id="csv-modelo-crono">📋 Modelo CSV</button>
+    <button class="btn ghost sm" id="csv-import-crono">📥 Importar CSV</button>
+    <input type="file" id="csv-file-crono" accept=".csv" style="display:none">
+    `:""}
   </div>
   ${ats.length?`
   <div class="card" style="margin-bottom:18px">
@@ -1745,6 +1757,12 @@ function projCronograma(c,p){
   const open=()=>formAtividade(p.id);
   $("#add-ativ").onclick=open;
   if($("#add-ativ2")) $("#add-ativ2").onclick=open;
+  $("#csv-modelo-crono").onclick=baixarModeloCronograma;
+  $("#csv-import-crono").onclick=()=>$("#csv-file-crono").click();
+  $("#csv-file-crono").onchange=async (e)=>{
+    await importarCSVCronograma(e, p.id);
+    render();
+  };
   c.querySelectorAll("[data-eda]").forEach(b=>b.onclick=()=>formAtividade(p.id,getAtividade(b.dataset.eda)));
   c.querySelectorAll("[data-dla]").forEach(b=>b.onclick=()=>{
     const a=getAtividade(b.dataset.dla);
@@ -1811,7 +1829,7 @@ function projOcupacao(c,p){
 
   const explicacao=`<div class="help-banner"><span>ℹ️</span><span>
     Calculado a partir das <b>horas previstas</b> de cada atividade (informe esse campo ao criar/editar
-    atividades no Cronograma). Cada pessoa alocada — o Responsável e cada pessoa marcada como "R" na Matriz
+    atividades no Cronograma). Cada pessoa alocada — ou seja, cada pessoa marcada como "R" na Matriz
     RACI — é considerada dedicando essa quantidade INTEIRA de horas (não é dividida entre elas), distribuída
     ao longo dos dias úteis entre início e término previstos. Capacidade considerada:
     <b>${CAPACIDADE_DIARIA_PADRAO}h/dia por pessoa</b>. O cálculo é <b>global</b> — um conflito pode vir de
@@ -1820,7 +1838,7 @@ function projOcupacao(c,p){
   if(!pessoas.length){
     c.innerHTML=`${explicacao}<div class="card"><div class="empty"><span class="ic">👥</span>
       <h3>Ninguém alocado ainda neste projeto</h3>
-      <p>Defina o Responsável nas atividades do Cronograma Físico, ou marque pessoas como "R" na Matriz RACI.</p></div></div>`;
+      <p>Defina pessoas como "R" (Responsável) na Matriz RACI.</p></div></div>`;
     return;
   }
   if(!ats.some(a=>(+a.horasPrevistas||0)>0)){
@@ -2056,13 +2074,15 @@ function projStakeholders(c,p){
     <td>${esc(s.organizacao||"—")}</td>
     <td><span class="tag">${esc(s.influencia||"Média")}</span></td>
     <td style="font-size:12px;color:var(--ink-soft)">${esc(s.contato||"—")}</td>
+    <td>${s.classificacao?`<span class="badge ${s.classificacao==="Primário"?"b-info":"b-mute"}">${esc(s.classificacao)}</span>`:"—"}</td>
     <td class="actions">${podeEditar?`<button class="btn-icon" data-es="${i}">✎</button>
       <button class="btn-icon del" data-ds="${i}">🗑</button>`:""}</td></tr>`).join("");
   c.innerHTML=`
   <div class="toolbar"><span class="section-title" style="margin:0">Partes interessadas</span>
     <div class="spacer"></div>${podeEditar?'<button class="btn" id="add-stk">+ Novo stakeholder</button>':""}</div>
   ${p.stakeholders.length?`<div class="card table-wrap"><table><thead><tr>
-    <th>Nome</th><th>Papel</th><th>Organização</th><th>Influência</th><th>Contato</th><th></th>
+    <th>Nome</th><th>Papel</th><th>Organização</th><th>Influência</th><th>Contato</th>
+    <th>Classificação</th><th></th>
     </tr></thead><tbody>${rows}</tbody></table></div>`
    :`<div class="card"><div class="empty"><span class="ic">◍</span><h3>Sem stakeholders</h3>
      <p>${podeEditar?"Mapeie as partes interessadas e seu nível de influência.":"Nenhum stakeholder mapeado ainda."}</p>
@@ -2565,7 +2585,7 @@ ${transc||"(cole aqui a transcrição se ainda não estiver na reunião)"}
 
       <div class="fld full">
         <label>2️⃣ Cole aqui a resposta JSON da IA</label>
-        <textarea id="ia-resp" placeholder='Cole aqui o JSON retornado pela IA. Ex.: {"objetivo":"…","topicos":[…],"saidas":[…]}'
+        <textarea id="ia-resp" placeholder='Cole aqui o JSON retornado pela IA. Ex.: {"objetivo":"…","topicos":[…],"saidas":[…] }'
           style="width:100%;min-height:170px;padding:11px;border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px"></textarea>
         <span class="help">A ata atual (se houver) será substituída pela nova. Você poderá editar tudo depois.</span>
         <div id="ia-err" style="display:none;color:var(--danger);font-size:12px;margin-top:6px;font-weight:600"></div>
@@ -3296,9 +3316,11 @@ function viewConfig(v){
     <div class="card-pad">
       <div class="help-banner" style="margin-bottom:16px"><span>↻</span><span>
         Usa os apontamentos de horas já registrados para completar automaticamente o
-        cronograma (início previsto, responsável, situação) e adicionar como stakeholders
+        cronograma (início previsto, situação) e adicionar como stakeholders
         as pessoas que trabalharam em cada projeto. <b>Não sobrescreve</b> campos já
-        preenchidos manualmente — só completa o que estiver vazio.</span></div>
+        preenchidos manualmente — só completa o que estiver vazio.
+        <b>Importante:</b> o campo "Responsável" da atividade agora é derivado da Matriz RACI,
+        portanto esta sincronização não o preenche mais.</span></div>
       <button class="btn" id="btn-sync-horas">↻ Sincronizar agora</button>
     </div>
   </div>
@@ -3368,7 +3390,7 @@ function viewConfig(v){
   $("#btn-sync-horas").onclick=()=>{
     confirmar(
       "Sincronizar dados do Apontamento de Horas?",
-      "Isso vai completar campos vazios do cronograma (início previsto, responsável, situação) e adicionar stakeholders com base nas horas já registradas. Campos já preenchidos não serão alterados.",
+      "Isso vai completar campos vazios do cronograma (início previsto, situação) e adicionar stakeholders com base nas horas já registradas. Campos já preenchidos não serão alterados. O Responsável da atividade agora é derivado da Matriz RACI, portanto esta sincronização não o preenche mais.",
       async()=>{
         const btn=$("#btn-sync-horas");
         btn.disabled=true; btn.textContent="Sincronizando...";
@@ -3386,7 +3408,9 @@ function viewConfig(v){
 
 /* ---- SINCRONIZAÇÃO: extrai dados do Apontamento de Horas para o
    cronograma (atividades) e para os stakeholders de cada projeto.
-   Só completa campos vazios — nunca sobrescreve o que já foi preenchido. ---- */
+   Só completa campos vazios — nunca sobrescreve o que já foi preenchido.
+   O campo responsavelId NÃO é mais atualizado — a responsabilidade é
+   derivada da Matriz RACI. ---- */
 async function sincronizarApontamentoHoras(){
   let atividadesAtualizadas=0;
   let stakeholdersAdicionados=0;
@@ -3405,14 +3429,6 @@ async function sincronizarApontamentoHoras(){
     // término previsto = data mais recente apontada, só quando a atividade já
     // está marcada como concluída e ainda não tem data de término definida
     if(!a.dataFimPrev && a.status==="Concluída" && datas.length) patch.dataFimPrev=datas[datas.length-1];
-
-    // responsável = colaborador que mais apontou horas nesta atividade, se ainda não definido
-    if(!a.responsavelId){
-      const porColab={};
-      horasDaAtividade.forEach(h=>{ porColab[h.colaboradorId]=(porColab[h.colaboradorId]||0)+(+h.horas||0); });
-      const top=Object.entries(porColab).sort((x,y)=>y[1]-x[1])[0];
-      if(top) patch.responsavelId=top[0];
-    }
 
     // situação: se ainda "Não iniciada" mas já tem horas apontadas, passa para "Em andamento"
     if(a.status==="Não iniciada") patch.status="Em andamento";
@@ -3442,7 +3458,8 @@ async function sincronizarApontamentoHoras(){
         papel:"Equipe interna (apontamento de horas)",
         organizacao:colab.organizacao||"",
         influencia:"Média",
-        contato:colab.email||""
+        contato:colab.email||"",
+        classificacao:"Secundário"
       };
       p.stakeholders.push(novoStakeholder);
       await sbInsert("stakeholders", toSnake(novoStakeholder));
@@ -3618,11 +3635,12 @@ function gerarHtmlRelatorioProjeto(p){
   const reuns=(p.reunioes||[]).slice().sort((a,b)=>(a.data||"").localeCompare(b.data||""));
   const showFin=isGestor();
 
-  // pessoas envolvidas: horas + responsáveis de atividades + RACI
+  // pessoas envolvidas: horas + responsáveis de atividades (RACI) + RACI
   const envolvidos=new Set();
   DB.data.horas.filter(h=>h.projetoId===p.id).forEach(h=>envolvidos.add(h.colaboradorId));
-  ats.forEach(a=>{ if(a.responsavelId) envolvidos.add(a.responsavelId); });
-  if(p.raci) Object.values(p.raci).forEach(l=>Object.keys(l||{}).forEach(id=>envolvidos.add(id)));
+  ats.forEach(a=>{ if(p.raci&&p.raci[a.id]){
+    Object.keys(p.raci[a.id]).forEach(id=>envolvidos.add(id));
+  }});
   const envInt=[...envolvidos].map(id=>getColab(id)).filter(c=>c&&c.tipo!=="parceiro");
   const envPar=[...envolvidos].map(id=>getColab(id)).filter(c=>c&&c.tipo==="parceiro");
   const equipeHtml=(envInt.length||envPar.length)?`
@@ -3633,23 +3651,27 @@ function gerarHtmlRelatorioProjeto(p){
     :"<p style='color:#8a98a6'>Nenhuma pessoa registrada com participação no projeto.</p>";
 
   const atsHtml=ats.length?`<table>
-    <thead><tr><th>#</th><th>Atividade</th><th>Categoria</th><th>Responsável</th>
+    <thead><tr><th>#</th><th>Atividade</th><th>Categoria</th><th>Responsável (RACI)</th>
       <th>Início prev.</th><th>Término prev.</th><th>%</th><th>Situação</th></tr></thead>
-    <tbody>${ats.map((a,i)=>`<tr>
+    <tbody>${ats.map((a,i)=>{
+      const respRaci=responsaveisRaci(p,a.id);
+      return `<tr>
       <td>${i+1}</td><td>${esc(a.nome)}</td><td>${esc(nomeCategoria(a.categoriaId))}</td>
-      <td>${a.responsavelId?esc(nomeColab(a.responsavelId)):"—"}</td>
+      <td>${respRaci.length?respRaci.join(", "):"—"}</td>
       <td>${a.dataInicioPrev?fmtDate(a.dataInicioPrev):"—"}</td>
       <td>${a.dataFimPrev?fmtDate(a.dataFimPrev):"—"}</td>
-      <td>${a.progresso||0}%</td><td>${esc(a.status||"—")}</td></tr>`).join("")}</tbody></table>`
+      <td>${a.progresso||0}%</td><td>${esc(a.status||"—")}</td></tr>`;
+    }).join("")}</tbody></table>`
     :"<p style='color:#8a98a6'>Nenhuma atividade cadastrada.</p>";
 
   const stkHtml=(p.stakeholders||[]).length?`<table>
-    <thead><tr><th>Nome</th><th>Organização / Cargo</th><th>Influência</th><th>Interesse</th></tr></thead>
+    <thead><tr><th>Nome</th><th>Organização / Cargo</th><th>Influência</th><th>Interesse</th><th>Classificação</th></tr></thead>
     <tbody>${p.stakeholders.map(s=>`<tr>
       <td>${esc(s.nome||"—")}</td>
       <td>${esc([s.organizacao,s.cargo].filter(Boolean).join(" · ")||"—")}</td>
       <td>${esc(s.influencia||"—")}</td>
-      <td>${esc(s.interesse||"—")}</td></tr>`).join("")}</tbody></table>`
+      <td>${esc(s.interesse||"—")}</td>
+      <td>${esc(s.classificacao||"Secundário")}</td></tr>`).join("")}</tbody></table>`
     :"<p style='color:#8a98a6'>Nenhum stakeholder cadastrado.</p>";
 
   const riscosHtml=(p.riscos||[]).length?`<table>
@@ -3760,9 +3782,10 @@ function gerarTextoRelatorioProjeto(p){
   out+="CRONOGRAMA ("+ats.length+" atividade"+(ats.length!==1?"s":"")+")\n"+"-".repeat(20)+"\n";
   if(ats.length){
     ats.forEach((a,i)=>{
+      const respRaci=responsaveisRaci(p,a.id);
       out+=(i+1)+". "+a.nome+" — "+(a.progresso||0)+"% — "+(a.status||"—")+"\n";
       if(a.dataFimPrev) out+="   Término previsto: "+fmtDate(a.dataFimPrev)+"\n";
-      if(a.responsavelId) out+="   Responsável: "+nomeColab(a.responsavelId)+"\n";
+      if(respRaci.length) out+="   Responsável: "+respRaci.join(", ")+"\n";
     });
   } else out+="Sem atividades cadastradas.\n";
   out+="\n";
@@ -3952,12 +3975,14 @@ function importarCSVHoras(event){
           if(existente) atividadeId=existente.id;
           else {
             const nova={id:uid(), projetoId:proj.id, nome:ativRaw, categoriaId:cat.id,
-              progresso:0, status:"Em andamento", responsavelId:colab.id,
+              progresso:0, status:"Em andamento",
               dataInicioPrev:data, dataFimPrev:null};
             DB.data.atividades.push(nova);
             atividadeId=nova.id;
             novasAtividadesParaInserir.push(nova);
             resultado.novasAtividades++;
+            // também criar RACI para este colaborador
+            await DB.salvarRaciCelula(proj.id, nova.id, colab.id, "R");
           }
         }
 
@@ -4007,6 +4032,111 @@ function parseCSVLine(linha, sep){
   }
   out.push(buf);
   return out;
+}
+
+/* ============================================================
+   MODELO E IMPORTAÇÃO CSV DE CRONOGRAMA (atividades)
+   ============================================================ */
+function baixarModeloCronograma(){
+  const catExemplo=DB.data.categorias.slice(0,1).map(c=>c.nome).join("") || "Nome da categoria";
+  const hoje=todayStr();
+  const linhas=[
+    "Nome;Categoria;Início previsto;Término previsto;Horas previstas;Status",
+    `Exemplo de atividade;${catExemplo};${hoje};${hoje};40;Não iniciada`,
+    `Outra atividade;${catExemplo};;;;Em andamento`
+  ];
+  const conteudo="\uFEFF"+linhas.join("\r\n");
+  const blob=new Blob([conteudo],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download="modelo_cronograma.csv";
+  a.click(); URL.revokeObjectURL(a.href);
+  toast("Modelo CSV baixado. Abra no Excel para preencher.");
+}
+
+async function importarCSVCronograma(event, projetoId){
+  const file=event.target.files[0];
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=async (e)=>{
+    try{
+      const { texto:textoDecodificado, encoding } = decodeCsvBuffer(e.target.result);
+      console.log("[PMO] CSV cronograma decodificado como", encoding);
+      const texto=textoDecodificado.replace(/^\uFEFF/,"");
+      const linhas=texto.split(/\r?\n/).filter(l=>l.trim());
+      if(linhas.length<2){ alert("CSV vazio ou sem dados."); return; }
+      const sep=linhas[0].includes(";")?";":",";
+      const cabecalho=parseCSVLine(linhas[0],sep).map(s=>s.trim().toLowerCase());
+      const cols={
+        nome: cabecalho.findIndex(c=>c==="nome"||c==="atividade"||c==="descrição"||c==="descricao"),
+        categoria: cabecalho.findIndex(c=>c==="categoria"),
+        inicio: cabecalho.findIndex(c=>c==="início previsto"||c==="inicio previsto"||c==="início"||c==="inicio"||c==="data início"||c==="data inicio"),
+        fim: cabecalho.findIndex(c=>c==="término previsto"||c==="termino previsto"||c==="término"||c==="termino"||c==="data fim"||c==="data fim"||c==="fim"),
+        horas: cabecalho.findIndex(c=>c==="horas previstas"||c==="horas"||c==="h previstas"||c==="h"),
+        status: cabecalho.findIndex(c=>c==="status"||c==="situação"||c==="situacao")
+      };
+      const obrigatorias=["nome","categoria"];
+      const faltando=obrigatorias.filter(k=>cols[k]<0);
+      if(faltando.length){
+        alert("CSV inválido. Faltando coluna(s): "+faltando.join(", ")+".\n\nO cabeçalho deve ter: Nome; Categoria; Início previsto; Término previsto; Horas previstas; Status.");
+        return;
+      }
+      const resultado={ok:0, erro:0, mensagens:[]};
+      const novasAtividades=[];
+      linhas.slice(1).forEach((linha,idx)=>{
+        const lnNum=idx+2;
+        if(!linha.trim()) return;
+        const c=parseCSVLine(linha,sep);
+        const nomeRaw=(c[cols.nome]||"").trim();
+        const catRaw=(c[cols.categoria]||"").trim();
+        const inicioRaw=(cols.inicio>=0?(c[cols.inicio]||"").trim():"").trim();
+        const fimRaw=(cols.fim>=0?(c[cols.fim]||"").trim():"").trim();
+        const horasRaw=(cols.horas>=0?(c[cols.horas]||"").trim():"").trim();
+        const statusRaw=(cols.status>=0?(c[cols.status]||"").trim():"").trim();
+
+        if(!nomeRaw){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: nome da atividade vazio.`); return; }
+        const cat=DB.data.categorias.find(x=>(x.nome||"").trim().toLowerCase()===catRaw.toLowerCase());
+        if(!cat){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: categoria "${catRaw}" não cadastrada.`); return; }
+
+        // datas no formato DD/MM/YYYY ou YYYY-MM-DD
+        function parseData(dataRaw){
+          const m1=dataRaw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+          const m2=dataRaw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+          if(m1) return `${m1[3]}-${m1[2]}-${m1[1]}`;
+          if(m2) return dataRaw;
+          return null;
+        }
+        const dataInicio=inicioRaw?parseData(inicioRaw):null;
+        const dataFim=fimRaw?parseData(fimRaw):null;
+        if(inicioRaw && !dataInicio){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: data de início inválida "${inicioRaw}"`); return; }
+        if(fimRaw && !dataFim){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: data de término inválida "${fimRaw}"`); return; }
+
+        const horasPrev=parseFloat(horasRaw.replace(",","."))||0;
+        let status=statusRaw;
+        if(status && !STATUS_ATIV.includes(status)) status="Não iniciada";
+
+        const nova={id:uid(), projetoId, nome:nomeRaw, categoriaId:cat.id,
+          dataInicioPrev:dataInicio||null, dataFimPrev:dataFim||null,
+          horasPrevistas:horasPrev, status:status||"Não iniciada", progresso:0};
+        DB.data.atividades.push(nova);
+        novasAtividades.push(nova);
+        resultado.ok++;
+      });
+      if(novasAtividades.length){
+        await sbInsert("atividades", novasAtividades.map(toSnake));
+        toast(`${novasAtividades.length} atividade(s) importada(s).`);
+      }
+      event.target.value="";
+      const detalhes=resultado.mensagens.length
+        ? `\n\nProblemas (${resultado.mensagens.length}):\n${resultado.mensagens.slice(0,15).join("\n")}${resultado.mensagens.length>15?"\n…":""}`
+        : "";
+      if(resultado.erro) alert(`Importação concluída.\n\n✓ ${resultado.ok} atividade(s) importada(s).\n✗ ${resultado.erro} linha(s) com erro (não importadas).`+detalhes);
+      render();
+    }catch(err){
+      alert("Erro ao ler o CSV: "+err.message);
+    }
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 function exportarBackup(){
@@ -4299,7 +4429,7 @@ function formProjeto(p){
   });
 }
 
-/* ---- FORM: ATIVIDADE ---- */
+/* ---- FORM: ATIVIDADE (removido campo responsavelId) ---- */
 function formAtividade(projetoId,a){
   const edit=!!a;
   openForm({
@@ -4310,8 +4440,6 @@ function formAtividade(projetoId,a){
       {key:"nome",label:"Nome da atividade",required:true,full:true,placeholder:"Ex.: Levantamento de requisitos"},
       {key:"categoriaId",label:"Categoria",type:"select",required:true,
         options:DB.data.categorias.map(c=>({value:c.id,label:c.nome}))},
-      {key:"responsavelId",label:"Responsável",type:"select",
-        options:getInternos().map(c=>({value:c.id,label:c.nome}))},
       {key:"dataInicioPrev",label:"Início previsto",type:"date",allowIndeterminate:true},
       {key:"dataFimPrev",label:"Término previsto",type:"date",allowIndeterminate:true},
       {key:"status",label:"Situação",type:"select",
@@ -4615,10 +4743,10 @@ function formRubrica(r){
   });
 }
 
-/* ---- FORM: STAKEHOLDER ---- */
+/* ---- FORM: STAKEHOLDER (com classificação Primário/Secundário) ---- */
 function formStakeholder(p,idx){
   const edit=idx!=null;
-  const s=edit?p.stakeholders[idx]:{};
+  const s=edit?p.stakeholders[idx]:{classificacao:"Secundário"};
   openForm({
     title:edit?"Editar stakeholder":"Novo stakeholder",
     values:s,
@@ -4628,14 +4756,71 @@ function formStakeholder(p,idx){
       {key:"organizacao",label:"Organização / Setor"},
       {key:"influencia",label:"Nível de influência",type:"select",
         options:["Baixa","Média","Alta"].map(x=>({value:x,label:x}))},
-      {key:"contato",label:"Contato (e-mail/telefone)",full:true}
+      {key:"contato",label:"Contato (e-mail/telefone)",full:true},
+      {key:"classificacao",label:"Classificação",type:"select",required:true,
+        options:[{value:"Secundário",label:"Secundário"},{value:"Primário",label:"Primário"}]}
     ],
     onSave:async(v)=>{
+      // verifica se é Primário e cria parceiro correspondente se não existir
+      let colabVinculadoId = s.colaboradorVinculadoId || null;
+      if(v.classificacao==="Primário"){
+        const nomePessoa=v.nome.trim();
+        if(nomePessoa){
+          // busca por colaborador/parceiro existente com este nome
+          const existente=DB.data.colaboradores.find(c=>
+            (c.nome||"").trim().toLowerCase()===nomePessoa.toLowerCase()
+          );
+          if(!existente){
+            // cria um novo parceiro
+            const novoId=uid();
+            await sbInsert("profiles", toSnake({
+              id:novoId, nome:v.nome, tipoPessoa:"parceiro", papel:"colaborador",
+              organizacao:v.organizacao||"", cargo:v.papel||"", email:"", custoHora:0
+            }));
+            colabVinculadoId=novoId;
+            // recarrega DB para incluir o novo parceiro
+            await DB.load();
+            toast(`Parceiro "${v.nome}" criado automaticamente.`);
+          } else {
+            colabVinculadoId=existente.id;
+          }
+        }
+      } else {
+        // reclassificando de Primário para Secundário
+        if(s.classificacao==="Primário" && v.classificacao==="Secundário" && s.colaboradorVinculadoId){
+          const vinculoAtual=s.colaboradorVinculadoId;
+          confirmar(
+            "Remover vínculo com parceiro?",
+            `Este stakeholder era "Primário" e tinha um parceiro vinculado. Deseja manter o parceiro "${nomeColab(vinculoAtual)}" cadastrado na equipe ou removê-lo?`,
+            async(removerParceiro)=>{
+              if(removerParceiro){
+                // remove o parceiro da lista
+                DB.data.colaboradores=DB.data.colaboradores.filter(c=>c.id!==vinculoAtual);
+                await sbDelete("profiles", vinculoAtual);
+                toast("Parceiro removido.");
+              } else {
+                toast("Parceiro mantido na equipe.");
+              }
+              colabVinculadoId=null;
+              // recarrega
+              await DB.load();
+              render();
+            },
+            "Manter parceiro na equipe (se desmarcar, ele será removido)"
+          );
+          // Aguarda a confirmação — o fluxo é assíncrono
+          return;
+        }
+      }
+
+      // salva o stakeholder
       if(edit){
-        Object.assign(p.stakeholders[idx],v);
+        Object.assign(p.stakeholders[idx], v);
+        if(colabVinculadoId) p.stakeholders[idx].colaboradorVinculadoId = colabVinculadoId;
         await sbUpdate("stakeholders", s.id, toSnake(v));
       } else {
-        const novo=Object.assign({id:uid(),projetoId:p.id},v);
+        const novo=Object.assign({id:uid(),projetoId:p.id}, v);
+        if(colabVinculadoId) novo.colaboradorVinculadoId = colabVinculadoId;
         p.stakeholders.push(novo);
         await sbInsert("stakeholders", toSnake(novo));
       }
