@@ -4632,7 +4632,7 @@ function formHoras(h){
   function opcoesAtividade(vals){
     const ats=DB.data.atividades.filter(a=>a.projetoId===vals.projetoId && a.status!=="Cancelada")
       .sort((a,b)=>(a.dataInicioPrev||"").localeCompare(b.dataInicioPrev||"")||a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"}));
-    const opts=ats.map(a=>({value:a.id, label:a.nome+(a.dataInicioPrev?" · "+fmtDate(a.dataInicioPrev):"")}));
+    const opts=ats.map(a=>({value:a.id, label:a.nome}));
     opts.push({value:ATIV_OUTROS, label:"➕ Outros (digitar manualmente)"});
     return opts;
   }
