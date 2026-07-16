@@ -475,6 +475,12 @@ async function sbWrite(path, {method="POST", body, prefer="return=representation
   ]);
   if(!resp.ok){
     const txt = await resp.text().catch(()=>"");
+    if(txt.includes("PGRST204")){
+      throw new Error("O banco de dados está com uma coluna faltando ou desatualizada "+
+        "(schema cache do Supabase). Avise o administrador do sistema para rodar a "+
+        "migração pendente e recarregar o schema (NOTIFY pgrst, 'reload schema'). "+
+        "Detalhe técnico: "+txt);
+    }
     throw new Error("Falha ao salvar ("+resp.status+"): "+(txt||resp.statusText));
   }
   if(method==="DELETE" || resp.status===204) return null;
@@ -647,15 +653,25 @@ const DB = {
     await sbDelete(tabela, id);
   },
 
-  // tempo real: qualquer mudança de qualquer pessoa recarrega os dados e re-renderiza
-  subscribeRealtime(){
-    if(this.channel) sb.removeChannel(this.channel);
-    this.channel = sb.channel("portfolio-changes")
-      .on("postgres_changes", { event:"*", schema:"public" }, async ()=>{
-        await DB.load();
-        render();
-      })
-      .subscribe();
+  // tempo real: qualquer mudança de qualquer pessoa recarrega os dados e re-renderiza.
+  // IMPORTANTE: aguarda a remoção do canal anterior antes de criar um novo —
+  // sem o await, era possível (reconexões rápidas / múltiplas abas) ficar com
+  // 2 canais simultâneos escutando "postgres_changes", fazendo cada alteração
+  // disparar DB.load()+render() em duplicidade.
+  async subscribeRealtime(){
+    if(this._subscribing) return; // evita duas inscrições concorrentes
+    this._subscribing = true;
+    try{
+      if(this.channel){ await sb.removeChannel(this.channel); this.channel=null; }
+      this.channel = sb.channel("portfolio-changes")
+        .on("postgres_changes", { event:"*", schema:"public" }, async ()=>{
+          await DB.load();
+          render();
+        })
+        .subscribe();
+    } finally {
+      this._subscribing = false;
+    }
   }
 };
 
@@ -2996,6 +3012,15 @@ function viewOcupacaoEquipe(v){
     return;
   }
 
+  // diagnóstico: atividades com horas previstas informadas mas sem NINGUÉM
+  // marcado como "R" na RACI não entram no cálculo de ocupação (por design —
+  // ver comentário acima de pessoasAlocadasAtividade). Isso é a causa mais
+  // comum de "a ocupação não está puxando as horas previstas do projeto".
+  const atsSemR = isGestor() ? DB.data.atividades.filter(a=>{
+    if((+a.horasPrevistas||0)<=0 || a.status==="Cancelada") return false;
+    return pessoasAlocadasAtividade(a).length===0;
+  }) : [];
+
   ST.ocupEqPessoaId = myId || ((ST.ocupEqPessoaId && pessoas.some(p=>p.id===ST.ocupEqPessoaId)) ? ST.ocupEqPessoaId : pessoas[0].id);
   ST.ocupEqMes = ST.ocupEqMes || todayStr().slice(0,7);
 
@@ -3049,6 +3074,12 @@ function viewOcupacaoEquipe(v){
     cada pessoa marcada como "R" na RACI recebem essa quantidade INTEIRA de horas (sem dividir entre eles),
     distribuída pelos dias úteis entre início e término previstos. Capacidade considerada:
     <b>${CAPACIDADE_DIARIA_PADRAO}h/dia</b>.</span></div>
+  ${atsSemR.length?`<div class="help-banner" style="background:#fff7e6;border-color:#f0d999;color:#8a6415">
+    <span>⚠️</span><span><b>${atsSemR.length} atividade(s)</b> têm horas previstas preenchidas mas ninguém
+    marcado como "R" (Responsável) na Matriz RACI, então não entram nesta ocupação: ${
+      atsSemR.slice(0,6).map(a=>esc(a.nome)+" ("+esc(nomeProjeto(a.projetoId))+")").join(", ")
+    }${atsSemR.length>6?"…":""}. Vá em cada projeto → aba <b>Matriz RACI</b> e marque ao menos um "R" nessas
+    atividades.</span></div>`:""}
 
   <div class="toolbar">
     ${myId?"":`<div class="field-inline">Colaborador
@@ -4110,6 +4141,18 @@ function importarCSVHoras(event){
           }
         }
 
+        // proteção contra reimportação: se já existe um apontamento idêntico
+        // (mesma data+colaborador+atividade+horas) — seja já salvo no banco,
+        // seja já incluído nesta própria importação — pula a linha em vez de
+        // duplicar. Evita multiplicar registros quando a mesma planilha (ou
+        // uma planilha sobreposta) é importada mais de uma vez.
+        const duplicada = (h)=> h.data===data && h.colaboradorId===colab.id &&
+          h.atividadeId===atividadeId && Math.abs((+h.horas||0)-horas)<0.001;
+        if(DB.data.horas.some(duplicada) || novasHorasParaInserir.some(duplicada)){
+          resultado.mensagens.push(`Linha ${lnNum}: ignorada (apontamento idêntico já existe).`);
+          continue;
+        }
+
         const novaHora={
           id:uid(), data, colaboradorId:colab.id, projetoId:proj.id,
           atividadeId, categoriaId:cat.id, horas,
@@ -4695,8 +4738,22 @@ function formHoras(h){
         const nomeAtiv=(v.atividadeManual||"").trim();
         if(!nomeAtiv) throw new Error('Digite o nome da atividade em "Outros" ou selecione uma atividade do cronograma.');
         if(v.projetoId){
-          const existente=DB.data.atividades.find(a=>
-            a.projetoId===v.projetoId && (a.nome||"").trim().toLowerCase()===nomeAtiv.toLowerCase());
+          // Recarrega as atividades do projeto direto do servidor antes de
+          // comparar o nome digitado: usar só o cache local (DB.data) aqui
+          // é uma condição de corrida — se o cronograma foi editado (nome
+          // alterado) em outra aba/pessoa enquanto este formulário estava
+          // aberto, o cache local fica desatualizado, o texto digitado deixa
+          // de "bater" com a atividade já existente, e o RPC abaixo cria uma
+          // atividade NOVA duplicada (mesmo trabalho, dois registros —
+          // é uma das causas do apontamento de horas aparecer duplicado).
+          let atividadesAtuais;
+          try{
+            atividadesAtuais = toCamel(await sbFetch(
+              "atividades?select=id,nome&projeto_id=eq."+encodeURIComponent(v.projetoId)
+            ));
+          }catch(_e){ atividadesAtuais = DB.data.atividades.filter(a=>a.projetoId===v.projetoId); }
+          const existente=atividadesAtuais.find(a=>
+            (a.nome||"").trim().toLowerCase()===nomeAtiv.toLowerCase());
           if(existente){ atividadeId=existente.id; }
           else{
             const { data:novoId } = await sb.rpc("resolver_atividade", {
