@@ -1910,8 +1910,14 @@ function projOcupacao(c,p){
     </div>`).join("")
     :`<div class="empty" style="padding:20px"><span class="ic">✓</span><p>Nenhum conflito de agenda detectado para as pessoas alocadas neste projeto.</p></div>`;
 
+  // "equipe" (padrão): calendário agrupado com todas as pessoas alocadas,
+  // em barras coloridas por colaborador em cada dia. "pessoa": calendário
+  // individual de antes, útil para investigar o conflito de uma pessoa só.
+  ST.ocupModo=ST.ocupModo||"equipe";
   const pessoaSel=getColab(ST.ocupPessoaId);
-  const calendarHtml=calendarioOcupacaoHtml(pessoaSel,ST.ocupMes,mapa);
+  const calendarHtml = ST.ocupModo==="pessoa"
+    ? calendarioOcupacaoHtml(pessoaSel,ST.ocupMes,mapa)
+    : calendarioOcupacaoEquipeHtml(pessoas,ST.ocupMes,mapa);
 
   c.innerHTML=`
   ${explicacao}
@@ -1924,22 +1930,111 @@ function projOcupacao(c,p){
   <div class="toolbar">
     <span class="section-title" style="margin:0">Calendário de ocupação</span>
     <div class="spacer"></div>
-    <div class="field-inline">Pessoa
-      <select class="select" id="ocup-pessoa">${pessoas.map(pe=>`<option value="${pe.id}" ${ST.ocupPessoaId===pe.id?"selected":""}>${esc(pe.nome)}</option>`).join("")}</select></div>
+    <div class="pill-toggle" id="ocup-modo">
+      <button data-modo="equipe" class="${ST.ocupModo==="equipe"?"on":""}">👥 Equipe (agrupado)</button>
+      <button data-modo="pessoa" class="${ST.ocupModo==="pessoa"?"on":""}">🙋 Uma pessoa</button>
+    </div>
+    ${ST.ocupModo==="pessoa"?`<div class="field-inline">Pessoa
+      <select class="select" id="ocup-pessoa">${pessoas.map(pe=>`<option value="${pe.id}" ${ST.ocupPessoaId===pe.id?"selected":""}>${esc(pe.nome)}</option>`).join("")}</select></div>`:""}
   </div>
   <div class="card"><div class="card-pad">${calendarHtml}</div></div>`;
 
   if($("#ocup-pessoa")) $("#ocup-pessoa").onchange=e=>{ ST.ocupPessoaId=e.target.value; projOcupacao(c,p); };
-  c.querySelectorAll("[data-verpessoa]").forEach(b=>b.onclick=()=>{ ST.ocupPessoaId=b.dataset.verpessoa; projOcupacao(c,p); });
+  c.querySelectorAll("[data-modo]").forEach(b=>b.onclick=()=>{ ST.ocupModo=b.dataset.modo; projOcupacao(c,p); });
+  c.querySelectorAll("[data-verpessoa]").forEach(b=>b.onclick=()=>{ ST.ocupPessoaId=b.dataset.verpessoa; ST.ocupModo="pessoa"; projOcupacao(c,p); });
   c.querySelectorAll("[data-editar-ativ]").forEach(b=>b.onclick=()=>{
     const a=getAtividade(b.dataset.editarAtiv);
     if(a) formAtividade(p.id,a);
   });
-  c.querySelectorAll("[data-ocup-day]").forEach(el=>{
-    el.onclick=()=>mostrarDetalheOcupacaoDia(pessoaSel,el.dataset.ocupDay);
-  });
+  if(ST.ocupModo==="pessoa"){
+    c.querySelectorAll("[data-ocup-day]").forEach(el=>{
+      el.onclick=()=>mostrarDetalheOcupacaoDia(pessoaSel,el.dataset.ocupDay);
+    });
+  } else {
+    c.querySelectorAll("[data-ocup-day-eq]").forEach(el=>{
+      el.onclick=()=>mostrarDetalheOcupacaoDiaEquipe(pessoas,el.dataset.ocupDayEq);
+    });
+  }
   if($("#ocal-prev")) $("#ocal-prev").onclick=()=>{ ST.ocupMes=mesShift(ST.ocupMes,-1); projOcupacao(c,p); };
   if($("#ocal-next")) $("#ocal-next").onclick=()=>{ ST.ocupMes=mesShift(ST.ocupMes,1); projOcupacao(c,p); };
+}
+
+/* calendário AGRUPADO: mostra, para cada dia do mês, uma barra dividida por
+   colaborador (proporcional às horas alocadas de cada um naquele dia) — dá
+   pra ver de relance quem está alocado e quanto, sem trocar de pessoa. */
+function calendarioOcupacaoEquipeHtml(pessoas,mk,mapa){
+  const [y,m]=mk.split("-").map(n=>+n);
+  const primeiro=new Date(y,m-1,1);
+  const diasNoMes=new Date(y,m,0).getDate();
+  const startDow=primeiro.getDay();
+  const hojeMk=todayStr().slice(0,7), hojeDia=+todayStr().slice(8,10);
+  const cores={}; pessoas.forEach((pe,i)=>cores[pe.id]=PALETTE[i%PALETTE.length]);
+  let h=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+    <button class="btn-icon" id="ocal-prev" title="Mês anterior">‹</button>
+    <div style="font-weight:700">${esc(mesLabelLong(mk))} — equipe (${pessoas.length})</div>
+    <button class="btn-icon" id="ocal-next" title="Próximo mês">›</button></div>`;
+  h+=`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;text-align:center;font-size:11px;color:var(--ink-faint);font-weight:600;margin-bottom:5px">`;
+  ["D","S","T","Q","Q","S","S"].forEach(d=>h+=`<div>${d}</div>`);
+  h+=`</div><div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">`;
+  for(let i=0;i<startDow;i++) h+=`<div></div>`;
+  for(let d=1;d<=diasNoMes;d++){
+    const ymd=mk+"-"+pad(d);
+    const dow=new Date(y,m-1,d).getDay();
+    const isWeekend=(dow===0||dow===6);
+    const isToday=mk===hojeMk&&d===hojeDia;
+    const porPessoa=pessoas.map(pe=>({pe,horas:(mapa[pe.id]&&mapa[pe.id][ymd])||0})).filter(x=>x.horas>0.001);
+    const totalDia=porPessoa.reduce((s,x)=>s+x.horas,0);
+    const borda=isToday?"outline:2px solid var(--accent);":"";
+    const clique=(!isWeekend&&totalDia>0)?`data-ocup-day-eq="${ymd}"`:"";
+    const cursor=(!isWeekend&&totalDia>0)?"cursor:pointer":"";
+    const barras=(!isWeekend&&porPessoa.length)
+      ?`<div style="display:flex;width:100%;height:6px;border-radius:3px;overflow:hidden;margin-top:3px">`+
+        porPessoa.map(x=>`<div style="flex:${x.horas} 0 0;background:${cores[x.pe.id]}" title="${esc(x.pe.nome)}: ${fmtNum(x.horas,1)}h"></div>`).join("")+
+        `</div>`
+      :"";
+    const bg=isWeekend?"#f4f7f8":"#fff";
+    const tit=isWeekend?"Fim de semana":(totalDia>0?`${fmtNum(totalDia,1)}h no dia, ${porPessoa.length} pessoa(s)`:"Sem alocação");
+    h+=`<div ${clique} style="aspect-ratio:1;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:6px;background:${bg};border:1px solid var(--line-soft);${borda}${cursor};font-size:11px;padding:2px" title="${esc(tit)}">
+      <div style="font-weight:700;color:var(--ink-soft)">${d}</div>
+      ${barras}
+      ${!isWeekend&&totalDia>0?`<div style="font-size:8.5px;color:var(--ink-faint);margin-top:1px">${fmtNum(totalDia,0)}h</div>`:""}
+    </div>`;
+  }
+  h+=`</div>`;
+  h+=`<div class="legend" style="margin-top:14px">`+
+    pessoas.map(pe=>`<div class="it"><span class="sw" style="background:${cores[pe.id]}"></span>${esc(pe.nome)}</div>`).join("")+
+    `</div>`;
+  h+=`<div style="margin-top:10px;font-size:11.5px;color:var(--ink-faint)">Cada barra é dividida proporcionalmente às horas de cada colaborador naquele dia. Clique num dia com alocação para ver o detalhamento.</div>`;
+  return h;
+}
+
+/* detalhe de um dia, para TODAS as pessoas da equipe (versão agrupada) */
+function mostrarDetalheOcupacaoDiaEquipe(pessoas,dia){
+  const linhas=pessoas.map(pe=>{
+    const det=detalheOcupacaoDia(pe.id,dia);
+    return {pe,det,total:det.reduce((s,x)=>s+x.horas,0)};
+  }).filter(l=>l.total>0.001).sort((a,b)=>b.total-a.total);
+  const totalGeral=linhas.reduce((s,l)=>s+l.total,0);
+  $("#modal-root").innerHTML=`
+  <div class="overlay"><div class="modal" style="max-width:480px">
+    <div class="modal-head"><h3>Equipe — ${fmtDate(dia)}</h3>
+      <button class="btn-icon" id="od-x">✕</button></div>
+    <div class="modal-body">
+      <div style="margin-bottom:10px;font-size:13px;color:var(--ink-soft)">Total alocado no dia: <b style="color:var(--ink)">${fmtH(totalGeral)}</b> · ${linhas.length} pessoa(s).</div>
+      ${linhas.length?linhas.map(l=>`
+        <div style="padding:8px 0;border-bottom:1px solid var(--line-soft)">
+          <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:4px">
+            <div style="font-weight:700">${esc(l.pe.nome)}</div>
+            <div style="font-weight:700">${fmtH(l.total)}</div></div>
+          ${l.det.map(d=>`<div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--ink-faint);padding-left:10px">
+            <span>${esc(d.atividadeNome)} · ${esc(d.projetoNome)}</span><span>${fmtH(d.horas)}</span></div>`).join("")}
+        </div>`).join("")
+        :`<p style="color:var(--ink-faint);font-size:13px">Nenhuma alocação neste dia.</p>`}
+    </div>
+    <div class="modal-foot"><button class="btn ghost" id="od-close">Fechar</button></div>
+  </div></div>`;
+  $("#od-x").onclick=closeModal;
+  $("#od-close").onclick=closeModal;
 }
 
 function calendarioOcupacaoHtml(pessoa,mk,mapa){
@@ -2312,6 +2407,26 @@ function ultimosMeses(n){
   n=n||12;
   const out=[];
   for(let i=-2;i<=n-3;i++) out.push(mesShift(todayStr().slice(0,7), i));
+  return out;
+}
+/* intervalo de meses (AAAA-MM) para o seletor de "Ocupação da Equipe":
+   cobre desde o mês mais antigo com atividade prevista (horasPrevistas>0
+   no Cronograma) até alguns meses à frente do mês atual. Corrige o caso em
+   que o calendário "começava" num mês recente (ex.: sempre 2 meses antes de
+   hoje) mesmo havendo atividades com dados desde meses bem anteriores
+   (ex.: fevereiro) — essas ficavam fora da lista e pareciam não existir. */
+function mesesOcupacaoDisponiveis(){
+  const hojeMk=todayStr().slice(0,7);
+  let minMk=hojeMk, maxMk=mesShift(hojeMk,9);
+  DB.data.atividades.forEach(a=>{
+    if((+a.horasPrevistas||0)<=0) return;
+    if(a.dataInicioPrev && a.dataInicioPrev.slice(0,7)<minMk) minMk=a.dataInicioPrev.slice(0,7);
+    if(a.dataFimPrev && a.dataFimPrev.slice(0,7)>maxMk) maxMk=a.dataFimPrev.slice(0,7);
+  });
+  minMk=mesShift(minMk,-1); // uma margem de 1 mês antes do primeiro dado
+  const out=[];
+  let cursor=minMk, guard=0;
+  while(cursor<=maxMk && guard<240){ out.push(cursor); cursor=mesShift(cursor,1); guard++; }
   return out;
 }
 function miniCalendar(reunioes,mk){
@@ -2940,7 +3055,7 @@ function viewOcupacaoEquipe(v){
       <select class="select" id="ocupeq-pessoa">${pessoas.map(pe=>`<option value="${pe.id}" ${pessoa.id===pe.id?"selected":""}>${esc(pe.nome)}</option>`).join("")}</select></div>`}
     <div class="spacer"></div>
     <div class="field-inline">Mês
-      <select class="select" id="ocupeq-mes">${ultimosMeses(12).map(mk=>`<option value="${mk}" ${ST.ocupEqMes===mk?"selected":""}>${esc(mesLabel(mk))}</option>`).join("")}</select></div>
+      <select class="select" id="ocupeq-mes">${mesesOcupacaoDisponiveis().map(mk=>`<option value="${mk}" ${ST.ocupEqMes===mk?"selected":""}>${esc(mesLabel(mk))}</option>`).join("")}</select></div>
   </div>
 
   <div class="grid g4" style="margin-bottom:20px">
@@ -4488,21 +4603,48 @@ function formAtividade(projetoId,a){
 }
 
 /* ---- FORM: HORAS ---- */
+const ATIV_OUTROS="__outros__"; // valor sentinela do select de atividade para "digitar manualmente"
 function formHoras(h){
   const edit=!!h;
   const fixedColab=currentColabId(); // colaborador logado (não-gestor): campo travado
   const meuId=USER.current?USER.current.colabId:null; // usado para pré-selecionar mesmo quando gestor
   const initial=h||{data:todayStr()};
-  // se editando, converte atividadeId existente em texto da atividade
-  if(edit && h.atividadeId && !h.atividade){
-    const a=getAtividade(h.atividadeId);
-    if(a) initial.atividade=a.nome;
+  // se editando, pré-seleciona a atividade do cronograma vinculada; se a
+  // atividade não existir mais (ou o registro nunca teve uma), cai em
+  // "Outros" com o nome antigo preenchido no campo manual.
+  if(edit){
+    if(h.atividadeId && getAtividade(h.atividadeId)){
+      initial.atividadeSel=h.atividadeId;
+    } else {
+      initial.atividadeSel=ATIV_OUTROS;
+      const a=h.atividadeId?getAtividade(h.atividadeId):null;
+      initial.atividadeManual=a?a.nome:(h.atividade||"");
+    }
   }
   // pré-seleciona o próprio usuário logado ao criar um novo apontamento —
   // para colaborador o campo fica travado nele mesmo; para gestor vem
   // pré-preenchido com o próprio nome, mas continua editável (ele pode
   // trocar para apontar horas em nome de outra pessoa da equipe).
   if(!edit) initial.colaboradorId=fixedColab||meuId||"";
+
+  // opções de atividade: as já cadastradas no cronograma do projeto
+  // selecionado + "Outros" (para digitar manualmente uma atividade nova)
+  function opcoesAtividade(vals){
+    const ats=DB.data.atividades.filter(a=>a.projetoId===vals.projetoId && a.status!=="Cancelada")
+      .sort((a,b)=>(a.dataInicioPrev||"").localeCompare(b.dataInicioPrev||"")||a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"}));
+    const opts=ats.map(a=>({value:a.id, label:a.nome+(a.dataInicioPrev?" · "+fmtDate(a.dataInicioPrev):"")}));
+    opts.push({value:ATIV_OUTROS, label:"➕ Outros (digitar manualmente)"});
+    return opts;
+  }
+  // mostra/esconde o campo de texto livre conforme a seleção de atividade
+  function syncCampoManual(grid){
+    grid=grid||$("#f-grid");
+    const sel=$('[data-k="atividadeSel"]',grid);
+    const fldManual=$('[data-k="atividadeManual"]',grid);
+    if(!sel||!fldManual) return;
+    fldManual.closest(".fld").style.display=(sel.value===ATIV_OUTROS)?"":"none";
+  }
+
   openForm({
     title:edit?"Editar apontamento":"Apontar horas",
     wide:true,
@@ -4514,9 +4656,12 @@ function formHoras(h){
         help:fixedColab?"Apontamento vinculado ao usuário logado.":""},
       {key:"projetoId",label:"Projeto",type:"select",required:true,
         options:DB.data.projetos.map(p=>({value:p.id,label:p.nome}))},
-      {key:"atividade",label:"Atividade",required:true,full:true,
+      {key:"atividadeSel",label:"Atividade",type:"select",required:true,dynamic:true,
+        optionsFn:opcoesAtividade,
+        help:"Escolha uma atividade já cadastrada no cronograma do projeto, ou \"Outros\" para digitar uma atividade nova."},
+      {key:"atividadeManual",label:"Nome da atividade (Outros)",full:true,
         placeholder:"Digite o nome da atividade",
-        help:"Texto livre. Se o nome ainda não existir no cronograma do projeto, será criado automaticamente."},
+        help:"Será criada automaticamente no cronograma do projeto."},
       {key:"categoriaId",label:"Categoria da atividade",type:"select",required:true,
         options:DB.data.categorias.map(c=>({value:c.id,label:c.nome}))},
       {key:"horas",label:"Horas executadas",type:"number",required:true,min:0,step:"0.25",
@@ -4524,15 +4669,32 @@ function formHoras(h){
       {key:"descricao",label:"Observação",type:"textarea",full:true,
         placeholder:"Opcional"}
     ],
+    onFieldChange:(vals,key,grid)=>{
+      syncCampoManual(grid);
+      // ao escolher uma atividade já cadastrada, pré-preenche a categoria
+      // dela (usuário ainda pode trocar manualmente depois)
+      if(key==="atividadeSel" && vals.atividadeSel && vals.atividadeSel!==ATIV_OUTROS){
+        const a=getAtividade(vals.atividadeSel);
+        if(a && a.categoriaId){
+          vals.categoriaId=a.categoriaId;
+          const catSel=$('[data-k="categoriaId"]',grid);
+          if(catSel) catSel.value=a.categoriaId;
+        }
+      }
+    },
     onSave:async(v)=>{
       v.horas=parseFloat(v.horas)||0;
-      const nomeAtiv=(v.atividade||"").trim();
-      delete v.atividade; // não persiste, só usado pra resolver
-
-      if(edit){
-        // edição: resolve atividade via RPC (funciona mesmo para colaborador comum)
-        let atividadeId=h.atividadeId||null;
-        if(nomeAtiv && v.projetoId){
+      let atividadeId=null;
+      if(v.atividadeSel && v.atividadeSel!==ATIV_OUTROS){
+        // atividade já existente no cronograma: usa o id diretamente
+        atividadeId=v.atividadeSel;
+      } else {
+        // "Outros": resolve/cria a atividade pelo nome digitado, via RPC
+        // (funciona mesmo para colaborador comum, que não tem permissão
+        // direta de INSERT na tabela de atividades)
+        const nomeAtiv=(v.atividadeManual||"").trim();
+        if(!nomeAtiv) throw new Error('Digite o nome da atividade em "Outros" ou selecione uma atividade do cronograma.');
+        if(v.projetoId){
           const existente=DB.data.atividades.find(a=>
             a.projetoId===v.projetoId && (a.nome||"").trim().toLowerCase()===nomeAtiv.toLowerCase());
           if(existente){ atividadeId=existente.id; }
@@ -4543,33 +4705,20 @@ function formHoras(h){
             atividadeId=novoId;
           }
         }
+      }
+      delete v.atividadeSel; delete v.atividadeManual; // não são colunas da tabela 'horas'
+
+      if(edit){
         v.atividadeId=atividadeId;
         Object.assign(h,v);
         await sbUpdate("horas", h.id, toSnake(v));
         toast("Apontamento atualizado.");
         await DB.load();
       } else {
-        // criação: resolve/cria a atividade via RPC (mesma usada na edição,
-        // funciona mesmo para colaborador comum) e insere o apontamento
-        // diretamente, sempre vinculado ao colaborador SELECIONADO NO
-        // FORMULÁRIO (v.colaboradorId) — não ao usuário autenticado.
-        // Isso corrige o caso em que o gestor aponta horas em nome de outra
-        // pessoa da equipe: antes, a RPC registrar_horas ignorava o
-        // colaborador escolhido e sempre gravava no usuário logado (o
-        // próprio gestor), o que também fazia a atividade do cronograma
-        // ficar associada à pessoa errada.
-        let atividadeId=null;
-        if(nomeAtiv && v.projetoId){
-          const existente=DB.data.atividades.find(a=>
-            a.projetoId===v.projetoId && (a.nome||"").trim().toLowerCase()===nomeAtiv.toLowerCase());
-          if(existente){ atividadeId=existente.id; }
-          else{
-            const { data:novoId } = await sb.rpc("resolver_atividade", {
-              p_projeto_id: v.projetoId, p_nome_atividade: nomeAtiv, p_categoria_id: v.categoriaId
-            });
-            atividadeId=novoId;
-          }
-        }
+        // criação: insere diretamente, sempre vinculado ao colaborador
+        // SELECIONADO NO FORMULÁRIO (v.colaboradorId) — não ao usuário
+        // autenticado. Isso corrige o caso em que o gestor aponta horas em
+        // nome de outra pessoa da equipe.
         await sbInsert("horas", toSnake({
           id:uid(), data:v.data, colaboradorId:v.colaboradorId, projetoId:v.projetoId,
           atividadeId, categoriaId:v.categoriaId, horas:v.horas, descricao:v.descricao||""
@@ -4579,6 +4728,7 @@ function formHoras(h){
       await DB.load(); render();
     }
   });
+  syncCampoManual(); // aplica a visibilidade inicial do campo manual
   // atalho para consultar a legenda das categorias sem fechar o formulário
   const catSelect=document.querySelector('#f-grid [data-k="categoriaId"]');
   if(catSelect){
