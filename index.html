@@ -1843,18 +1843,35 @@ function ganttHtml(p,ats){
       const left=Math.max(0,(daysBetween(min,a.dataInicioPrev)/span)*100);
       let w=(daysBetween(a.dataInicioPrev,a.dataFimPrev)/span)*100;
       w=Math.max(1.5,w);
-      bar=`<div class="gantt-bar" style="left:${left}%;width:${w}%" title="${esc(a.nome)}">
+      const tituloBar=`${a.nome} · ${fmtDate(a.dataInicioPrev)} a ${fmtDate(a.dataFimPrev)}`;
+      bar=`<div class="gantt-bar" style="left:${left}%;width:${w}%" title="${esc(tituloBar)}">
         <div style="width:${+a.progresso||0}%"></div></div>`;
     }
     rows+=`<div class="gantt-row"><div class="gantt-name">${esc(a.nome)}</div>
       <div class="gantt-track">${bar}</div></div>`;
   });
+  // cabeçalho com os meses cobertos pela linha do tempo, cada um posicionado
+  // proporcionalmente ao seu 1º dia dentro do intervalo [min,max]
+  const meses=[]; // {key, label, pct}
+  let cursor=monthKey(min)+"-01";
+  const fimChave=monthKey(max);
+  while(monthKey(cursor)<=fimChave){
+    const [y,m]=monthKey(cursor).split("-").map(n=>+n);
+    const inicioMes=y+"-"+pad(m)+"-01";
+    const pctBruto=(daysBetween(min,inicioMes)/span)*100;
+    meses.push({label:MONTHS[m-1]+"/"+y, pct:Math.max(0,Math.min(100,pctBruto))});
+    const prox=new Date(y,m,1); // dia 1 do mês seguinte
+    cursor=prox.getFullYear()+"-"+pad(prox.getMonth()+1)+"-01";
+  }
+  const mesesHtml=meses.map((mm,i)=>`<div style="position:absolute;left:${mm.pct}%;top:0;
+      font-size:10.5px;color:var(--ink-faint);white-space:nowrap;border-left:1px solid var(--line-soft);
+      padding-left:4px;${i===0?"border-left:none;padding-left:0":""}">${esc(mm.label)}</div>`).join("");
   return `<div style="min-width:560px">
-    <div style="display:flex;font-size:11px;color:var(--ink-faint);padding:0 0 6px">
-      <div style="width:200px">${fmtDate(min)}</div>
-      <div style="flex:1;text-align:right">${fmtDate(max)}</div></div>
+    <div style="display:flex;font-size:11px;color:var(--ink-faint);padding:0 0 4px">
+      <div style="width:200px;flex-shrink:0"></div>
+      <div style="flex:1;position:relative;height:16px">${mesesHtml}</div></div>
     <div style="position:relative">
-      <div class="gantt-today" style="left:calc(200px + ${todayPct}% * (100% - 200px)/100)"></div>
+      <div class="gantt-today" style="left:calc(200px + ${todayPct}% * (100% - 200px)/100)" title="Hoje: ${esc(fmtDate(today))}"></div>
       ${rows}</div></div>`;
 }
 
@@ -1889,7 +1906,7 @@ function projOcupacao(c,p){
   }
 
   const mapa=construirMapaOcupacaoGlobal();
-  ST.ocupMes=ST.ocupMes||(p.dataInicio?p.dataInicio.slice(0,7):todayStr().slice(0,7));
+  ST.ocupMes=ST.ocupMes||todayStr().slice(0,7);
   ST.ocupPessoaId=(ST.ocupPessoaId&&pessoas.some(pe=>pe.id===ST.ocupPessoaId))?ST.ocupPessoaId:pessoas[0].id;
 
   const cardsHtml=pessoas.map(pe=>{
