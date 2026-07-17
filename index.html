@@ -556,7 +556,8 @@ const DB = {
     console.log("[PMO] DB.load iniciando...");
     const [
       profilesData, categoriasData, rubricasData, projetosData, atividadesData,
-      horasData, financeiroData, stakeholdersData, riscosData, reunioesData, raciData
+      horasData, financeiroData, stakeholdersData, riscosData, reunioesData, raciData,
+      documentosData
     ] = await Promise.all([
       sbFetch("profiles?select=*"),
       sbFetch("categorias?select=*"),
@@ -568,7 +569,8 @@ const DB = {
       sbFetch("stakeholders?select=*"),
       sbFetch("riscos?select=*"),
       sbFetch("reunioes?select=*"),
-      sbFetch("raci?select=*")
+      sbFetch("raci?select=*"),
+      sbFetch("documentos_projeto?select=*")
     ]);
     console.log("[PMO] DB.load dados recebidos, montando estrutura...");
 
@@ -588,12 +590,15 @@ const DB = {
     const riscos = toCamel(riscosData||[]);
     const reunioes = toCamel(reunioesData||[]);
     const raciRows = toCamel(raciData||[]);
+    const documentos = toCamel(documentosData||[]);
 
     // remonta sub-listas aninhadas dentro de cada projeto
     projetos.forEach(p=>{
       p.stakeholders = stakeholders.filter(s=>s.projetoId===p.id);
       p.riscos = riscos.filter(r=>r.projetoId===p.id);
       p.reunioes = reunioes.filter(r=>r.projetoId===p.id);
+      p.documentos = documentos.filter(d=>d.projetoId===p.id)
+        .sort((a,b)=>(b.criadoEm||"").localeCompare(a.criadoEm||""));
       p.raci = {};
       raciRows.filter(r=>r.projetoId===p.id).forEach(r=>{
         p.raci[r.atividadeId] = p.raci[r.atividadeId] || {};
@@ -625,7 +630,7 @@ const DB = {
         tarefas.push(sbUpsert("rubricas", this.data.rubricas.map(toSnake), {onConflict:"id"}));
       if(this.data.projetos.length)
         tarefas.push(sbUpsert("projetos", this.data.projetos.map(p=>{
-          const {stakeholders,riscos,reunioes,raci,...rest}=p;
+          const {stakeholders,riscos,reunioes,raci,documentos,...rest}=p;
           return toSnake(rest);
         }), {onConflict:"id"}));
       if(this.data.atividades.length)
@@ -960,21 +965,19 @@ function calcularAlertas(){
    Motor de cálculo usado pela aba "Ocupação da Equipe" de cada projeto.
 
    Premissas (definidas com o gestor):
-   - Cada atividade tem um campo opcional "horasPrevistas" (estimativa de
-     esforço, informada manualmente ao criar/editar a atividade).
-   - As pessoas "alocadas" numa atividade são: todas as pessoas marcadas
-     como "R" (Responsável/Executor) na matriz RACI daquela atividade,
-     dentro do mesmo projeto. (O campo responsavelId foi removido.)
-   - horasPrevistas NÃO é dividida entre as pessoas alocadas: cada uma
-     delas (cada "R") é considerada dedicando essa quantidade INTEIRA de
-     horas à atividade — ex.: 3 pessoas alocadas e 40h previstas = 40h de
-     ocupação para CADA uma das 3, não 13,3h.
-   - Para cada pessoa, essas horas previstas são distribuídas igualmente
-     pelos dias ÚTEIS (seg-sex) entre dataInicioPrev e dataFimPrev da atividade.
+   - Cada atividade tem uma lista opcional "estimativasPessoas": [{colaboradorId,horas}],
+     preenchida manualmente ao criar/editar a atividade — um colaborador (interno ou
+     parceiro vinculado ao projeto) e a quantidade de horas previstas PARA ELE especificamente.
+   - As pessoas "alocadas" numa atividade são exatamente as que aparecem em estimativasPessoas
+     (não depende mais de marcação "R" na Matriz RACI).
+   - Cada pessoa recebe exatamente a quantidade de horas que foi atribuída A ELA — não é
+     dividida nem multiplicada por mais ninguém.
+   - Para cada pessoa, essas horas previstas são distribuídas igualmente pelos dias ÚTEIS
+     (seg-sex) entre dataInicioPrev e dataFimPrev da atividade.
    - Capacidade padrão: 8h úteis por dia, por pessoa, IGUAL para todas.
-   - A ocupação é sempre calculada de forma GLOBAL (todas as atividades de
-     todos os projetos), porque uma pessoa pode estar cheia por causa de
-     OUTRO projeto — é justamente isso que o gestor precisa enxergar.
+   - A ocupação é sempre calculada de forma GLOBAL (todas as atividades de todos os
+     projetos), porque uma pessoa pode estar cheia por causa de OUTRO projeto — é
+     justamente isso que o gestor precisa enxergar.
    ============================================================ */
 const CAPACIDADE_DIARIA_PADRAO=8;
 
@@ -994,35 +997,39 @@ function diasUteisEntre(dataIni,dataFim){
   return dias;
 }
 
-/* pessoas alocadas numa atividade: TODAS as pessoas marcadas como "R" na RACI */
+/* pessoas alocadas numa atividade: todas as que têm uma estimativa de horas própria */
 function pessoasAlocadasAtividade(a){
   const ids=new Set();
-  const p=getProjeto(a.projetoId);
-  if(p && p.raci && p.raci[a.id]){
-    Object.entries(p.raci[a.id]).forEach(([pessoaId,papel])=>{
-      if(papel==="R") ids.add(pessoaId);
-    });
-  }
+  (a.estimativasPessoas||[]).forEach(e=>{ if(e.colaboradorId) ids.add(e.colaboradorId); });
   return [...ids];
+}
+/* horas previstas de UMA pessoa específica numa atividade (0 se não estiver na lista) */
+function horasPrevistasDaPessoa(a,colaboradorId){
+  const item=(a.estimativasPessoas||[]).find(e=>e.colaboradorId===colaboradorId);
+  return item ? (+item.horas||0) : 0;
+}
+/* soma de todas as horas previstas de uma atividade (todas as pessoas somadas) */
+function totalHorasPrevistasAtividade(a){
+  return (a.estimativasPessoas||[]).reduce((s,e)=>s+(+e.horas||0),0);
 }
 
 /* monta o mapa global: { colaboradorId: { "AAAA-MM-DD": horasAlocadas } }
-   considerando TODAS as atividades com horas previstas e datas válidas. */
+   considerando TODAS as atividades com estimativas e datas válidas. */
 function construirMapaOcupacaoGlobal(){
   const mapa={};
   DB.data.atividades.forEach(a=>{
-    const horasPrev=+a.horasPrevistas||0;
-    if(horasPrev<=0) return;
     if(a.status==="Cancelada") return;
-    const pessoas=pessoasAlocadasAtividade(a);
-    if(!pessoas.length) return;
+    const estimativas=a.estimativasPessoas||[];
+    if(!estimativas.length) return;
     const dias=diasUteisEntre(a.dataInicioPrev,a.dataFimPrev);
     if(!dias.length) return;
-    const horasPorPessoaPorDia=horasPrev/dias.length;
-    pessoas.forEach(pid=>{
-      mapa[pid]=mapa[pid]||{};
+    estimativas.forEach(e=>{
+      const horas=+e.horas||0;
+      if(!e.colaboradorId||horas<=0) return;
+      const horasPorDia=horas/dias.length;
+      mapa[e.colaboradorId]=mapa[e.colaboradorId]||{};
       dias.forEach(d=>{
-        mapa[pid][d]=(mapa[pid][d]||0)+horasPorPessoaPorDia;
+        mapa[e.colaboradorId][d]=(mapa[e.colaboradorId][d]||0)+horasPorDia;
       });
     });
   });
@@ -1034,13 +1041,12 @@ function construirMapaOcupacaoGlobal(){
 function detalheOcupacaoDia(colaboradorId,dia){
   const out=[];
   DB.data.atividades.forEach(a=>{
-    const horasPrev=+a.horasPrevistas||0;
-    if(horasPrev<=0||a.status==="Cancelada") return;
-    const pessoas=pessoasAlocadasAtividade(a);
-    if(!pessoas.includes(colaboradorId)) return;
+    if(a.status==="Cancelada") return;
+    const horasPessoa=horasPrevistasDaPessoa(a,colaboradorId);
+    if(horasPessoa<=0) return;
     const dias=diasUteisEntre(a.dataInicioPrev,a.dataFimPrev);
     if(!dias.includes(dia)) return;
-    const horasDia=horasPrev/dias.length;
+    const horasDia=horasPessoa/dias.length;
     out.push({projetoId:a.projetoId, projetoNome:nomeProjeto(a.projetoId), atividadeId:a.id, atividadeNome:a.nome, horas:horasDia});
   });
   return out;
@@ -1597,7 +1603,7 @@ function viewProjeto(v){
   $("#proj-export").onclick=()=>exportarRelatorioProjeto(p);
 
   let tabs=[
-    ["resumo","Resumo"],["cronograma","Cronograma Físico"]
+    ["resumo","Resumo"],["documentos","📎 Documentos"],["cronograma","Cronograma Físico"]
   ];
   if(isGestor()) tabs.push(["ocupacao","👥 Ocupação da Equipe"]);
   tabs.push(["reunioes","Reuniões"]);
@@ -1615,6 +1621,7 @@ function viewProjeto(v){
 
   const c=$("#proj-tab");
   if(ST.projTab==="resumo") projResumo(c,p);
+  else if(ST.projTab==="documentos") projDocumentos(c,p);
   else if(ST.projTab==="cronograma") projCronograma(c,p);
   else if(ST.projTab==="ocupacao") projOcupacao(c,p);
   else if(ST.projTab==="reunioes") projReunioes(c,p);
@@ -1735,6 +1742,91 @@ function projResumo(c,p){
   };
 }
 
+/* ---- DOCUMENTOS DO PROJETO (ex.: documento de contratação — permite vários anexos) ---- */
+const DOCUMENTOS_BUCKET="documentos-projeto";
+function fmtBytes(n){
+  n=+n||0;
+  if(n<1024) return n+" B";
+  if(n<1024*1024) return (n/1024).toFixed(1)+" KB";
+  return (n/(1024*1024)).toFixed(1)+" MB";
+}
+function projDocumentos(c,p){
+  p.documentos=p.documentos||[];
+  const podeEditar=isGestor();
+  const rows=p.documentos.map(d=>`<tr>
+      <td style="font-weight:600">📄 ${esc(d.nomeArquivo)}</td>
+      <td style="font-size:12px;color:var(--ink-soft)">${fmtBytes(d.tamanhoBytes)}</td>
+      <td style="font-size:12px;color:var(--ink-soft)">${d.criadoEm?fmtDate(d.criadoEm.slice(0,10)):"—"}</td>
+      <td class="actions">
+        <button class="btn-icon" data-verdoc="${d.id}" title="Visualizar / baixar">👁</button>
+        ${podeEditar?`<button class="btn-icon del" data-dldoc="${d.id}" title="Remover">🗑</button>`:""}
+      </td></tr>`).join("");
+  c.innerHTML=`
+  <div class="help-banner"><span>ℹ️</span><span>Anexe aqui o(s) documento(s) de contratação do projeto (contrato, termo de referência, edital, etc.). Pode anexar mais de um arquivo.</span></div>
+  <div class="toolbar"><span class="section-title" style="margin:0">Documentos anexados</span><div class="spacer"></div>
+    ${podeEditar?`<input type="file" id="doc-input" multiple style="display:none">
+    <button class="btn" id="add-doc">+ Anexar documento(s)</button>`:""}</div>
+  ${p.documentos.length?`<div class="card table-wrap"><table><thead><tr>
+      <th>Arquivo</th><th>Tamanho</th><th>Enviado em</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`
+    :`<div class="card"><div class="empty"><span class="ic">📎</span><h3>Nenhum documento anexado</h3>
+      <p>${podeEditar?"Anexe o documento de contratação (ou outros arquivos relevantes) deste projeto.":"Nenhum documento anexado ainda."}</p></div></div>`}`;
+
+  if($("#add-doc")){
+    $("#add-doc").onclick=()=>$("#doc-input").click();
+    $("#doc-input").onchange=(e)=>uploadDocumentosProjeto(p, e.target.files);
+  }
+  c.querySelectorAll("[data-verdoc]").forEach(b=>b.onclick=()=>abrirDocumentoProjeto(p.documentos.find(d=>d.id===b.dataset.verdoc)));
+  c.querySelectorAll("[data-dldoc]").forEach(b=>b.onclick=()=>{
+    const doc=p.documentos.find(d=>d.id===b.dataset.dldoc);
+    confirmar(`Remover "${doc.nomeArquivo}"?`,"O arquivo será apagado definitivamente do armazenamento.",async()=>{
+      await removerDocumentoProjeto(p, doc);
+      toast("Documento removido."); render();
+    });
+  });
+}
+
+async function uploadDocumentosProjeto(p, fileList){
+  const arquivos=[...(fileList||[])];
+  if(!arquivos.length) return;
+  toast(`Enviando ${arquivos.length} arquivo(s)...`);
+  for(const file of arquivos){
+    try{
+      const caminho=`${p.id}/${uid()}_${file.name}`.replace(/\s+/g,"_");
+      const { error:erroUpload } = await sb.storage.from(DOCUMENTOS_BUCKET).upload(caminho, file, { upsert:false });
+      if(erroUpload) throw erroUpload;
+      const registro={
+        id:uid(), projetoId:p.id, nomeArquivo:file.name, caminhoStorage:caminho,
+        tamanhoBytes:file.size, tipoArquivo:file.type||"", criadoEm:new Date().toISOString()
+      };
+      await sbInsert("documentos_projeto", toSnake(registro));
+      p.documentos.unshift(registro);
+    }catch(e){
+      toast(`Erro ao enviar "${file.name}": `+(e.message||e));
+    }
+  }
+  toast("Envio concluído."); render();
+}
+
+async function abrirDocumentoProjeto(doc){
+  if(!doc) return;
+  try{
+    const { data, error } = await sb.storage.from(DOCUMENTOS_BUCKET).createSignedUrl(doc.caminhoStorage, 120);
+    if(error) throw error;
+    window.open(data.signedUrl, "_blank");
+  }catch(e){
+    toast("Não foi possível abrir o documento: "+(e.message||e));
+  }
+}
+
+async function removerDocumentoProjeto(p, doc){
+  try{
+    await sb.storage.from(DOCUMENTOS_BUCKET).remove([doc.caminhoStorage]);
+  }catch(e){ /* segue removendo o registro mesmo se o arquivo físico já não existir */ }
+  await sbDelete("documentos_projeto", doc.id);
+  p.documentos=p.documentos.filter(d=>d.id!==doc.id);
+}
+
 /* ---- CRONOGRAMA FÍSICO ---- */
 function responsaveisRaci(p,atividadeId){
   if(!p || !p.raci) return [];
@@ -1757,7 +1849,7 @@ function projCronograma(c,p){
     const responsaveis = responsaveisRaci(p,a.id);
     return `<tr>
       <td><div style="font-weight:600">${esc(a.nome)}</div>
-        <div style="font-size:11px;color:var(--ink-faint)">${esc(nomeCategoria(a.categoriaId))} · Resp.: ${responsaveis.join(", ")||"—"}${horasAtiv?` · ${horasAtiv}h apontadas`:""}${(+a.horasPrevistas||0)>0?` · ${fmtNum(+a.horasPrevistas,1)}h previstas`:""}</div></td>
+        <div style="font-size:11px;color:var(--ink-faint)">${esc(nomeCategoria(a.categoriaId))} · Resp.: ${responsaveis.join(", ")||"—"}${horasAtiv?` · ${horasAtiv}h apontadas`:""}${totalHorasPrevistasAtividade(a)>0?` · ${fmtNum(totalHorasPrevistasAtividade(a),1)}h previstas (${pessoasAlocadasAtividade(a).length} pessoa(s))`:""}</div></td>
       <td style="font-size:12px">${dIni} → ${dFim}</td>
       <td>${atrasada?`<span class="badge b-danger">Atrasada</span>`:statusBadge(a.status||"Não iniciada")}</td>
       <td><div style="display:flex;align-items:center;gap:8px">
@@ -1884,9 +1976,8 @@ function projOcupacao(c,p){
     .sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"}));
 
   const explicacao=`<div class="help-banner"><span>ℹ️</span><span>
-    Calculado a partir das <b>horas previstas</b> de cada atividade (informe esse campo ao criar/editar
-    atividades no Cronograma). Cada pessoa alocada — ou seja, cada pessoa marcada como "R" na Matriz
-    RACI — é considerada dedicando essa quantidade INTEIRA de horas (não é dividida entre elas), distribuída
+    Calculado a partir das <b>horas previstas por colaborador</b> de cada atividade (informadas ao criar/editar
+    atividades no Cronograma). Cada pessoa recebe exatamente a quantidade de horas atribuída a ela, distribuída
     ao longo dos dias úteis entre início e término previstos. Capacidade considerada:
     <b>${CAPACIDADE_DIARIA_PADRAO}h/dia por pessoa</b>. O cálculo é <b>global</b> — um conflito pode vir de
     outro projeto em que a pessoa também esteja alocada, não só deste.</span></div>`;
@@ -1894,14 +1985,14 @@ function projOcupacao(c,p){
   if(!pessoas.length){
     c.innerHTML=`${explicacao}<div class="card"><div class="empty"><span class="ic">👥</span>
       <h3>Ninguém alocado ainda neste projeto</h3>
-      <p>Defina pessoas como "R" (Responsável) na Matriz RACI.</p></div></div>`;
+      <p>Edite as atividades do Cronograma Físico e informe as horas previstas por colaborador.</p></div></div>`;
     return;
   }
-  if(!ats.some(a=>(+a.horasPrevistas||0)>0)){
+  if(!ats.some(a=>totalHorasPrevistasAtividade(a)>0)){
     c.innerHTML=`${explicacao}<div class="card"><div class="empty"><span class="ic">🕐</span>
       <h3>Nenhuma atividade tem horas previstas informadas</h3>
-      <p>Edite as atividades do Cronograma Físico e preencha "Horas previstas" para que o calendário de
-      ocupação possa ser calculado.</p></div></div>`;
+      <p>Edite as atividades do Cronograma Físico e informe "Horas previstas por colaborador" para que o
+      calendário de ocupação possa ser calculado.</p></div></div>`;
     return;
   }
 
@@ -1910,8 +2001,8 @@ function projOcupacao(c,p){
   ST.ocupPessoaId=(ST.ocupPessoaId&&pessoas.some(pe=>pe.id===ST.ocupPessoaId))?ST.ocupPessoaId:pessoas[0].id;
 
   const cardsHtml=pessoas.map(pe=>{
-    const atsPessoa=ats.filter(a=>(+a.horasPrevistas||0)>0 && pessoasAlocadasAtividade(a).includes(pe.id));
-    const totalHoras=atsPessoa.reduce((s,a)=>s+((+a.horasPrevistas||0)/pessoasAlocadasAtividade(a).length),0);
+    const atsPessoa=ats.filter(a=>horasPrevistasDaPessoa(a,pe.id)>0);
+    const totalHoras=atsPessoa.reduce((s,a)=>s+horasPrevistasDaPessoa(a,pe.id),0);
     let minIni=null,maxFim=null;
     atsPessoa.forEach(a=>{
       if(a.dataInicioPrev&&(!minIni||a.dataInicioPrev<minIni)) minIni=a.dataInicioPrev;
@@ -1943,12 +2034,12 @@ function projOcupacao(c,p){
 
   const decisoes=[];
   ats.forEach(a=>{
-    if((+a.horasPrevistas||0)<=0) return;
     const pessoasAt=pessoasAlocadasAtividade(a);
     const dias=diasUteisEntre(a.dataInicioPrev,a.dataFimPrev);
     pessoasAt.forEach(pid=>{
       const pe=getColab(pid); if(!pe) return;
-      const horasPessoa=(+a.horasPrevistas||0)/pessoasAt.length;
+      const horasPessoa=horasPrevistasDaPessoa(a,pid);
+      if(horasPessoa<=0) return;
       const temConflito=dias.some(d=>((mapa[pid]&&mapa[pid][d])||0)>=CAPACIDADE_DIARIA_PADRAO-0.01);
       if(temConflito){
         const prox=proximaDisponibilidade(pid,horasPessoa,a.dataInicioPrev||todayStr(),mapa);
@@ -2484,16 +2575,17 @@ function ultimosMeses(n){
   return out;
 }
 /* intervalo de meses (AAAA-MM) para o seletor de "Ocupação da Equipe":
-   cobre desde o mês mais antigo com atividade prevista (horasPrevistas>0
-   no Cronograma) até alguns meses à frente do mês atual. Corrige o caso em
-   que o calendário "começava" num mês recente (ex.: sempre 2 meses antes de
-   hoje) mesmo havendo atividades com dados desde meses bem anteriores
-   (ex.: fevereiro) — essas ficavam fora da lista e pareciam não existir. */
+   cobre desde o mês mais antigo com atividade prevista (com horas previstas
+   por colaborador informadas no Cronograma) até alguns meses à frente do mês
+   atual. Corrige o caso em que o calendário "começava" num mês recente (ex.:
+   sempre 2 meses antes de hoje) mesmo havendo atividades com dados desde
+   meses bem anteriores (ex.: fevereiro) — essas ficavam fora da lista e
+   pareciam não existir. */
 function mesesOcupacaoDisponiveis(){
   const hojeMk=todayStr().slice(0,7);
   let minMk=hojeMk, maxMk=mesShift(hojeMk,9);
   DB.data.atividades.forEach(a=>{
-    if((+a.horasPrevistas||0)<=0) return;
+    if(totalHorasPrevistasAtividade(a)<=0) return;
     if(a.dataInicioPrev && a.dataInicioPrev.slice(0,7)<minMk) minMk=a.dataInicioPrev.slice(0,7);
     if(a.dataFimPrev && a.dataFimPrev.slice(0,7)>maxMk) maxMk=a.dataFimPrev.slice(0,7);
   });
@@ -3047,37 +3139,31 @@ function mesLabel(mk){ if(!mk) return ""; const p=mk.split("-"); return MONTHS[(
    ============================================================ */
 function viewOcupacaoEquipe(v){
   const myId = currentColabId();
+  // Esta visão global (Operação > Ocupação da Equipe) mostra somente colaboradores
+  // INTERNOS — parceiros externos só aparecem na ocupação de cada projeto
+  // individualmente (aba "Ocupação da Equipe" do projeto), onde fica claro que
+  // eles são parceiros vinculados àquele projeto.
   const pessoas = myId
     ? [getColab(myId)].filter(Boolean)
-    : DB.data.colaboradores.slice().sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"}));
+    : getInternos().slice().sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"}));
 
   if(!pessoas.length){
     v.innerHTML=`<div class="card"><div class="empty"><span class="ic">▥</span>
       <h3>Nenhum colaborador identificado</h3>
-      <p>${myId?"Seu cadastro de colaborador não foi encontrado.":"Cadastre a equipe em Operação → Equipe para ver a ocupação."}</p></div></div>`;
+      <p>${myId?"Seu cadastro de colaborador não foi encontrado.":"Cadastre a equipe interna em Operação → Equipe para ver a ocupação."}</p></div></div>`;
     return;
   }
-  if(!DB.data.atividades.some(a=>(+a.horasPrevistas||0)>0)){
+  if(!DB.data.atividades.some(a=>totalHorasPrevistasAtividade(a)>0)){
     v.innerHTML=`<div class="help-banner"><span>ℹ️</span><span>
-      A ocupação é calculada a partir das <b>horas previstas</b> das atividades de cada projeto
-      (campo preenchido no Cronograma Físico). O Responsável e cada pessoa marcada como "R" na
-      Matriz RACI recebem essa quantidade INTEIRA de horas (sem dividir entre eles), distribuída
-      ao longo dos dias úteis entre início e término previstos.</span></div>
+      A ocupação é calculada a partir das <b>horas previstas por colaborador</b> das atividades de cada
+      projeto (campo preenchido no Cronograma Físico). Cada pessoa recebe exatamente a quantidade de horas
+      atribuída a ela, distribuída ao longo dos dias úteis entre início e término previstos.</span></div>
       <div class="card"><div class="empty"><span class="ic">🕐</span>
       <h3>Ainda não há horas previstas lançadas</h3>
-      <p>Preencha "Horas previstas" nas atividades dos projetos do portfólio para que este painel
-      seja calculado automaticamente.</p></div></div>`;
+      <p>Preencha "Horas previstas por colaborador" nas atividades dos projetos do portfólio para que este
+      painel seja calculado automaticamente.</p></div></div>`;
     return;
   }
-
-  // diagnóstico: atividades com horas previstas informadas mas sem NINGUÉM
-  // marcado como "R" na RACI não entram no cálculo de ocupação (por design —
-  // ver comentário acima de pessoasAlocadasAtividade). Isso é a causa mais
-  // comum de "a ocupação não está puxando as horas previstas do projeto".
-  const atsSemR = isGestor() ? DB.data.atividades.filter(a=>{
-    if((+a.horasPrevistas||0)<=0 || a.status==="Cancelada") return false;
-    return pessoasAlocadasAtividade(a).length===0;
-  }) : [];
 
   ST.ocupEqPessoaId = myId || ((ST.ocupEqPessoaId && pessoas.some(p=>p.id===ST.ocupEqPessoaId)) ? ST.ocupEqPessoaId : pessoas[0].id);
   ST.ocupEqMes = ST.ocupEqMes || todayStr().slice(0,7);
@@ -3127,17 +3213,11 @@ function viewOcupacaoEquipe(v){
 
   v.innerHTML=`
   <div class="help-banner"><span>ℹ️</span><span>
-    Visão consolidada de <b>todos os projetos do portfólio</b> em que ${myId?"você está":"a pessoa está"} alocada.
-    As horas vêm das <b>horas previstas</b> das atividades (Cronograma Físico de cada projeto): o Responsável e
-    cada pessoa marcada como "R" na RACI recebem essa quantidade INTEIRA de horas (sem dividir entre eles),
-    distribuída pelos dias úteis entre início e término previstos. Capacidade considerada:
-    <b>${CAPACIDADE_DIARIA_PADRAO}h/dia</b>.</span></div>
-  ${atsSemR.length?`<div class="help-banner" style="background:#fff7e6;border-color:#f0d999;color:#8a6415">
-    <span>⚠️</span><span><b>${atsSemR.length} atividade(s)</b> têm horas previstas preenchidas mas ninguém
-    marcado como "R" (Responsável) na Matriz RACI, então não entram nesta ocupação: ${
-      atsSemR.slice(0,6).map(a=>esc(a.nome)+" ("+esc(nomeProjeto(a.projetoId))+")").join(", ")
-    }${atsSemR.length>6?"…":""}. Vá em cada projeto → aba <b>Matriz RACI</b> e marque ao menos um "R" nessas
-    atividades.</span></div>`:""}
+    Visão consolidada de <b>todos os projetos do portfólio</b> em que ${myId?"você está":"a pessoa está"} alocada
+    (somente equipe interna — parceiros externos aparecem na ocupação de cada projeto individualmente).
+    As horas vêm das <b>horas previstas por colaborador</b> das atividades (Cronograma Físico de cada projeto):
+    cada pessoa recebe exatamente a quantidade de horas atribuída a ela, distribuída pelos dias úteis entre
+    início e término previstos. Capacidade considerada: <b>${CAPACIDADE_DIARIA_PADRAO}h/dia</b>.</span></div>
 
   <div class="toolbar">
     ${myId?"":`<div class="field-inline">Colaborador
@@ -4306,9 +4386,9 @@ function baixarModeloCronograma(){
   const catExemplo=DB.data.categorias.slice(0,1).map(c=>c.nome).join("") || "Nome da categoria";
   const hoje=todayStr();
   const linhas=[
-    "Nome;Categoria;Início previsto;Término previsto;Horas previstas;Status",
-    `Exemplo de atividade;${catExemplo};${hoje};${hoje};40;Não iniciada`,
-    `Outra atividade;${catExemplo};;;;Em andamento`
+    "Nome;Categoria;Início previsto;Término previsto;Status",
+    `Exemplo de atividade;${catExemplo};${hoje};${hoje};Não iniciada`,
+    `Outra atividade;${catExemplo};;;Em andamento`
   ];
   const conteudo="\uFEFF"+linhas.join("\r\n");
   const blob=new Blob([conteudo],{type:"text/csv;charset=utf-8"});
@@ -4316,7 +4396,7 @@ function baixarModeloCronograma(){
   a.href=URL.createObjectURL(blob);
   a.download="modelo_cronograma.csv";
   a.click(); URL.revokeObjectURL(a.href);
-  toast("Modelo CSV baixado. Abra no Excel para preencher.");
+  toast("Modelo CSV baixado. Abra no Excel para preencher. Depois de importar, edite cada atividade para informar as horas previstas por colaborador.");
 }
 
 async function importarCSVCronograma(event, projetoId){
@@ -4337,13 +4417,12 @@ async function importarCSVCronograma(event, projetoId){
         categoria: cabecalho.findIndex(c=>c==="categoria"),
         inicio: cabecalho.findIndex(c=>c==="início previsto"||c==="inicio previsto"||c==="início"||c==="inicio"||c==="data início"||c==="data inicio"),
         fim: cabecalho.findIndex(c=>c==="término previsto"||c==="termino previsto"||c==="término"||c==="termino"||c==="data fim"||c==="data fim"||c==="fim"),
-        horas: cabecalho.findIndex(c=>c==="horas previstas"||c==="horas"||c==="h previstas"||c==="h"),
         status: cabecalho.findIndex(c=>c==="status"||c==="situação"||c==="situacao")
       };
       const obrigatorias=["nome","categoria"];
       const faltando=obrigatorias.filter(k=>cols[k]<0);
       if(faltando.length){
-        alert("CSV inválido. Faltando coluna(s): "+faltando.join(", ")+".\n\nO cabeçalho deve ter: Nome; Categoria; Início previsto; Término previsto; Horas previstas; Status.");
+        alert("CSV inválido. Faltando coluna(s): "+faltando.join(", ")+".\n\nO cabeçalho deve ter: Nome; Categoria; Início previsto; Término previsto; Status.");
         return;
       }
       const resultado={ok:0, erro:0, mensagens:[]};
@@ -4356,7 +4435,6 @@ async function importarCSVCronograma(event, projetoId){
         const catRaw=(c[cols.categoria]||"").trim();
         const inicioRaw=(cols.inicio>=0?(c[cols.inicio]||"").trim():"").trim();
         const fimRaw=(cols.fim>=0?(c[cols.fim]||"").trim():"").trim();
-        const horasRaw=(cols.horas>=0?(c[cols.horas]||"").trim():"").trim();
         const statusRaw=(cols.status>=0?(c[cols.status]||"").trim():"").trim();
 
         if(!nomeRaw){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: nome da atividade vazio.`); return; }
@@ -4376,13 +4454,12 @@ async function importarCSVCronograma(event, projetoId){
         if(inicioRaw && !dataInicio){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: data de início inválida "${inicioRaw}"`); return; }
         if(fimRaw && !dataFim){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: data de término inválida "${fimRaw}"`); return; }
 
-        const horasPrev=parseFloat(horasRaw.replace(",","."))||0;
         let status=statusRaw;
         if(status && !STATUS_ATIV.includes(status)) status="Não iniciada";
 
         const nova={id:uid(), projetoId, nome:nomeRaw, categoriaId:cat.id,
           dataInicioPrev:dataInicio||null, dataFimPrev:dataFim||null,
-          horasPrevistas:horasPrev, status:status||"Não iniciada", progresso:0};
+          estimativasPessoas:[], status:status||"Não iniciada", progresso:0};
         DB.data.atividades.push(nova);
         novasAtividades.push(nova);
         resultado.ok++;
@@ -4441,7 +4518,7 @@ function importarBackup(e){
             ["categorias", obj.categorias],
             ["rubricas", obj.rubricas],
             ["projetos", (obj.projetos||[]).map(p=>{
-              const {stakeholders,riscos,reunioes,raci,...rest}=p; return rest;
+              const {stakeholders,riscos,reunioes,raci,documentos,...rest}=p; return rest;
             })],
             ["atividades", obj.atividades],
             ["horas", obj.horas],
@@ -4549,6 +4626,14 @@ function openForm(cfg){
               style="width:auto;margin:0"> ${esc(o.label)}
           </label>`).join(""):`<span style="font-size:12.5px;color:var(--ink-faint)">Nenhum projeto cadastrado ainda.</span>`}
       </div>`;
+    }else if(f.type==="estimativas"){
+      // lista repetível de {colaboradorId,horas} — ex.: horas previstas por pessoa numa atividade.
+      // O container leva data-k mas as linhas internas são geridas por wireEstimativasField(),
+      // fora do fluxo genérico de collect()/refreshDynamic().
+      input=`<div data-k="${f.key}" style="border:1px solid var(--line);border-radius:8px;padding:10px 12px">
+        <div class="estim-rows"></div>
+        <button type="button" class="btn ghost sm estim-add" style="margin-top:8px">+ Adicionar pessoa</button>
+      </div>`;
     }else if(f.type==="textarea"){
       input=`<textarea data-k="${f.key}" ${dis} placeholder="${esc(f.placeholder||"")}">${esc(v||"")}</textarea>`;
     }else if(f.type==="date" && f.allowIndeterminate){
@@ -4580,6 +4665,48 @@ function openForm(cfg){
       <button class="btn" id="m-save">Salvar</button>
     </div></div></div>`;
 
+  function wireEstimativasField(f){
+    const container=()=>$("#f-grid").querySelector(`[data-k="${f.key}"]`);
+    vals[f.key]=Array.isArray(vals[f.key])?vals[f.key].map(x=>Object.assign({},x)):[];
+    function rowHtml(item,idx){
+      const opts=(f.dynamic?f.optionsFn(vals):f.options)||[];
+      return `<div class="estim-row" data-idx="${idx}" style="display:flex;gap:8px;align-items:center;margin-bottom:7px">
+        <select data-erole="colab" style="flex:1">
+          <option value="">Selecione o colaborador…</option>
+          ${opts.map(o=>`<option value="${esc(o.value)}" ${String(item.colaboradorId||"")===String(o.value)?"selected":""}>${esc(o.label)}</option>`).join("")}
+        </select>
+        <input type="number" min="0" step="0.5" data-erole="horas" placeholder="Horas" value="${item.horas!=null&&item.horas!==""?item.horas:""}" style="width:110px;flex-shrink:0">
+        <button type="button" class="btn-icon del" data-erole="rm" title="Remover">✕</button>
+      </div>`;
+    }
+    function bindRows(){
+      const el=container(); if(!el) return;
+      el.querySelectorAll(".estim-row").forEach(row=>{
+        const idx=+row.dataset.idx;
+        const selColab=row.querySelector('[data-erole="colab"]');
+        const inpHoras=row.querySelector('[data-erole="horas"]');
+        const btnRm=row.querySelector('[data-erole="rm"]');
+        selColab.onchange=()=>{ vals[f.key][idx].colaboradorId=selColab.value; };
+        inpHoras.oninput=()=>{ vals[f.key][idx].horas=inpHoras.value; };
+        btnRm.onclick=()=>{ vals[f.key].splice(idx,1); renderRows(); };
+      });
+    }
+    function renderRows(){
+      const el=container(); if(!el) return;
+      const lista=vals[f.key];
+      el.querySelector(".estim-rows").innerHTML=lista.length
+        ? lista.map(rowHtml).join("")
+        : `<div style="font-size:12.5px;color:var(--ink-faint);padding:4px 0 2px">Nenhuma pessoa adicionada ainda.</div>`;
+      bindRows();
+    }
+    const el=container();
+    if(el){
+      el.querySelector(".estim-add").onclick=()=>{ vals[f.key].push({colaboradorId:"",horas:""}); renderRows(); };
+      renderRows();
+    }
+  }
+  fields.forEach(f=>{ if(f.type==="estimativas") wireEstimativasField(f); });
+
   function collect(){
     $("#f-grid").querySelectorAll("[data-k]").forEach(el=>{
       if(el.disabled) return; // não sobrescreve valor de campo bloqueado
@@ -4587,6 +4714,11 @@ function openForm(cfg){
       if(fdef && fdef.type==="checklist"){
         // junta os checkboxes marcados dentro do wrapper num array de valores
         vals[el.dataset.k]=[...el.querySelectorAll("input[type=checkbox]:checked")].map(c=>c.value);
+        return;
+      }
+      if(fdef && fdef.type==="estimativas"){
+        // vals[el.dataset.k] já é mantido em dia por wireEstimativasField() —
+        // não sobrescrever aqui (o container <div> não tem .value).
         return;
       }
       // campos de data vazios devem virar null, nunca "" — o Postgres rejeita
@@ -4729,9 +4861,11 @@ function formAtividade(projetoId,a){
         help:"Marcar como \"Concluída\" preenche automaticamente 100% em % Concluído."},
       {key:"progresso",label:"% Concluído",type:"number",min:0,
         help:"Valor de 0 a 100",placeholder:"0"},
-      {key:"horasPrevistas",label:"Horas previstas (estimativa de esforço)",type:"number",min:0,step:"0.5",
-        placeholder:"Ex.: 40",
-        help:"Opcional. Usado para calcular a ocupação da equipe no calendário (aba \"Ocupação da Equipe\"). Considera essa quantidade de horas TANTO para o Responsável QUANTO para cada pessoa marcada como \"R\" na RACI (não é dividido entre eles), ao longo dos dias úteis entre início e término previstos."}
+      {key:"estimativasPessoas",label:"Horas previstas por colaborador (estimativa de esforço)",
+        type:"estimativas",full:true,dynamic:true,
+        optionsFn:()=>[...getInternos(),...getParceirosDoProjeto(getProjeto(projetoId))]
+          .map(co=>({value:co.id,label:co.nome+(co.tipo==="parceiro"?" (parceiro)":"")})),
+        help:"Escolha cada colaborador (interno ou parceiro vinculado a este projeto) e a quantidade de horas previstas para ele nesta atividade. Usado para calcular a ocupação da equipe no calendário, distribuída ao longo dos dias úteis entre início e término previstos."}
     ],
     onFieldChange:(vv,key,gridEl)=>{
       if(key==="status" && vv.status==="Concluída"){
@@ -4742,7 +4876,10 @@ function formAtividade(projetoId,a){
     },
     onSave:async(v)=>{
       v.progresso=Math.max(0,Math.min(100,parseFloat(v.progresso)||0));
-      v.horasPrevistas=parseFloat(v.horasPrevistas)||0;
+      // filtra linhas incompletas e normaliza os números
+      v.estimativasPessoas=(Array.isArray(v.estimativasPessoas)?v.estimativasPessoas:[])
+        .filter(x=>x.colaboradorId && parseFloat(x.horas)>0)
+        .map(x=>({colaboradorId:x.colaboradorId, horas:parseFloat(x.horas)}));
       if(v.status==="Concluída") v.progresso=100;
       else if(v.progresso>=100) v.status="Concluída";
       if(edit){
