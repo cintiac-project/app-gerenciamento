@@ -576,7 +576,11 @@ const DB = {
     const colaboradores = toCamel(profilesData||[]).map(c=>({
       id:c.id, nome:c.nome, cargo:c.cargo, organizacao:c.organizacao,
       email:c.email||"", custoHora:c.custoHora||0,
-      tipo:c.tipoPessoa||"interno", acesso:(c.tipoPessoa!=="parceiro"), papel:c.papel
+      tipo:c.tipoPessoa||"interno", acesso:(c.tipoPessoa!=="parceiro"), papel:c.papel,
+      // projetos aos quais este parceiro externo está vinculado (só se aplica a tipo="parceiro").
+      // Usado para filtrar a Matriz RACI de cada projeto, mostrando só os parceiros
+      // realmente vinculados àquele projeto (e não todos os parceiros da base).
+      projetosIds: Array.isArray(c.projetosIds) ? c.projetosIds : []
     }));
 
     const projetos = toCamel(projetosData||[]);
@@ -2233,22 +2237,40 @@ function projStakeholders(c,p){
 }
 
 /* ---- MATRIZ RACI ---- */
+/* Retorna somente os parceiros externos vinculados a ESTE projeto — não a base toda.
+   Um parceiro é considerado vinculado ao projeto p se:
+   (a) o próprio cadastro do parceiro marcou este projeto em "Projeto(s) vinculado(s)"; ou
+   (b) ele é o colaborador vinculado a um stakeholder classificado como "Primário" deste projeto. */
+function getParceirosDoProjeto(p){
+  return getParceiros().filter(co=>
+    (co.projetosIds||[]).includes(p.id) ||
+    (p.stakeholders||[]).some(s=>s.classificacao==="Primário" && s.colaboradorVinculadoId===co.id)
+  );
+}
+/* Nome a exibir na Matriz RACI para uma pessoa: se for parceiro vinculado a um
+   stakeholder Primário deste projeto, usa o nome cadastrado no stakeholder do
+   próprio projeto (pode variar de projeto para projeto); senão usa o nome do cadastro geral. */
+function nomeParaRaci(co,p){
+  const stk=(p.stakeholders||[]).find(s=>s.classificacao==="Primário" && s.colaboradorVinculadoId===co.id);
+  return stk ? stk.nome : co.nome;
+}
 function projRaci(c,p){
   const ats=DB.data.atividades.filter(a=>a.projetoId===p.id)
     .sort((a,b)=>(a.dataInicioPrev||"").localeCompare(b.dataInicioPrev||""));
-  // ordena: internos primeiro, depois parceiros
-  const colabs=[...getInternos(),...getParceiros()];
+  // ordena: internos primeiro (globais), depois só os parceiros vinculados a ESTE projeto
+  const colabs=[...getInternos(),...getParceirosDoProjeto(p)];
   p.raci=p.raci||{};
   if(!ats.length||!colabs.length){
-    c.innerHTML=`<div class="help-banner"><span>ℹ️</span><span>A matriz RACI cruza <b>atividades</b> com <b>pessoas</b> (colaboradores internos e parceiros externos). Cadastre ao menos uma atividade (aba Cronograma) e uma pessoa (menu Equipe) para montá-la.</span></div>
+    c.innerHTML=`<div class="help-banner"><span>ℹ️</span><span>A matriz RACI cruza <b>atividades</b> com <b>pessoas</b> (colaboradores internos e parceiros externos vinculados a este projeto). Cadastre ao menos uma atividade (aba Cronograma) e uma pessoa vinculada a este projeto (menu Equipe ou aba Stakeholders) para montá-la.</span></div>
     <div class="card"><div class="empty"><span class="ic">▦</span><h3>Matriz indisponível</h3>
-      <p>${!ats.length?"Faltam atividades no cronograma. ":""}${!colabs.length?"Falta cadastrar pessoas.":""}</p></div></div>`;
+      <p>${!ats.length?"Faltam atividades no cronograma. ":""}${!colabs.length?"Falta cadastrar pessoas vinculadas a este projeto (parceiros: marque este projeto no cadastro, ou registre-o como stakeholder Primário).":""}</p></div></div>`;
     return;
   }
   let head=`<th style="min-width:180px">Atividade</th>`;
   colabs.forEach(co=>{
     const isP=co.tipo==="parceiro";
-    head+=`<th style="text-align:center;font-size:10px;${isP?"background:#fbf5e7":""}" title="${esc(co.nome)}${isP?" (parceiro externo)":""}">${esc(co.nome.split(" ")[0])}${isP?'<div style="font-size:9px;color:#b8852a;font-weight:700;margin-top:2px">PARCEIRO</div>':""}</th>`;
+    const nomeExibido=nomeParaRaci(co,p);
+    head+=`<th style="text-align:center;font-size:10px;${isP?"background:#fbf5e7":""}" title="${esc(nomeExibido)}${isP?" (parceiro externo)":""}">${esc(nomeExibido.split(" ")[0])}${isP?'<div style="font-size:9px;color:#b8852a;font-weight:700;margin-top:2px">PARCEIRO</div>':""}</th>`;
   });
   let body="";
   ats.forEach(a=>{
@@ -3230,7 +3252,15 @@ function viewEquipe(v){
   if(topbar) topbar.insertAdjacentHTML("beforeend",`<button class="btn ghost" id="btn-sync-users" style="margin-left:6px">↻ Sincronizar usuários</button>`);
   const internos=getInternos();
   const parceiros=getParceiros();
-  function rowsFor(list){
+  function nomesProjetosVinculados(c){
+    const diretos=DB.data.projetos.filter(p=>(c.projetosIds||[]).includes(p.id));
+    const viaStakeholder=DB.data.projetos.filter(p=>
+      !((c.projetosIds||[]).includes(p.id)) &&
+      (p.stakeholders||[]).some(s=>s.classificacao==="Primário" && s.colaboradorVinculadoId===c.id));
+    const todos=[...diretos,...viaStakeholder];
+    return todos.length ? todos.map(p=>esc(p.nome)).join(", ") : '<span style="color:var(--ink-faint)">nenhum</span>';
+  }
+  function rowsFor(list, showProjetos){
     return list.map(c=>{
       const h=DB.data.horas.filter(x=>x.colaboradorId===c.id).reduce((s,x)=>s+(+x.horas||0),0);
       return `<tr>
@@ -3240,12 +3270,15 @@ function viewEquipe(v){
         <td style="font-size:12px;color:var(--ink-soft)">${esc(c.email||"—")}</td>
         <td class="num">${c.custoHora?fmtBRL(c.custoHora):"—"}</td>
         <td class="num">${c.tipo==="parceiro"?'<span style="color:var(--ink-faint)">n/a</span>':fmtH(h)}</td>
+        ${showProjetos?`<td style="font-size:12px;color:var(--ink-soft);max-width:220px">${nomesProjetosVinculados(c)}</td>`:""}
         <td class="actions"><button class="btn-icon" data-edc="${c.id}">✎</button>
           <button class="btn-icon del" data-dlc="${c.id}">🗑</button></td></tr>`;
     }).join("");
   }
   const headers=`<tr><th>Nome</th><th>Cargo</th><th>Organização</th><th>E-mail</th>
     <th class="num">Custo/hora</th><th class="num">Horas totais</th><th></th></tr>`;
+  const headersParceiros=`<tr><th>Nome</th><th>Cargo</th><th>Organização</th><th>E-mail</th>
+    <th class="num">Custo/hora</th><th class="num">Horas totais</th><th>Projetos vinculados (RACI)</th><th></th></tr>`;
 
   let html="";
   if(!internos.length && !parceiros.length){
@@ -3264,8 +3297,8 @@ function viewEquipe(v){
     <div class="card">
       <div class="card-head"><h3>Parceiros externos <span class="tag" style="margin-left:6px;background:#f3ead7;color:#b8852a">${parceiros.length}</span></h3>
         <span class="hint">Participam da RACI · sem remuneração · sem acesso ao app</span></div>
-      ${parceiros.length?`<div class="table-wrap"><table><thead>${headers}</thead>
-        <tbody>${rowsFor(parceiros)}</tbody></table></div>`
+      ${parceiros.length?`<div class="table-wrap"><table><thead>${headersParceiros}</thead>
+        <tbody>${rowsFor(parceiros, true)}</tbody></table></div>`
         :`<div style="padding:24px;color:var(--ink-faint);font-size:13px;text-align:center">Nenhum parceiro cadastrado.</div>`}
     </div>`;
   }
@@ -3300,19 +3333,48 @@ function viewEquipe(v){
   v.querySelectorAll("[data-dlc]").forEach(b=>b.onclick=()=>{
     const c=getColab(b.dataset.dlc);
     const ehInterno = c.tipo!=="parceiro";
-    const msg = ehInterno
-      ? "Isto remove o acesso da pessoa ao app por completo (login revogado). Apontamentos de horas já feitos serão mantidos."
-      : "Apontamentos de horas e referências em RACI serão mantidos.";
-    confirmar(`Remover "${c.nome}"?`, msg, async()=>{
-      if(ehInterno){
-        const ok = await removerUsuarioCompleto(c.id);
-        if(!ok) return; // erro já avisado dentro da função
-      } else {
+    if(ehInterno){
+      confirmar(`Remover "${c.nome}"?`,
+        "Isto remove o acesso da pessoa ao app por completo (login revogado). Apontamentos de horas já feitos serão mantidos.",
+        async()=>{
+          const ok = await removerUsuarioCompleto(c.id);
+          if(!ok) return; // erro já avisado dentro da função
+          DB.data.colaboradores=DB.data.colaboradores.filter(x=>x.id!==c.id);
+          toast("Removido."); render();
+        });
+      return;
+    }
+    // parceiro externo: sempre pergunta se também deve remover apontamentos
+    // de horas e referências na Matriz RACI vinculados a ele.
+    confirmarComOpcao(
+      `Remover "${c.nome}"?`,
+      "Este parceiro externo será removido do cadastro de equipe.",
+      "Também excluir os apontamentos de horas e as referências deste parceiro na Matriz RACI de todos os projetos",
+      async(removerTudo)=>{
         await sbDelete("profiles", c.id);
+        if(removerTudo){
+          // remove apontamentos de horas deste parceiro
+          const horasDoParceiro = DB.data.horas.filter(h=>h.colaboradorId===c.id);
+          for(const h of horasDoParceiro){
+            await sbDelete("horas", h.id);
+          }
+          DB.data.horas = DB.data.horas.filter(h=>h.colaboradorId!==c.id);
+          // remove as referências dele na Matriz RACI, em todos os projetos
+          for(const p of DB.data.projetos){
+            const atividadesComEsseParceiro = Object.keys(p.raci||{}).filter(aid=>p.raci[aid] && p.raci[aid][c.id]);
+            for(const aid of atividadesComEsseParceiro){
+              await sbDeleteWhere("raci", qsEq("atividade_id",aid)+"&"+qsEq("pessoa_id",c.id));
+              delete p.raci[aid][c.id];
+            }
+          }
+          toast("Parceiro removido, junto com horas e referências na RACI.");
+        } else {
+          toast("Parceiro removido. Horas e referências na RACI foram mantidas.");
+        }
+        DB.data.colaboradores=DB.data.colaboradores.filter(x=>x.id!==c.id);
+        render();
       }
-      DB.data.colaboradores=DB.data.colaboradores.filter(x=>x.id!==c.id);
-      toast("Removido."); render();
-    });
+    );
   });
 }
 
@@ -4458,6 +4520,18 @@ function openForm(cfg){
       input=`<select data-k="${f.key}" ${dis} ${f.dynamic?'data-dyn="1"':""}>
         <option value="">${f.placeholder||"Selecione…"}</option>
         ${opts.map(o=>`<option value="${esc(o.value)}" ${String(v)===String(o.value)?"selected":""}>${esc(o.label)}</option>`).join("")}</select>`;
+    }else if(f.type==="checklist"){
+      // multi-seleção via checkboxes (ex.: vincular um parceiro a vários projetos)
+      const opts=(f.dynamic?f.optionsFn(vals):f.options)||[];
+      const selecionados=Array.isArray(v)?v.map(String):[];
+      input=`<div class="checklist" data-k="${f.key}" style="display:flex;flex-direction:column;gap:2px;
+          border:1px solid var(--line);border-radius:8px;padding:8px 10px;max-height:160px;overflow:auto">
+        ${opts.length?opts.map(o=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;
+            font-size:13px;padding:3px 0;cursor:pointer">
+            <input type="checkbox" value="${esc(o.value)}" ${selecionados.includes(String(o.value))?"checked":""}
+              style="width:auto;margin:0"> ${esc(o.label)}
+          </label>`).join(""):`<span style="font-size:12.5px;color:var(--ink-faint)">Nenhum projeto cadastrado ainda.</span>`}
+      </div>`;
     }else if(f.type==="textarea"){
       input=`<textarea data-k="${f.key}" ${dis} placeholder="${esc(f.placeholder||"")}">${esc(v||"")}</textarea>`;
     }else if(f.type==="date" && f.allowIndeterminate){
@@ -4493,6 +4567,11 @@ function openForm(cfg){
     $("#f-grid").querySelectorAll("[data-k]").forEach(el=>{
       if(el.disabled) return; // não sobrescreve valor de campo bloqueado
       const fdef=fields.find(f=>f.key===el.dataset.k);
+      if(fdef && fdef.type==="checklist"){
+        // junta os checkboxes marcados dentro do wrapper num array de valores
+        vals[el.dataset.k]=[...el.querySelectorAll("input[type=checkbox]:checked")].map(c=>c.value);
+        return;
+      }
       // campos de data vazios devem virar null, nunca "" — o Postgres rejeita
       // string vazia em coluna do tipo date com o erro 22007.
       if(fdef && fdef.type==="date" && el.value===""){
@@ -4938,7 +5017,10 @@ function formColab(c){
       ] : [
         {key:"tipo",label:"Tipo de pessoa",type:"select",required:true,
           options:[{value:"parceiro",label:"Parceiro externo (sem remuneração / sem acesso ao app)"}],
-          help:"Para adicionar um colaborador interno (com acesso ao app), peça que ele crie a própria conta na tela de login."}
+          help:"Para adicionar um colaborador interno (com acesso ao app), peça que ele crie a própria conta na tela de login."},
+        {key:"projetosIds",label:"Projeto(s) vinculado(s)",type:"checklist",full:true,
+          dynamic:true, optionsFn:()=>DB.data.projetos.map(pr=>({value:pr.id,label:pr.nome})),
+          help:"Selecione em quais projetos este parceiro participa. Ele só aparecerá na Matriz RACI dos projetos marcados aqui (pode marcar mais de um)."}
       ]),
       {key:"organizacao",label:"Organização / Empresa",placeholder:"Para parceiros: empresa parceira"},
       {key:"cargo",label:"Cargo / Função",placeholder:"Ex.: Analista de Projetos"},
@@ -4949,6 +5031,7 @@ function formColab(c){
     ],
     onSave:async(v)=>{
       v.custoHora=parseFloat(v.custoHora)||0;
+      const projetosIds = ehInterno ? undefined : (Array.isArray(v.projetosIds)?v.projetosIds:[]);
       if(edit){
         Object.assign(c,v);
         if(ehInterno){
@@ -4958,8 +5041,10 @@ function formColab(c){
             custoHora:v.custoHora, email:v.email||null
           }));
         } else {
+          c.projetosIds=projetosIds;
           await sbUpdate("profiles", c.id, toSnake({
-            nome:v.nome, organizacao:v.organizacao, cargo:v.cargo, email:v.email, custoHora:0
+            nome:v.nome, organizacao:v.organizacao, cargo:v.cargo, email:v.email, custoHora:0,
+            projetosIds
           }));
         }
         toast("Atualizado.");
@@ -4969,7 +5054,8 @@ function formColab(c){
         const novoId=uid();
         await sbInsert("profiles", toSnake({
           id:novoId, nome:v.nome, tipoPessoa:"parceiro", papel:"colaborador",
-          organizacao:v.organizacao, cargo:v.cargo, email:v.email||null, custoHora:0
+          organizacao:v.organizacao, cargo:v.cargo, email:v.email||null, custoHora:0,
+          projetosIds
         }));
         toast("Parceiro adicionado.");
       }
