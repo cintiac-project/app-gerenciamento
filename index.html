@@ -460,8 +460,19 @@ async function sbWrite(path, {method="POST", body, prefer="return=representation
   if(!token){
     throw new Error("Sua sessão expirou. Atualize a página e faça login novamente antes de salvar.");
   }
-  const resp = await Promise.race([
-    fetch(SUPABASE_URL+"/rest/v1/"+path, {
+  // IMPORTANTE: usar Promise.race([fetch(...), timeout]) NÃO cancela a
+  // requisição de verdade — só faz o app "desistir de esperar". O fetch
+  // continua rodando em segundo plano e pode terminar de gravar no banco
+  // mesmo depois do timeout aparecer na tela. Isso fazia a pessoa achar que
+  // não salvou, clicar em "Salvar" de novo, e criar uma duplicata REAL (a
+  // tentativa anterior também tinha sido salva). Corrigido com
+  // AbortController (cancela a requisição de verdade) e um prazo maior
+  // (25s em vez de 10s) para reduzir a chance de timeout em conexões lentas.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(()=>controller.abort(), 25000);
+  let resp;
+  try{
+    resp = await fetch(SUPABASE_URL+"/rest/v1/"+path, {
       method,
       headers: {
         "apikey": SUPABASE_PUBLISHABLE_KEY,
@@ -469,10 +480,18 @@ async function sbWrite(path, {method="POST", body, prefer="return=representation
         "Content-Type": "application/json",
         "Prefer": prefer
       },
-      body: body!==undefined ? JSON.stringify(body) : undefined
-    }),
-    new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout 10s (escrita)")),10000))
-  ]);
+      body: body!==undefined ? JSON.stringify(body) : undefined,
+      signal: controller.signal
+    });
+  } catch(err){
+    if(err.name==="AbortError"){
+      throw new Error("Tempo esgotado ao salvar (25s). Verifique sua internet antes de tentar de "+
+        "novo — se a ação anterior já tiver sido salva, tentar de novo pode duplicar o registro.");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
   if(!resp.ok){
     const txt = await resp.text().catch(()=>"");
     if(txt.includes("PGRST204")){
@@ -4772,6 +4791,41 @@ function formHoras(h){
         toast("Apontamento atualizado.");
         await DB.load();
       } else {
+        // Proteção contra duplicata: busca no SERVIDOR (não só no cache
+        // local, que pode estar desatualizado) se já existe um apontamento
+        // idêntico (mesma pessoa+data+atividade+horas). Isso pega justamente
+        // o caso de "salvei, deu timeout na tela, cliquei salvar de novo" —
+        // quando a tentativa anterior na verdade já tinha sido gravada.
+        try{
+          const possiveisDuplicatas = await sbFetch(
+            "horas?select=id&colaborador_id=eq."+encodeURIComponent(v.colaboradorId)+
+            "&data=eq."+encodeURIComponent(v.data)+
+            (atividadeId?("&atividade_id=eq."+encodeURIComponent(atividadeId)):"&atividade_id=is.null")+
+            "&horas=eq."+encodeURIComponent(v.horas)
+          );
+          if(possiveisDuplicatas && possiveisDuplicatas.length){
+            const seguir = await new Promise(res=>{
+              $("#modal-root").innerHTML=`
+              <div class="overlay"><div class="modal" style="max-width:440px">
+                <div class="modal-head"><h3>Apontamento igual já existe</h3></div>
+                <div class="modal-body"><p style="color:var(--ink-soft);font-size:13px">
+                  Já existe um apontamento de ${esc(String(v.horas))}h nesta mesma data e atividade
+                  para este colaborador. Isso pode ser a mesma ação que você já salvou antes (ex.:
+                  após um erro de conexão). Deseja registrar mesmo assim, criando outro apontamento
+                  igual?</p></div>
+                <div class="modal-foot">
+                  <button class="btn ghost" id="dup-no">Cancelar</button>
+                  <button class="btn danger" id="dup-yes">Registrar mesmo assim</button>
+                </div></div></div>`;
+              $("#dup-no").onclick=()=>{ closeModal(); res(false); };
+              $("#dup-yes").onclick=()=>{ closeModal(); res(true); };
+            });
+            if(!seguir){
+              return; // usuário cancelou: não insere nada (o modal já foi fechado)
+            }
+          }
+        }catch(_e){ /* se a verificação falhar, segue com o salvamento normal */ }
+
         // criação: insere diretamente, sempre vinculado ao colaborador
         // SELECIONADO NO FORMULÁRIO (v.colaboradorId) — não ao usuário
         // autenticado. Isso corrige o caso em que o gestor aponta horas em
