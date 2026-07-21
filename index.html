@@ -1883,6 +1883,7 @@ function projCronograma(c,p){
   </div>`:`<div class="card"><div class="empty"><span class="ic">◷</span>
     <h3>Sem atividades</h3><p>${podeEditar?"Cadastre as atividades para montar o cronograma físico.":"Nenhuma atividade cadastrada ainda."}</p>
     ${podeEditar?'<button class="btn" id="add-ativ2">+ Nova atividade</button>':""}</div></div>`}`;
+  if(ats.length) ajustarMesesGantt(c);
 
   if(!podeEditar) return;
   const open=()=>formAtividade(p.id);
@@ -1939,7 +1940,7 @@ function ganttHtml(p,ats){
       bar=`<div class="gantt-bar" style="left:${left}%;width:${w}%" title="${esc(tituloBar)}">
         <div style="width:${+a.progresso||0}%"></div></div>`;
     }
-    rows+=`<div class="gantt-row"><div class="gantt-name">${esc(a.nome)}</div>
+    rows+=`<div class="gantt-row"><div class="gantt-name" title="${esc(a.nome)}">${esc(a.nome)}</div>
       <div class="gantt-track">${bar}</div></div>`;
   });
   // cabeçalho com os meses cobertos pela linha do tempo, cada um posicionado
@@ -1955,16 +1956,43 @@ function ganttHtml(p,ats){
     const prox=new Date(y,m,1); // dia 1 do mês seguinte
     cursor=prox.getFullYear()+"-"+pad(prox.getMonth()+1)+"-01";
   }
-  const mesesHtml=meses.map((mm,i)=>`<div style="position:absolute;left:${mm.pct}%;top:0;
+  // cada rótulo leva a classe "gantt-month" e um separador (exceto o 1º);
+  // a sobreposição real de texto é corrigida depois via JS (ajustarMesesGantt),
+  // que mede a largura renderizada e esconde os rótulos que colidiriam —
+  // posicionar só por % não é suficiente porque a largura do texto é fixa
+  // em pixels e o espaço entre meses vizinhos pode ser bem menor que isso.
+  const mesesHtml=meses.map((mm,i)=>`<div class="gantt-month" style="position:absolute;left:${mm.pct}%;top:0;
       font-size:10.5px;color:var(--ink-faint);white-space:nowrap;border-left:1px solid var(--line-soft);
       padding-left:4px;${i===0?"border-left:none;padding-left:0":""}">${esc(mm.label)}</div>`).join("");
   return `<div style="min-width:560px">
     <div style="display:flex;font-size:11px;color:var(--ink-faint);padding:0 0 4px">
       <div style="width:200px;flex-shrink:0"></div>
-      <div style="flex:1;position:relative;height:16px">${mesesHtml}</div></div>
+      <div class="gantt-months" style="flex:1;position:relative;height:16px">${mesesHtml}</div></div>
     <div style="position:relative">
       <div class="gantt-today" style="left:calc(200px + ${todayPct}% * (100% - 200px)/100)" title="Hoje: ${esc(fmtDate(today))}"></div>
       ${rows}</div></div>`;
+}
+/* esconde rótulos de mês que colidiriam visualmente com o anterior (o
+   posicionamento é feito em %, então em linhas do tempo longas dois meses
+   vizinhos podem cair muito próximos e o texto de um cobre o do outro).
+   Mede as posições já renderizadas no DOM e vai escondendo, da esquerda
+   para a direita, qualquer rótulo cuja borda esquerda invada o rótulo
+   anterior ainda visível (com uma margem mínima de 6px). */
+function ajustarMesesGantt(container){
+  const grupos=container.querySelectorAll(".gantt-months");
+  grupos.forEach(grupo=>{
+    const labels=[...grupo.querySelectorAll(".gantt-month")];
+    let ultimoDireita=null;
+    labels.forEach((el,i)=>{
+      el.style.display="";
+      const rect=el.getBoundingClientRect();
+      if(i>0 && ultimoDireita!==null && rect.left < ultimoDireita+6){
+        el.style.display="none";
+        return;
+      }
+      ultimoDireita=rect.right;
+    });
+  });
 }
 
 /* ---- OCUPAÇÃO DA EQUIPE (calendário de alocação, gestor) ---- */
