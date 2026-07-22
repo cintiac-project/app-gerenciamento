@@ -4954,7 +4954,7 @@ function formHoras(h){
   // selecionado + "Outros" (para digitar manualmente uma atividade nova)
   function opcoesAtividade(vals){
     const ats=DB.data.atividades.filter(a=>a.projetoId===vals.projetoId && a.status!=="Cancelada")
-      .sort((a,b)=>(a.dataInicioPrev||"").localeCompare(b.dataInicioPrev||"")||a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"}));
+      .sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"}));
     const opts=ats.map(a=>({value:a.id, label:a.nome}));
     opts.push({value:ATIV_OUTROS, label:"➕ Outros (digitar manualmente)"});
     return opts;
