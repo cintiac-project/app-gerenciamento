@@ -262,6 +262,11 @@
   .raci-A{background:#dbeede;color:#2f8f4e}
   .raci-C{background:#e2ecf8;color:#2563a8}
   .raci-I{background:#f3ead7;color:#b8852a}
+  .raci-select{width:100%;height:34px;border:none;background:transparent;color:inherit;
+    font-weight:700;font-size:13px;text-align:center;text-align-last:center;cursor:pointer;
+    -webkit-appearance:none;appearance:none;padding:0}
+  .raci-select:disabled{cursor:default;opacity:.85;-webkit-text-fill-color:currentColor;color:inherit}
+  .raci-select:focus{outline:2px solid var(--accent);outline-offset:-2px}
 
   .mini-stat{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line-soft);font-size:13px}
   .mini-stat:last-child{border-bottom:none}
@@ -2413,12 +2418,16 @@ function projRaci(c,p){
     let tds=`<td style="font-weight:600;font-size:12.5px">${esc(a.nome)}</td>`;
     colabs.forEach(co=>{
       const val=(p.raci[a.id]&&p.raci[a.id][co.id])||"";
-      tds+=`<td class="raci-cell ${val?"raci-"+val:""}" data-ra="${a.id}" data-rc="${co.id}">${val}</td>`;
+      const opcoesSelect=["","R","A","C","I"].map(o=>
+        `<option value="${o}" ${o===val?"selected":""}>${o||"—"}</option>`).join("");
+      tds+=`<td class="raci-cell ${val?"raci-"+val:""}" style="padding:0">
+        <select class="raci-select" data-ra="${a.id}" data-rc="${co.id}" ${isGestor()?"":"disabled"}>${opcoesSelect}</select>
+      </td>`;
     });
     body+=`<tr>${tds}</tr>`;
   });
   c.innerHTML=`
-  <div class="help-banner"><span>ℹ️</span><span>${isGestor()?"Clique numa célula para alternar o papel: <b>R</b> Responsável (executa) → <b>A</b> Autoridade (aprova) → <b>C</b> Consultado → <b>I</b> Informado → vazio.":"Visualização da matriz RACI deste projeto."} Parceiros externos aparecem destacados.</span></div>
+  <div class="help-banner"><span>ℹ️</span><span>${isGestor()?"Escolha o papel na lista suspensa de cada célula: <b>R</b> Responsável (executa), <b>A</b> Autoridade (aprova), <b>C</b> Consultado, <b>I</b> Informado, ou deixe em branco.":"Visualização da matriz RACI deste projeto."} Parceiros externos aparecem destacados.</span></div>
   <div class="card table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
   <div class="legend" style="margin-top:14px">
     <div class="it"><span class="sw raci-R" style="border-radius:3px"></span>R — Responsável</div>
@@ -2426,15 +2435,14 @@ function projRaci(c,p){
     <div class="it"><span class="sw raci-C" style="border-radius:3px"></span>C — Consultado</div>
     <div class="it"><span class="sw raci-I" style="border-radius:3px"></span>I — Informado</div>
   </div>`;
-  const cycle={"":"R","R":"A","A":"C","C":"I","I":""};
   if(!isGestor()) return; // colaboradores visualizam a matriz, mas não editam
-  c.querySelectorAll("[data-ra]").forEach(cell=>{
-    cell.onclick=async()=>{
-      const aid=cell.dataset.ra, cid=cell.dataset.rc;
+  c.querySelectorAll(".raci-select").forEach(sel=>{
+    sel.onchange=async()=>{
+      const aid=sel.dataset.ra, cid=sel.dataset.rc;
+      const novoVal=sel.value;
       p.raci[aid]=p.raci[aid]||{};
-      const next=cycle[p.raci[aid][cid]||""];
-      if(next) p.raci[aid][cid]=next; else delete p.raci[aid][cid];
-      await DB.salvarRaciCelula(p.id, aid, cid, next);
+      if(novoVal) p.raci[aid][cid]=novoVal; else delete p.raci[aid][cid];
+      await DB.salvarRaciCelula(p.id, aid, cid, novoVal);
       projRaci(c,p);
     };
   });
@@ -4660,7 +4668,10 @@ function openForm(cfg){
       // fora do fluxo genérico de collect()/refreshDynamic().
       input=`<div data-k="${f.key}" style="border:1px solid var(--line);border-radius:8px;padding:10px 12px">
         <div class="estim-rows"></div>
-        <button type="button" class="btn ghost sm estim-add" style="margin-top:8px">+ Adicionar pessoa</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+          <button type="button" class="btn ghost sm estim-add">+ Adicionar pessoa</button>
+          ${f.prefillButton?`<button type="button" class="btn ghost sm estim-prefill">${esc(f.prefillButton.label)}</button>`:""}
+        </div>
       </div>`;
     }else if(f.type==="textarea"){
       input=`<textarea data-k="${f.key}" ${dis} placeholder="${esc(f.placeholder||"")}">${esc(v||"")}</textarea>`;
@@ -4730,6 +4741,17 @@ function openForm(cfg){
     const el=container();
     if(el){
       el.querySelector(".estim-add").onclick=()=>{ vals[f.key].push({colaboradorId:"",horas:""}); renderRows(); };
+      const btnPrefill=el.querySelector(".estim-prefill");
+      if(btnPrefill && f.prefillButton){
+        btnPrefill.onclick=()=>{
+          const idsExistentes=new Set(vals[f.key].map(x=>x.colaboradorId).filter(Boolean));
+          const novosIds=(f.prefillButton.getIds(vals)||[]).filter(id=>id && !idsExistentes.has(id));
+          if(!novosIds.length){ toast(f.prefillButton.msgVazio||"Nada novo para adicionar."); return; }
+          novosIds.forEach(id=>vals[f.key].push({colaboradorId:id, horas:""}));
+          renderRows();
+          toast(`${novosIds.length} pessoa(s) adicionada(s). Falta só informar as horas de cada uma.`);
+        };
+      }
       renderRows();
     }
   }
@@ -4893,7 +4915,16 @@ function formAtividade(projetoId,a){
         type:"estimativas",full:true,dynamic:true,
         optionsFn:()=>[...getInternos(),...getParceirosDoProjeto(getProjeto(projetoId))]
           .map(co=>({value:co.id,label:co.nome+(co.tipo==="parceiro"?" (parceiro)":"")})),
-        help:"Escolha cada colaborador (interno ou parceiro vinculado a este projeto) e a quantidade de horas previstas para ele nesta atividade. Usado para calcular a ocupação da equipe no calendário, distribuída ao longo dos dias úteis entre início e término previstos."}
+        help:"Escolha cada colaborador (interno ou parceiro vinculado a este projeto) e a quantidade de horas previstas para ele nesta atividade. Usado para calcular a ocupação da equipe no calendário, distribuída ao longo dos dias úteis entre início e término previstos.",
+        prefillButton: a ? {
+          label:"↺ Puxar quem está em \"R\" na RACI",
+          msgVazio:"Ninguém novo marcado como \"R\" na RACI desta atividade (ou já foram todos adicionados aqui).",
+          getIds:()=>{
+            const proj=getProjeto(projetoId);
+            const raciAtiv=(proj&&proj.raci&&proj.raci[a.id])||{};
+            return Object.entries(raciAtiv).filter(([,papel])=>papel==="R").map(([pid])=>pid);
+          }
+        } : null}
     ],
     onFieldChange:(vv,key,gridEl)=>{
       if(key==="status" && vv.status==="Concluída"){
