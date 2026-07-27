@@ -3274,9 +3274,25 @@ function viewOcupacaoEquipe(v){
   const resumo = resumoOcupacaoPessoaMes(pessoa.id, ST.ocupEqMes, mapa);
   const pctOcupado = resumo.capacidadeTotalMes>0 ? Math.round((resumo.horasTotalMes/resumo.capacidadeTotalMes)*100) : 0;
 
-  const projData = Object.keys(resumo.porProjeto).map((pid,i)=>({
-    label: resumo.porProjeto[pid].nome, value: resumo.porProjeto[pid].horas, color: PALETTE[i%PALETTE.length]
-  })).sort((a,b)=>b.value-a.value);
+  // horas realmente apontadas no mês selecionado, por projeto — para comparar
+  // "previsto x executado" no card "Horas por projeto no mês"
+  const execPorProjetoMes={};
+  DB.data.horas.forEach(h=>{
+    if(h.colaboradorId!==pessoa.id) return;
+    if(!h.data || h.data.slice(0,7)!==ST.ocupEqMes) return;
+    const pid=h.projetoId||"sem-projeto";
+    execPorProjetoMes[pid]=(execPorProjetoMes[pid]||0)+(+h.horas||0);
+  });
+  const idsProjMes=new Set([...Object.keys(resumo.porProjeto), ...Object.keys(execPorProjetoMes)]);
+  const projCompData=[...idsProjMes].map((pid,i)=>({
+    pid,
+    label: resumo.porProjeto[pid]?.nome || (pid==="sem-projeto"?"Sem projeto vinculado":nomeProjeto(pid)),
+    previsto: resumo.porProjeto[pid]?.horas||0,
+    executado: execPorProjetoMes[pid]||0,
+    color: PALETTE[i%PALETTE.length]
+  })).sort((a,b)=>Math.max(b.previsto,b.executado)-Math.max(a.previsto,a.executado));
+  const totalPrevistoMes=projCompData.reduce((s,d)=>s+d.previsto,0);
+  const totalExecutadoMes=projCompData.reduce((s,d)=>s+d.executado,0);
 
   const hojeStr = todayStr();
   const hojeDow = new Date(hojeStr+"T00:00:00").getDay();
@@ -3335,20 +3351,33 @@ function viewOcupacaoEquipe(v){
           <div style="font-weight:700;color:var(--ink-faint)">Total apontado hoje</div>
           <div style="font-weight:700">${fmtH(totalExecutadoHoje)}</div></div>`:""}`;
 
-  const projBreakdownHtml = projData.length
-    ? `<div class="grid" style="grid-template-columns:1fr 1fr;gap:18px;align-items:center">
-        ${donutChart(projData)}
-        <div>${projData.map(d=>{
-          const pct = resumo.capacidadeTotalMes>0 ? Math.round((d.value/resumo.capacidadeTotalMes)*100) : 0;
-          return `<div style="margin-bottom:9px">
-            <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:3px">
-              <span style="font-weight:600"><span class="sw" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${d.color};margin-right:5px"></span>${esc(d.label)}</span>
-              <span>${fmtH(d.value)}</span></div>
-            <div style="background:var(--line-soft);border-radius:5px;height:6px;overflow:hidden">
-              <div style="background:${d.color};width:${Math.min(100,pct)}%;height:100%"></div></div>
-          </div>`;
-        }).join("")}</div>
-      </div>`
+  const projBreakdownHtml = projCompData.length
+    ? `<div style="display:flex;gap:16px;font-size:12.5px;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--line-soft)">
+        <div style="display:flex;align-items:center;gap:6px"><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--accent)"></span>
+          Previsto: <b>${fmtH(totalPrevistoMes)}</b></div>
+        <div style="display:flex;align-items:center;gap:6px"><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--ok)"></span>
+          Executado: <b>${fmtH(totalExecutadoMes)}</b></div>
+      </div>
+      <div>${projCompData.map(d=>{
+        const pctPrev = resumo.capacidadeTotalMes>0 ? Math.min(100,Math.round((d.previsto/resumo.capacidadeTotalMes)*100)) : 0;
+        const pctExec = resumo.capacidadeTotalMes>0 ? Math.min(100,Math.round((d.executado/resumo.capacidadeTotalMes)*100)) : 0;
+        const bateu = d.previsto>0 && d.executado>=d.previsto;
+        return `<div style="margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px">
+            <span style="font-weight:600">${esc(d.label)}</span>
+            <span style="color:${bateu?"var(--ok)":"var(--ink-faint)"}">Previsto ${fmtH(d.previsto)} · Executado ${fmtH(d.executado)}</span></div>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+            <span style="font-size:10px;color:var(--ink-faint);width:56px">Previsto</span>
+            <div style="flex:1;background:var(--line-soft);border-radius:5px;height:6px;overflow:hidden">
+              <div style="background:var(--accent);width:${pctPrev}%;height:100%"></div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="font-size:10px;color:var(--ink-faint);width:56px">Executado</span>
+            <div style="flex:1;background:var(--line-soft);border-radius:5px;height:6px;overflow:hidden">
+              <div style="background:${bateu?"var(--ok)":"var(--warn)"};width:${pctExec}%;height:100%"></div></div>
+          </div>
+        </div>`;
+      }).join("")}</div>`
     : `<div class="empty" style="padding:20px"><span class="ic">▱</span><p>Sem horas alocadas em nenhum projeto neste mês.</p></div>`;
 
   const calendarHtml = calendarioOcupacaoHtml(pessoa, ST.ocupEqMes, mapa);
@@ -3382,7 +3411,7 @@ function viewOcupacaoEquipe(v){
 
   <div class="grid" style="grid-template-columns:1.4fr 1fr;gap:18px;align-items:start;margin-bottom:20px">
     <div class="card">
-      <div class="card-head"><h3>Horas por projeto no mês</h3></div>
+      <div class="card-head"><h3>Horas por projeto no mês</h3><span class="hint">Previsto × Executado</span></div>
       <div class="card-pad">${projBreakdownHtml}</div>
     </div>
     <div class="card">
