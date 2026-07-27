@@ -3283,16 +3283,57 @@ function viewOcupacaoEquipe(v){
   const detalheHoje = (hojeDow!==0 && hojeDow!==6) ? detalheOcupacaoDia(pessoa.id, hojeStr) : [];
   const totalHoje = detalheHoje.reduce((s,d)=>s+d.horas,0);
   const livreHoje = Math.max(0, CAPACIDADE_DIARIA_PADRAO-totalHoje);
+
+  // horas realmente apontadas hoje por esta pessoa, agrupadas por atividade
+  // (chave "sem-atividade" para apontamentos sem atividade vinculada)
+  const apontadasHojeMap={};
+  DB.data.horas.forEach(h=>{
+    if(h.colaboradorId!==pessoa.id || h.data!==hojeStr) return;
+    const key=h.atividadeId||("sem-atividade:"+(h.projetoId||""));
+    apontadasHojeMap[key]=(apontadasHojeMap[key]||0)+(+h.horas||0);
+  });
+  // combina previsto (detalheHoje) com executado — mantém atividades previstas
+  // mesmo sem apontamento (executado=0), e acrescenta apontamentos avulsos que
+  // não tinham previsão para hoje (previsto=0)
+  const usadosMap=new Set();
+  const linhasHoje = detalheHoje.map(d=>{
+    usadosMap.add(d.atividadeId);
+    return {projetoNome:d.projetoNome, atividadeNome:d.atividadeNome, previstas:d.horas, executadas:apontadasHojeMap[d.atividadeId]||0};
+  });
+  Object.keys(apontadasHojeMap).forEach(key=>{
+    if(usadosMap.has(key)) return;
+    if(key.startsWith("sem-atividade:")){
+      const pid=key.split(":")[1];
+      linhasHoje.push({projetoNome:pid?nomeProjeto(pid):"—", atividadeNome:"Apontamento sem atividade vinculada", previstas:0, executadas:apontadasHojeMap[key]});
+    } else {
+      const a=getAtividade(key);
+      linhasHoje.push({projetoNome:a?nomeProjeto(a.projetoId):"—", atividadeNome:a?a.nome:"—", previstas:0, executadas:apontadasHojeMap[key]});
+    }
+  });
+  const totalExecutadoHoje = linhasHoje.reduce((s,d)=>s+d.executadas,0);
+
   const hojeHtml = (hojeDow===0||hojeDow===6)
     ? `<p style="color:var(--ink-faint);font-size:12.5px">Hoje é fim de semana — sem apontamento previsto.</p>`
-    : (detalheHoje.length
-        ? detalheHoje.map(d=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line-soft);font-size:12.5px">
-            <div><div style="font-weight:600">${esc(d.projetoNome)}</div><div style="color:var(--ink-faint)">${esc(d.atividadeNome)}</div></div>
-            <div style="font-weight:700">${fmtH(d.horas)}</div></div>`).join("")
+    : (linhasHoje.length
+        ? `<div style="display:flex;font-size:11px;color:var(--ink-faint);font-weight:600;padding:0 0 6px;border-bottom:1px solid var(--line-soft)">
+            <div style="flex:1">Projeto / Atividade</div>
+            <div style="width:70px;text-align:right">Previsto</div>
+            <div style="width:70px;text-align:right">Executado</div></div>`
+          +linhasHoje.map(d=>{
+            const bateu = d.previstas>0 && d.executadas>=d.previstas;
+            const col = d.previstas<=0 ? "var(--ink)" : (bateu ? "var(--ok)" : (d.executadas>0 ? "var(--warn)" : "var(--ink-faint)"));
+            return `<div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid var(--line-soft);font-size:12.5px">
+              <div style="flex:1"><div style="font-weight:600">${esc(d.projetoNome)}</div><div style="color:var(--ink-faint)">${esc(d.atividadeNome)}</div></div>
+              <div style="width:70px;text-align:right;font-weight:700">${d.previstas>0?fmtH(d.previstas):"—"}</div>
+              <div style="width:70px;text-align:right;font-weight:700;color:${col}">${fmtH(d.executadas)}</div></div>`;
+          }).join("")
         : `<p style="color:var(--ink-faint);font-size:12.5px">Nenhuma alocação prevista para hoje.</p>`)
       +`<div style="display:flex;justify-content:space-between;padding:8px 0 0;font-size:12.5px">
           <div style="font-weight:700;color:${livreHoje>0?"var(--ok)":"var(--ink-faint)"}">Horas livres hoje</div>
-          <div style="font-weight:700;color:${livreHoje>0?"var(--ok)":"var(--ink-faint)"}">${fmtH(livreHoje)}</div></div>`;
+          <div style="font-weight:700;color:${livreHoje>0?"var(--ok)":"var(--ink-faint)"}">${fmtH(livreHoje)}</div></div>
+      ${!(hojeDow===0||hojeDow===6)?`<div style="display:flex;justify-content:space-between;padding:4px 0 0;font-size:12.5px">
+          <div style="font-weight:700;color:var(--ink-faint)">Total apontado hoje</div>
+          <div style="font-weight:700">${fmtH(totalExecutadoHoje)}</div></div>`:""}`;
 
   const projBreakdownHtml = projData.length
     ? `<div class="grid" style="grid-template-columns:1fr 1fr;gap:18px;align-items:center">
