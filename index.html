@@ -281,6 +281,19 @@
   .pill-toggle{display:inline-flex;background:var(--line-soft);border-radius:8px;padding:3px}
   .pill-toggle button{padding:6px 13px;border-radius:6px;font-size:12.5px;font-weight:600;color:var(--ink-soft)}
   .pill-toggle button.on{background:var(--surface);color:var(--accent);box-shadow:var(--shadow)}
+
+  /* filtro de status (multi-seleção, tipo chips) */
+  .status-filter{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .status-chip{
+    padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;
+    border:1px solid var(--line);background:var(--surface);color:var(--ink-faint);
+    transition:.12s;display:inline-flex;align-items:center;gap:6px;
+  }
+  .status-chip:hover{border-color:var(--accent);color:var(--ink)}
+  .status-chip .ck{width:13px;height:13px;border-radius:4px;border:1.5px solid currentColor;
+    display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex-shrink:0}
+  .status-chip.on{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+  .status-chip.on .ck{background:var(--accent);color:#fff;border-color:var(--accent)}
   .help-banner{background:var(--info-bg);border:1px solid #c8ddf0;border-radius:9px;padding:12px 15px;
     font-size:12.5px;color:#1d4e7d;display:flex;gap:9px;margin-bottom:18px}
 
@@ -937,7 +950,14 @@ function calcularAlertas(){
   DB.data.atividades.forEach(a=>{
     if(!a.dataFimPrev || a.status==="Concluída" || a.status==="Cancelada" || (+a.progresso||0)>=100) return;
     const d=daysBetween(hoje,a.dataFimPrev);
-    const resp=responsaveisRaci(getProjeto(a.projetoId),a.id).join(", ");
+    // fonte principal de atribuição: estimativasPessoas (o jeito real de alocar
+    // gente numa atividade hoje). RACI "R" só como fallback, caso a atividade
+    // não tenha estimativas de horas por pessoa preenchidas.
+    const proj=getProjeto(a.projetoId);
+    const idsAlocados=pessoasAlocadasAtividade(a);
+    const resp=idsAlocados.length
+      ? idsAlocados.map(nomeColab).join(", ")
+      : responsaveisRaci(proj,a.id).join(", ");
     if(d<0) out.push({tipo:"fisico",sev:"danger",dias:d,
       titulo:`Atividade atrasada: ${a.nome}`,
       desc:`${nomeProjeto(a.projetoId)} · venceu há ${Math.abs(d)} dia(s) · ${a.progresso||0}% concluído`,
@@ -1220,7 +1240,10 @@ const ST = {
   projTab:"resumo",
   dashYear:String(new Date().getFullYear()),
   dashMode:"mensal",
-  search:{}
+  search:{},
+  // status visíveis no cronograma físico de cada projeto — "Concluída" some
+  // da lista por padrão e só volta a aparecer quando marcada no filtro
+  cronoStatusVisiveis:new Set(["Não iniciada","Em andamento","Atrasada","Cancelada"])
 };
 
 const NAV=[
@@ -1370,7 +1393,12 @@ function viewPainel(v){
   /* série temporal por categoria (para as barras empilhadas) */
   const serieCat=serieHorasPorCategoria();
 
-  const alertasHtml=alertas.length? alertas.slice(0,7).map(a=>{
+  // Antes havia um corte fixo em "alertas.slice(0,7)" que escondia qualquer
+  // alerta além do 7º — o "7" era do rótulo "próximos 7 dias" (janela de
+  // tempo), não deveria limitar a QUANTIDADE de itens exibidos. Removido:
+  // agora mostra todos os alertas encontrados, com rolagem interna quando
+  // a lista fica longa, para não estourar o layout da página.
+  const alertasHtml=alertas.length? alertas.map(a=>{
     const col=a.sev==="danger"?"var(--danger)":"var(--warn)";
     const respHtml=a.responsavel
       ? `<div class="alert-resp"><span class="rl">Responsável:</span> <b>${esc(a.responsavel)}</b></div>`
@@ -1388,9 +1416,9 @@ function viewPainel(v){
   <div class="card" style="margin-bottom:18px">
     <div class="card-head">
       <h3>⚠ Alertas de prazos — físicos e financeiros</h3>
-      <span class="hint">Próximos 7 dias e itens vencidos</span>
+      <span class="hint">${alertas.length} alerta(s) · próximos 7 dias e itens vencidos</span>
     </div>
-    <div class="card-pad">${alertasHtml}</div>
+    <div class="card-pad" style="${alertas.length>7?"max-height:520px;overflow-y:auto":""}">${alertasHtml}</div>
   </div>
 
   <div class="toolbar">
@@ -1842,8 +1870,31 @@ function responsaveisRaci(p,atividadeId){
 }
 function projCronograma(c,p){
   const podeEditar=isGestor();
-  const ats=DB.data.atividades.filter(a=>a.projetoId===p.id)
+  const todasAts=DB.data.atividades.filter(a=>a.projetoId===p.id)
     .sort((a,b)=>(a.dataInicioPrev||"").localeCompare(b.dataInicioPrev||""));
+  // status "efetivo" de cada atividade para fins de filtro — usa o mesmo
+  // critério do badge exibido na tabela: se está atrasada, conta como
+  // "Atrasada" mesmo que o campo status guardado ainda diga outra coisa.
+  const statusEfetivo=(a)=>{
+    const prog=+a.progresso||0;
+    const atrasada=a.status!=="Cancelada" && a.dataFimPrev && daysBetween(todayStr(),a.dataFimPrev)<0 && prog<100;
+    return atrasada ? "Atrasada" : (a.status||"Não iniciada");
+  };
+  const ats=todasAts.filter(a=>ST.cronoStatusVisiveis.has(statusEfetivo(a)));
+  const ocultas=todasAts.length-ats.length;
+  const filtroHtml=`
+  <div class="toolbar" style="margin-bottom:12px">
+    <span class="field-inline" style="font-weight:600;color:var(--ink)">Status:</span>
+    <div class="status-filter" id="crono-status-filter">
+      ${STATUS_ATIV.map(s=>{
+        const on=ST.cronoStatusVisiveis.has(s);
+        return `<button class="status-chip ${on?"on":""}" data-st="${esc(s)}">
+          <span class="ck">${on?"✓":""}</span>${esc(s)}</button>`;
+      }).join("")}
+    </div>
+    <div class="spacer"></div>
+    ${ocultas>0?`<span class="hint">${ocultas} atividade(s) oculta(s) pelo filtro</span>`:""}
+  </div>`;
   const rows=ats.map(a=>{
     const prog=+a.progresso||0;
     const atrasada=a.status!=="Cancelada" && a.dataFimPrev && daysBetween(todayStr(),a.dataFimPrev)<0 && prog<100;
@@ -1876,6 +1927,7 @@ function projCronograma(c,p){
     <input type="file" id="csv-file-crono" accept=".csv" style="display:none">
     `:""}
   </div>
+  ${todasAts.length?filtroHtml:""}
   ${ats.length?`
   <div class="card" style="margin-bottom:18px">
     <div class="card-head"><h3>Linha do tempo</h3><span class="hint">Linha vermelha = hoje</span></div>
@@ -1885,10 +1937,23 @@ function projCronograma(c,p){
     <table><thead><tr><th>Atividade</th><th>Prazo previsto</th><th>Situação</th>
       <th style="min-width:150px">Progresso</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table>
-  </div>`:`<div class="card"><div class="empty"><span class="ic">◷</span>
+  </div>`:todasAts.length?`<div class="card"><div class="empty"><span class="ic">◷</span>
+    <h3>Nenhuma atividade com esse filtro</h3><p>${ocultas} atividade(s) está(ão) oculta(s) pelo filtro de status acima. Marque outro status para visualizá-las.</p>
+    </div></div>`:`<div class="card"><div class="empty"><span class="ic">◷</span>
     <h3>Sem atividades</h3><p>${podeEditar?"Cadastre as atividades para montar o cronograma físico.":"Nenhuma atividade cadastrada ainda."}</p>
     ${podeEditar?'<button class="btn" id="add-ativ2">+ Nova atividade</button>':""}</div></div>`}`;
   if(ats.length) ajustarMesesGantt(c);
+
+  if(todasAts.length){
+    c.querySelectorAll("#crono-status-filter [data-st]").forEach(b=>{
+      b.onclick=()=>{
+        const s=b.dataset.st;
+        if(ST.cronoStatusVisiveis.has(s)) ST.cronoStatusVisiveis.delete(s);
+        else ST.cronoStatusVisiveis.add(s);
+        render();
+      };
+    });
+  }
 
   if(!podeEditar) return;
   const open=()=>formAtividade(p.id);
