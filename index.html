@@ -954,10 +954,7 @@ function calcularAlertas(){
     // gente numa atividade hoje). RACI "R" só como fallback, caso a atividade
     // não tenha estimativas de horas por pessoa preenchidas.
     const proj=getProjeto(a.projetoId);
-    const idsAlocados=pessoasAlocadasAtividade(a);
-    const resp=idsAlocados.length
-      ? idsAlocados.map(nomeColab).join(", ")
-      : responsaveisRaci(proj,a.id).join(", ");
+    const resp=nomesResponsaveisAtividade(a,proj).join(", ");
     if(d<0) out.push({tipo:"fisico",sev:"danger",dias:d,
       titulo:`Atividade atrasada: ${a.nome}`,
       desc:`${nomeProjeto(a.projetoId)} · venceu há ${Math.abs(d)} dia(s) · ${a.progresso||0}% concluído`,
@@ -1027,6 +1024,27 @@ function pessoasAlocadasAtividade(a){
   const ids=new Set();
   (a.estimativasPessoas||[]).forEach(e=>{ if(e.colaboradorId) ids.add(e.colaboradorId); });
   return [...ids];
+}
+/* IDs de quem está marcado como "R" (Responsável) na Matriz RACI de uma atividade */
+function responsaveisRaciIds(proj,atividadeId){
+  if(!proj || !proj.raci) return [];
+  const raci=proj.raci[atividadeId]||{};
+  return Object.entries(raci).filter(([,papel])=>papel==="R").map(([pessoaId])=>pessoaId);
+}
+/* responsável(is) de uma atividade: usa o campo direto "responsaveisIds" (usado em
+   sessões sem Matriz RACI, como Rotinas — preenchido automaticamente a partir do
+   Apontamento de Horas e/ou editável na própria atividade), com fallback para as
+   pessoas alocadas por estimativa de horas e, por fim, para quem está marcado
+   como "R" na Matriz RACI (quando a sessão tiver essa aba). */
+function responsaveisIdsAtividade(a,proj){
+  if(Array.isArray(a.responsaveisIds) && a.responsaveisIds.length) return a.responsaveisIds.slice();
+  const alocados=pessoasAlocadasAtividade(a);
+  if(alocados.length) return alocados;
+  return responsaveisRaciIds(proj,a.id);
+}
+/* nomes dos responsáveis de uma atividade, prontos para exibição */
+function nomesResponsaveisAtividade(a,proj){
+  return responsaveisIdsAtividade(a,proj).map(nomeColab);
 }
 /* horas previstas de UMA pessoa específica numa atividade (0 se não estiver na lista) */
 function horasPrevistasDaPessoa(a,colaboradorId){
@@ -1887,7 +1905,7 @@ function projResumo(c,p){
       <div class="val">${prog}%</div><div class="sub">${concl}/${ats.length} atividades concluídas</div></div>
   </div>
   <div style="height:18px"></div>`}
-  <div class="grid g2">
+  <div class="grid ${cfgAtual.abasOcultas&&cfgAtual.abasOcultas.includes("financeiro")?"":"g2"}">
     <div class="card">
       <div class="card-head"><h3>Informações do projeto</h3>
         ${isGestor()?'<button class="btn ghost sm" id="edit-p">✎ Editar</button>':""}</div>
@@ -1904,10 +1922,11 @@ function projResumo(c,p){
         ${p.descricao?`<div style="margin-top:12px;font-size:12.5px;color:var(--ink-soft);line-height:1.6">${esc(p.descricao)}</div>`:""}
       </div>
     </div>
+    ${(cfgAtual.abasOcultas&&cfgAtual.abasOcultas.includes("financeiro"))?"":`
     <div class="card">
       <div class="card-head"><h3>Despesas por rubrica</h3></div>
       <div class="card-pad">${donutChart(rubData)}</div>
-    </div>
+    </div>`}
   </div>
   <div style="height:18px"></div>
   <div class="card">
@@ -2065,7 +2084,7 @@ function projCronograma(c,p){
     const horasAtiv=DB.data.horas.filter(h=>h.atividadeId===a.id).reduce((s,h)=>s+(+h.horas||0),0);
     const dIni=a.dataInicioPrev?fmtDate(a.dataInicioPrev):"Indeterminada";
     const dFim=a.dataFimPrev?fmtDate(a.dataFimPrev):"Indeterminada";
-    const responsaveis = responsaveisRaci(p,a.id);
+    const responsaveis = nomesResponsaveisAtividade(a,p);
     return `<tr>
       <td><div style="font-weight:600">${esc(a.nome)}</div>
         <div style="font-size:11px;color:var(--ink-faint)">${esc(nomeCategoria(a.categoriaId))} · Resp.: ${responsaveis.join(", ")||"—"}${horasAtiv?` · ${horasAtiv}h apontadas`:""}${totalHorasPrevistasAtividade(a)>0?` · ${fmtNum(totalHorasPrevistasAtividade(a),1)}h previstas (${pessoasAlocadasAtividade(a).length} pessoa(s))`:""}</div></td>
@@ -4052,7 +4071,7 @@ function viewConfig(v){
   $("#btn-sync-horas").onclick=()=>{
     confirmar(
       "Sincronizar dados do Apontamento de Horas?",
-      "Isso vai completar campos vazios do cronograma (início previsto, situação) e adicionar stakeholders com base nas horas já registradas. Campos já preenchidos não serão alterados. O Responsável da atividade agora é derivado da Matriz RACI, portanto esta sincronização não o preenche mais.",
+      "Isso vai completar campos vazios do cronograma (início previsto, situação) e adicionar stakeholders com base nas horas já registradas. Campos já preenchidos não serão alterados. Em sessões com Matriz RACI, o Responsável continua vindo de lá. Em sessões sem RACI (ex.: Rotinas), o campo Responsável(is) da atividade será completado com quem já apontou horas nela.",
       async()=>{
         const btn=$("#btn-sync-horas");
         btn.disabled=true; btn.textContent="Sincronizando...";
@@ -4070,12 +4089,19 @@ function viewConfig(v){
 
 /* ---- SINCRONIZAÇÃO: extrai dados do Apontamento de Horas para o
    cronograma (atividades) e para os stakeholders de cada projeto.
-   Só completa campos vazios — nunca sobrescreve o que já foi preenchido.
-   O campo responsavelId NÃO é mais atualizado — a responsabilidade é
-   derivada da Matriz RACI. ---- */
+   Só completa campos vazios/incompletos — nunca sobrescreve o que já foi
+   preenchido manualmente.
+   Em sessões COM Matriz RACI, o responsável continua vindo de lá (o campo
+   responsaveisIds não é tocado). Em sessões SEM RACI (ex.: Rotinas), o
+   responsável é o campo direto "responsaveisIds" — aqui ele é completado
+   retroativamente com todo mundo que já apontou horas em cada atividade
+   (útil para atividades que já tinham apontamentos antes desse recurso
+   existir; apontamentos novos já preenchem isso na hora, sem precisar
+   rodar esta sincronização). ---- */
 async function sincronizarApontamentoHoras(){
   let atividadesAtualizadas=0;
   let stakeholdersAdicionados=0;
+  let responsaveisPreenchidos=0;
 
   // 1) Backfill de atividades a partir das horas já apontadas
   for(const a of DB.data.atividades){
@@ -4094,6 +4120,21 @@ async function sincronizarApontamentoHoras(){
 
     // situação: se ainda "Não iniciada" mas já tem horas apontadas, passa para "Em andamento"
     if(a.status==="Não iniciada") patch.status="Em andamento";
+
+    // responsáveis: só em sessões sem Matriz RACI (ex.: Rotinas) — junta todo
+    // mundo que já apontou horas nesta atividade à lista de responsáveis,
+    // sem remover quem já estava lá.
+    const proj=getProjeto(a.projetoId);
+    const semRaci=!!(proj && (cfgSessao(proj.sessaoId).abasOcultas||[]).includes("raci"));
+    if(semRaci){
+      const respAtual=Array.isArray(a.responsaveisIds)?a.responsaveisIds:[];
+      const colabsQueApontaram=[...new Set(horasDaAtividade.map(h=>h.colaboradorId).filter(Boolean))];
+      const novos=colabsQueApontaram.filter(id=>!respAtual.includes(id));
+      if(novos.length){
+        patch.responsaveisIds=[...respAtual,...novos];
+        responsaveisPreenchidos++;
+      }
+    }
 
     if(Object.keys(patch).length){
       Object.assign(a,patch);
@@ -4131,7 +4172,7 @@ async function sincronizarApontamentoHoras(){
 
   await DB.load();
   render();
-  toast(`Sincronização concluída: ${atividadesAtualizadas} atividade(s) atualizada(s), ${stakeholdersAdicionados} stakeholder(s) adicionado(s).`);
+  toast(`Sincronização concluída: ${atividadesAtualizadas} atividade(s) atualizada(s) (${responsaveisPreenchidos} com responsável preenchido), ${stakeholdersAdicionados} stakeholder(s) adicionado(s).`);
 }
 /* ============================================================
    EXPORTAÇÃO DE ATA E RELATÓRIO DO PROJETO
@@ -4313,10 +4354,10 @@ function gerarHtmlRelatorioProjeto(p){
     :"<p style='color:#8a98a6'>Nenhuma pessoa registrada com participação no projeto.</p>";
 
   const atsHtml=ats.length?`<table>
-    <thead><tr><th>#</th><th>Atividade</th><th>Categoria</th><th>Responsável (RACI)</th>
+    <thead><tr><th>#</th><th>Atividade</th><th>Categoria</th><th>Responsável</th>
       <th>Início prev.</th><th>Término prev.</th><th>%</th><th>Situação</th></tr></thead>
     <tbody>${ats.map((a,i)=>{
-      const respRaci=responsaveisRaci(p,a.id);
+      const respRaci=nomesResponsaveisAtividade(a,p);
       return `<tr>
       <td>${i+1}</td><td>${esc(a.nome)}</td><td>${esc(nomeCategoria(a.categoriaId))}</td>
       <td>${respRaci.length?respRaci.join(", "):"—"}</td>
@@ -4444,7 +4485,7 @@ function gerarTextoRelatorioProjeto(p){
   out+="CRONOGRAMA ("+ats.length+" atividade"+(ats.length!==1?"s":"")+")\n"+"-".repeat(20)+"\n";
   if(ats.length){
     ats.forEach((a,i)=>{
-      const respRaci=responsaveisRaci(p,a.id);
+      const respRaci=nomesResponsaveisAtividade(a,p);
       out+=(i+1)+". "+a.nome+" — "+(a.progresso||0)+"% — "+(a.status||"—")+"\n";
       if(a.dataFimPrev) out+="   Término previsto: "+fmtDate(a.dataFimPrev)+"\n";
       if(respRaci.length) out+="   Responsável: "+respRaci.join(", ")+"\n";
@@ -5218,6 +5259,18 @@ function formProjeto(p,sessaoIdDefault){
 /* ---- FORM: ATIVIDADE (removido campo responsavelId) ---- */
 function formAtividade(projetoId,a){
   const edit=!!a;
+  const proj=getProjeto(projetoId);
+  // sessões sem Matriz RACI (ex.: Rotinas) precisam de um jeito direto de
+  // marcar quem é responsável pela atividade, já que não têm a aba RACI
+  // para isso. Nessas sessões, o campo abaixo aparece no próprio formulário
+  // da atividade e aceita mais de uma pessoa.
+  const semRaci = !!(proj && (cfgSessao(proj.sessaoId).abasOcultas||[]).includes("raci"));
+  const campoResponsaveis = {
+    key:"responsaveisIds",label:"Responsável(is)",type:"checklist",full:true,dynamic:true,
+    optionsFn:()=>[...getInternos(),...getParceirosDoProjeto(proj)]
+      .map(co=>({value:co.id,label:co.nome+(co.tipo==="parceiro"?" (parceiro)":"")})),
+    help:"Pessoa(s) responsável(is) por esta atividade. É preenchido automaticamente com quem aponta horas nela, e pode ser ajustado aqui a qualquer momento — inclusive marcando mais de uma pessoa."
+  };
   openForm({
     title:edit?"Editar atividade":"Nova atividade",
     wide:true,
@@ -5226,6 +5279,7 @@ function formAtividade(projetoId,a){
       {key:"nome",label:"Nome da atividade",required:true,full:true,placeholder:"Ex.: Levantamento de requisitos"},
       {key:"categoriaId",label:"Categoria",type:"select",required:true,
         options:DB.data.categorias.map(c=>({value:c.id,label:c.nome}))},
+      ...(semRaci?[campoResponsaveis]:[]),
       {key:"dataInicioPrev",label:"Início previsto",type:"date",allowIndeterminate:true},
       {key:"dataFimPrev",label:"Término previsto",type:"date",allowIndeterminate:true},
       {key:"status",label:"Situação",type:"select",
@@ -5261,6 +5315,8 @@ function formAtividade(projetoId,a){
       v.estimativasPessoas=(Array.isArray(v.estimativasPessoas)?v.estimativasPessoas:[])
         .filter(x=>x.colaboradorId && parseFloat(x.horas)>0)
         .map(x=>({colaboradorId:x.colaboradorId, horas:parseFloat(x.horas)}));
+      if(semRaci) v.responsaveisIds=Array.isArray(v.responsaveisIds)?v.responsaveisIds:[];
+      else delete v.responsaveisIds;
       if(v.status==="Concluída") v.progresso=100;
       else if(v.progresso>=100) v.status="Concluída";
       if(edit){
@@ -5276,6 +5332,37 @@ function formAtividade(projetoId,a){
       render();
     }
   });
+}
+
+/* Ao apontar horas numa atividade de uma sessão sem Matriz RACI (ex.: Rotinas),
+   aproveita o próprio apontamento para manter a atividade sempre com responsável
+   e data de início já preenchidos, sem depender de sincronização manual:
+   - adiciona quem apontou à lista de responsáveis da atividade (se ainda não
+     estiver lá) — o usuário continua podendo ajustar/adicionar mais gente
+     depois, editando a atividade na sessão Rotinas;
+   - preenche a data de início prevista com a data do apontamento, apenas se a
+     atividade ainda não tiver nenhuma data de início definida. */
+async function sincronizarAtividadeAoApontar(atividadeId,colaboradorId,dataApontamento){
+  if(!atividadeId) return;
+  const ativ=getAtividade(atividadeId);
+  if(!ativ) return;
+  const proj=getProjeto(ativ.projetoId);
+  const semRaci=!!(proj && (cfgSessao(proj.sessaoId).abasOcultas||[]).includes("raci"));
+  if(!semRaci) return;
+  const patch={};
+  const respAtual=Array.isArray(ativ.responsaveisIds)?ativ.responsaveisIds:[];
+  if(colaboradorId && !respAtual.includes(colaboradorId)){
+    patch.responsaveisIds=[...respAtual,colaboradorId];
+  }
+  if(!ativ.dataInicioPrev && dataApontamento){
+    patch.dataInicioPrev=dataApontamento;
+  }
+  if(Object.keys(patch).length){
+    Object.assign(ativ,patch);
+    try{ await sbUpdate("atividades", ativ.id, toSnake(patch)); }
+    catch(_e){ /* apontamento já foi salvo; se este ajuste falhar, o usuário
+                  ainda pode preencher manualmente editando a atividade */ }
+  }
 }
 
 /* ---- FORM: HORAS ---- */
@@ -5397,6 +5484,10 @@ function formHoras(h){
         }
       }
       delete v.atividadeSel; delete v.atividadeManual; // não são colunas da tabela 'horas'
+
+      // Rotinas (e outras sessões sem RACI): já aproveita este apontamento para
+      // manter a atividade com responsável e data de início preenchidos.
+      await sincronizarAtividadeAoApontar(atividadeId, v.colaboradorId, v.data);
 
       if(edit){
         v.atividadeId=atividadeId;
