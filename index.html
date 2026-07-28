@@ -3343,9 +3343,13 @@ function viewOcupacaoEquipe(v){
     previsto: resumo.porProjeto[pid]?.horas||0,
     executado: execPorProjetoMes[pid]||0,
     color: PALETTE[i%PALETTE.length]
-  })).sort((a,b)=>Math.max(b.previsto,b.executado)-Math.max(a.previsto,a.executado));
+  })).sort((a,b)=>b.previsto-a.previsto);
   const totalPrevistoMes=projCompData.reduce((s,d)=>s+d.previsto,0);
   const totalExecutadoMes=projCompData.reduce((s,d)=>s+d.executado,0);
+  // escala das barras: relativa ao maior valor (previsto ou executado) entre
+  // os projetos do mês, e não à capacidade total do mês — senão, com vários
+  // projetos dividindo a carga, cada barra fica minúscula
+  const maxBarraMes=Math.max(1, ...projCompData.map(d=>Math.max(d.previsto,d.executado)));
 
   const hojeStr = todayStr();
   const hojeDow = new Date(hojeStr+"T00:00:00").getDay();
@@ -3412,8 +3416,8 @@ function viewOcupacaoEquipe(v){
           Executado: <b>${fmtH(totalExecutadoMes)}</b></div>
       </div>
       <div>${projCompData.map(d=>{
-        const pctPrev = resumo.capacidadeTotalMes>0 ? Math.min(100,Math.round((d.previsto/resumo.capacidadeTotalMes)*100)) : 0;
-        const pctExec = resumo.capacidadeTotalMes>0 ? Math.min(100,Math.round((d.executado/resumo.capacidadeTotalMes)*100)) : 0;
+        const pctPrev = Math.min(100,Math.round((d.previsto/maxBarraMes)*100));
+        const pctExec = Math.min(100,Math.round((d.executado/maxBarraMes)*100));
         const bateu = d.previsto>0 && d.executado>=d.previsto;
         return `<div style="margin-bottom:14px">
           <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px">
