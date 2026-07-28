@@ -1270,6 +1270,64 @@ function haProjetosNaoClassificados(){
   return !!(DB.data && DB.data.projetos.some(p=>!projetoSessaoValida(p)));
 }
 
+/* ============================================================
+   PERFIL DE CADA SESSÃO
+   Define, por sessão: campos extras do formulário de projeto,
+   campos padrão que somem do formulário, abas que somem do
+   detalhe do projeto, se mostra a "Linha do tempo" (Gantt) no
+   Cronograma, e a regra de conversão (Captação → Gestão de
+   Projetos). Sessões sem entrada aqui (ex.: gestao_projetos)
+   usam o comportamento padrão, sem nenhuma restrição.
+   ============================================================ */
+const SESSAO_CONFIG={
+  captacao:{
+    camposExtras:[
+      {key:"orgaoEdital",label:"Órgão / Edital",placeholder:"Ex.: FINEP, BNDES, Prefeitura..."},
+      {key:"valorPleiteado",label:"Valor pleiteado (R$)",type:"number",min:0,placeholder:"0,00"},
+      {key:"prazoSubmissao",label:"Prazo de submissão",type:"date"},
+      {key:"statusCaptacao",label:"Status da captação",type:"select",
+        options:["Em prospecção","Em elaboração","Submetido","Aprovado","Reprovado"].map(s=>({value:s,label:s}))}
+    ],
+    camposOcultosForm:["receita"],
+    abasOcultas:["financeiro","raci"],
+    linhaDoTempo:false,
+    conversao:{statusField:"statusCaptacao", statusGatilho:"Aprovado", destino:"gestao_projetos"}
+  },
+  gestao_projetos:{},
+  estruturantes:{
+    camposExtras:[
+      {key:"eixoEstrategico",label:"Eixo / Objetivo estratégico",full:true,
+        placeholder:"Ex.: Transição energética, Capacitação, Inovação..."}
+    ]
+  },
+  eventos:{
+    camposExtras:[
+      {key:"localEvento",label:"Local do evento",placeholder:"Ex.: Centro de Convenções de Vitória"},
+      {key:"dataEvento",label:"Data do evento",type:"date"},
+      {key:"publicoEstimado",label:"Público estimado",type:"number",min:0}
+    ],
+    linhaDoTempo:false
+  },
+  cursos:{
+    camposExtras:[
+      {key:"cargaHoraria",label:"Carga horária (h)",type:"number",min:0},
+      {key:"modalidade",label:"Modalidade",type:"select",
+        options:[{value:"Presencial",label:"Presencial"},{value:"EAD",label:"EAD"},{value:"Híbrido",label:"Híbrido"}]},
+      {key:"vagas",label:"Nº de vagas",type:"number",min:0}
+    ],
+    abasOcultas:["stakeholders"],
+    linhaDoTempo:false
+  },
+  rotinas:{
+    camposOcultosForm:["receita","cliente"],
+    abasOcultas:["financeiro","raci","stakeholders"],
+    linhaDoTempo:false,
+    dataFimIndeterminada:true,
+    ocultarKpisResumo:true
+  }
+};
+function cfgSessao(id){ return SESSAO_CONFIG[id]||{}; }
+
 const NAV=[
   {sec:"Visão geral"},
   {id:"painel",label:"Painel Geral",ic:"▦"},
@@ -1620,6 +1678,7 @@ function viewPortfolio(v){
         <span style="font-size:11.5px;font-weight:600;width:34px">${prog}%</span></div></td>
       <td class="actions">
         <button class="btn-icon" data-edit="${p.id}" title="Editar">✎</button>
+        ${isGestor()?`<button class="btn-icon" data-move="${p.id}" title="Mover de sessão">⇄</button>`:""}
         ${isGestor()?`<button class="btn-icon del" data-del="${p.id}" title="Excluir">🗑</button>`:""}
       </td></tr>`;
   }).join("");
@@ -1651,6 +1710,7 @@ function viewPortfolio(v){
       ST.view="projeto"; ST.projetoId=tr.dataset.pid; ST.projTab="resumo"; render(); };
   });
   v.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>formProjeto(getProjeto(b.dataset.edit)));
+  v.querySelectorAll("[data-move]").forEach(b=>b.onclick=()=>moverSessao(getProjeto(b.dataset.move)));
   v.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>delProjeto(b.dataset.del));
 }
 
@@ -1674,6 +1734,39 @@ function delProjeto(id){
   });
 }
 
+function converterEmProjeto(p, destinoSessaoId){
+  confirmar(`Converter "${p.nome}" em projeto?`,
+    `O registro vai passar da sessão "${nomeSessao(p.sessaoId)}" para "${nomeSessao(destinoSessaoId)}", `+
+    `mantendo todos os dados já cadastrados (atividades, horas, documentos, reuniões etc.).`,
+    async()=>{
+      p.sessaoId=destinoSessaoId;
+      await sbUpdate("projetos", p.id, {sessao_id:destinoSessaoId});
+      toast("Projeto convertido para "+nomeSessao(destinoSessaoId)+".");
+      render();
+    });
+}
+
+// atalho rápido para corrigir um projeto lançado na sessão errada — sem
+// precisar abrir o formulário completo de edição.
+function moverSessao(p){
+  openForm({
+    title:"Mover projeto de sessão",
+    values:{sessaoId:p.sessaoId||""},
+    fields:[
+      {key:"sessaoId",label:"Nova sessão",type:"select",required:true,
+        options:SESSOES.map(s=>({value:s.id,label:s.label})),
+        help:`"${p.nome}" está hoje em "${nomeSessao(p.sessaoId)}".`}
+    ],
+    onSave:async(v)=>{
+      if(v.sessaoId===p.sessaoId){ toast("O projeto já está nessa sessão."); return; }
+      p.sessaoId=v.sessaoId;
+      await sbUpdate("projetos", p.id, {sessao_id:v.sessaoId});
+      toast("Projeto movido para "+nomeSessao(v.sessaoId)+".");
+      render();
+    }
+  });
+}
+
 /* ============================================================
    VIEW: DETALHE DO PROJETO
    ============================================================ */
@@ -1682,8 +1775,10 @@ function viewProjeto(v){
   if(!p){ ST.view="portfolio"; render(); return; }
   $("#topbar-actions").innerHTML=`
     <button class="btn ghost" id="proj-back">← Voltar ao portfólio</button>
+    ${isGestor()?`<button class="btn ghost" id="proj-move" style="margin-left:8px">⇄ Mover de sessão</button>`:""}
     <button class="btn ghost" id="proj-export" style="margin-left:8px">📤 Exportar relatório</button>`;
   $("#proj-back").onclick=()=>{ ST.view="portfolio"; render(); };
+  if($("#proj-move")) $("#proj-move").onclick=()=>moverSessao(p);
   $("#proj-export").onclick=()=>exportarRelatorioProjeto(p);
 
   let tabs=[
@@ -1694,6 +1789,9 @@ function viewProjeto(v){
   // financeiro só para gestor
   if(isGestor()) tabs.push(["financeiro","Financeiro"]);
   tabs.push(["stakeholders","Stakeholders"],["raci","Matriz RACI"],["riscos","Riscos"]);
+  // esconde as abas que essa sessão não usa (ex.: Financeiro/RACI em Captação)
+  const abasOcultas=new Set(cfgSessao(p.sessaoId).abasOcultas||[]);
+  tabs=tabs.filter(t=>!abasOcultas.has(t[0]));
   // valida aba atual
   if(!tabs.some(t=>t[0]===ST.projTab)) ST.projTab="resumo";
 
@@ -1763,7 +1861,18 @@ function projResumo(c,p){
       }).join("")}</tbody>
     </table>` : "";
 
+  const cfgAtual=cfgSessao(p.sessaoId);
+  const podeConverter = cfgAtual.conversao && p[cfgAtual.conversao.statusField]===cfgAtual.conversao.statusGatilho;
+  const bannerConversao = podeConverter ? `<div class="card" style="margin-bottom:16px;border-color:var(--ok)">
+      <div class="card-pad" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div><b>Captação aprovada!</b><div style="font-size:12.5px;color:var(--ink-faint)">
+          Converta este registro em projeto na sessão "${esc(nomeSessao(cfgAtual.conversao.destino))}", mantendo todo o histórico (atividades, horas, documentos, reuniões).</div></div>
+        <button class="btn" id="btn-converter-projeto">✓ Converter em projeto</button>
+      </div></div>` : "";
+
   c.innerHTML=`
+  ${bannerConversao}
+  ${cfgAtual.ocultarKpisResumo?"":`
   <div class="grid g4">
     <div class="card kpi"><div class="lbl">Valor do projeto</div>
       <div class="val" style="font-size:21px">${fmtBRL(receita)}</div>
@@ -1777,7 +1886,7 @@ function projResumo(c,p){
     <div class="card kpi"><div class="lbl">Andamento físico</div>
       <div class="val">${prog}%</div><div class="sub">${concl}/${ats.length} atividades concluídas</div></div>
   </div>
-  <div style="height:18px"></div>
+  <div style="height:18px"></div>`}
   <div class="grid g2">
     <div class="card">
       <div class="card-head"><h3>Informações do projeto</h3>
@@ -1810,6 +1919,7 @@ function projResumo(c,p){
     </div>
   </div>`;
   if($("#edit-p")) $("#edit-p").onclick=()=>formProjeto(p);
+  if($("#btn-converter-projeto")) $("#btn-converter-projeto").onclick=()=>converterEmProjeto(p,cfgAtual.conversao.destino);
   if($("#btn-cancelar-proj")) $("#btn-cancelar-proj").onclick=()=>{
     const cancelado=statusCalculado(p)==="Cancelado";
     if(cancelado){
@@ -1982,10 +2092,11 @@ function projCronograma(c,p){
   </div>
   ${todasAts.length?filtroHtml:""}
   ${ats.length?`
+  ${cfgSessao(p.sessaoId).linhaDoTempo===false?"":`
   <div class="card" style="margin-bottom:18px">
     <div class="card-head"><h3>Linha do tempo</h3><span class="hint">Linha vermelha = hoje</span></div>
     <div class="card-pad" style="overflow-x:auto">${ganttHtml(p,ats)}</div>
-  </div>
+  </div>`}
   <div class="card table-wrap">
     <table><thead><tr><th>Atividade</th><th>Prazo previsto</th><th>Situação</th>
       <th style="min-width:150px">Progresso</th><th></th></tr></thead>
@@ -3343,13 +3454,9 @@ function viewOcupacaoEquipe(v){
     previsto: resumo.porProjeto[pid]?.horas||0,
     executado: execPorProjetoMes[pid]||0,
     color: PALETTE[i%PALETTE.length]
-  })).sort((a,b)=>b.previsto-a.previsto);
+  })).sort((a,b)=>Math.max(b.previsto,b.executado)-Math.max(a.previsto,a.executado));
   const totalPrevistoMes=projCompData.reduce((s,d)=>s+d.previsto,0);
   const totalExecutadoMes=projCompData.reduce((s,d)=>s+d.executado,0);
-  // escala das barras: relativa ao maior valor (previsto ou executado) entre
-  // os projetos do mês, e não à capacidade total do mês — senão, com vários
-  // projetos dividindo a carga, cada barra fica minúscula
-  const maxBarraMes=Math.max(1, ...projCompData.map(d=>Math.max(d.previsto,d.executado)));
 
   const hojeStr = todayStr();
   const hojeDow = new Date(hojeStr+"T00:00:00").getDay();
@@ -3416,8 +3523,8 @@ function viewOcupacaoEquipe(v){
           Executado: <b>${fmtH(totalExecutadoMes)}</b></div>
       </div>
       <div>${projCompData.map(d=>{
-        const pctPrev = Math.min(100,Math.round((d.previsto/maxBarraMes)*100));
-        const pctExec = Math.min(100,Math.round((d.executado/maxBarraMes)*100));
+        const pctPrev = resumo.capacidadeTotalMes>0 ? Math.min(100,Math.round((d.previsto/resumo.capacidadeTotalMes)*100)) : 0;
+        const pctExec = resumo.capacidadeTotalMes>0 ? Math.min(100,Math.round((d.executado/resumo.capacidadeTotalMes)*100)) : 0;
         const bateu = d.previsto>0 && d.executado>=d.previsto;
         return `<div style="margin-bottom:14px">
           <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px">
@@ -5044,48 +5151,68 @@ function openForm(cfg){
 /* ---- FORM: PROJETO ---- */
 function formProjeto(p,sessaoIdDefault){
   const edit=!!p;
-  const fields=[
-    {key:"nome",label:"Nome do projeto",required:true,full:true,placeholder:"Ex.: Implantação do Sistema X"},
-    {key:"sessaoId",label:"Sessão",type:"select",required:true,
-      options:SESSOES.map(s=>({value:s.id,label:s.label})),
-      help:"Área do portfólio onde este projeto vai aparecer no menu."},
-    {key:"codigo",label:"Código / Sigla",placeholder:"Ex.: PRJ-2026-01"},
-    {key:"cliente",label:"Cliente / Área demandante",placeholder:"Ex.: Diretoria Comercial"},
-    {key:"gerente",label:"Gerente responsável",placeholder:"Nome do gestor do projeto"},
-    {key:"dataInicio",label:"Data de início",type:"date"},
-    {key:"dataFim",label:"Data de término prevista",type:"date"},
-    {key:"receita",label:"Receita / Valor do projeto (R$)",type:"number",min:0,
-      placeholder:"0,00",help:"Valor total contratado do projeto"},
-    {key:"descricao",label:"Descrição / Escopo",type:"textarea",full:true,
-      placeholder:"Objetivo e escopo resumido do projeto"}
-  ];
-  openForm({
-    title:edit?"Editar projeto":"Novo projeto",
-    wide:true,
-    values:p||{status:"Planejado",dataInicio:todayStr(),sessaoId:sessaoIdDefault||null},
-    fields,
-    onSave:async(v)=>{
-      v.receita=parseFloat(v.receita)||0;
-      if(edit){
-        Object.assign(p,v);
-        // envia só os campos deste formulário — o objeto 'p' em memória também
-        // carrega raci/stakeholders/riscos/reunioes, que não são colunas da
-        // tabela 'projetos' (ficam em tabelas próprias) e não podem ir no update.
-        const payload={};
-        fields.forEach(f=>{ payload[f.key]=v[f.key]; });
-        await sbUpdate("projetos", p.id, toSnake(payload));
-        toast("Projeto atualizado.");
-      } else {
-        const novo=Object.assign({id:uid(),stakeholders:[],riscos:[],raci:{}},v);
-        DB.data.projetos.push(novo);
-        const {stakeholders,riscos,raci,...rest}=novo;
-        await sbInsert("projetos", toSnake(rest));
-        ST.view="projeto"; ST.projetoId=novo.id; ST.projTab="resumo";
-        toast("Projeto criado.");
+
+  // monta os campos do formulário a partir da sessão atual: campos padrão
+  // menos os que essa sessão esconde, mais os campos extras dela.
+  function camposParaSessao(sessaoId){
+    const cfg=cfgSessao(sessaoId);
+    const ocultos=new Set(cfg.camposOcultosForm||[]);
+    const base=[
+      {key:"nome",label:"Nome do projeto",required:true,full:true,placeholder:"Ex.: Implantação do Sistema X"},
+      {key:"sessaoId",label:"Sessão",type:"select",required:true,
+        options:SESSOES.map(s=>({value:s.id,label:s.label})),
+        help:"Área do portfólio onde este projeto vai aparecer no menu."},
+      {key:"codigo",label:"Código / Sigla",placeholder:"Ex.: PRJ-2026-01"},
+      {key:"cliente",label:"Cliente / Área demandante",placeholder:"Ex.: Diretoria Comercial"},
+      {key:"gerente",label:"Gerente responsável",placeholder:"Nome do gestor do projeto"},
+      {key:"dataInicio",label:"Data de início",type:"date"},
+      cfg.dataFimIndeterminada
+        ? {key:"dataFim",label:"Data de término prevista",type:"date",allowIndeterminate:true,
+            help:"Marque \"Data indeterminada\" para rotinas sem previsão de término."}
+        : {key:"dataFim",label:"Data de término prevista",type:"date"},
+      {key:"receita",label:"Receita / Valor do projeto (R$)",type:"number",min:0,
+        placeholder:"0,00",help:"Valor total contratado do projeto"},
+      {key:"descricao",label:"Descrição / Escopo",type:"textarea",full:true,
+        placeholder:"Objetivo e escopo resumido do projeto"}
+    ].filter(f=>!ocultos.has(f.key));
+    return [...base, ...(cfg.camposExtras||[])];
+  }
+
+  // reabre o formulário com os campos certos sempre que a sessão muda,
+  // preservando o que já foi digitado nos outros campos.
+  function abrir(valsAtuais){
+    const fields=camposParaSessao(valsAtuais.sessaoId||null);
+    openForm({
+      title:edit?"Editar projeto":"Novo projeto",
+      wide:true,
+      values:valsAtuais,
+      fields,
+      onFieldChange:(vv,key)=>{ if(key==="sessaoId") abrir(vv); },
+      onSave:async(v)=>{
+        v.receita=parseFloat(v.receita)||0;
+        if(edit){
+          Object.assign(p,v);
+          // envia só os campos deste formulário — o objeto 'p' em memória também
+          // carrega raci/stakeholders/riscos/reunioes, que não são colunas da
+          // tabela 'projetos' (ficam em tabelas próprias) e não podem ir no update.
+          const payload={};
+          fields.forEach(f=>{ payload[f.key]=v[f.key]; });
+          await sbUpdate("projetos", p.id, toSnake(payload));
+          toast("Projeto atualizado.");
+        } else {
+          const novo=Object.assign({id:uid(),stakeholders:[],riscos:[],raci:{}},v);
+          DB.data.projetos.push(novo);
+          const {stakeholders,riscos,raci,...rest}=novo;
+          await sbInsert("projetos", toSnake(rest));
+          ST.view="projeto"; ST.projetoId=novo.id; ST.projTab="resumo";
+          toast("Projeto criado.");
+        }
+        render();
       }
-      render();
-    }
-  });
+    });
+  }
+  abrir(p||Object.assign({status:"Planejado",dataInicio:todayStr(),sessaoId:sessaoIdDefault||null},
+    sessaoIdDefault==="captacao"?{statusCaptacao:"Em prospecção"}:{}));
 }
 
 /* ---- FORM: ATIVIDADE (removido campo responsavelId) ---- */
