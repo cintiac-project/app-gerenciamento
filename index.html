@@ -1238,6 +1238,7 @@ const ST = {
   view:"painel",
   projetoId:null,
   projTab:"resumo",
+  sessaoAtiva:null,      // sessão do portfólio selecionada no menu (null = "Não classificados")
   dashYear:String(new Date().getFullYear()),
   dashMode:"mensal",
   search:{},
@@ -1246,10 +1247,33 @@ const ST = {
   cronoStatusVisiveis:new Set(["Não iniciada","Em andamento","Atrasada","Cancelada"])
 };
 
+/* ============================================================
+   SESSÕES DO PORTFÓLIO
+   Agrupam os projetos por natureza (captação, gestão, eventos,
+   cursos, rotinas...). Cada sessão é uma área própria no menu;
+   funcionalidades específicas de cada uma podem ser adicionadas
+   depois sem afetar as demais. Projetos antigos sem sessaoId (ou
+   com um id que não existe mais aqui) caem em "Não classificados".
+   ============================================================ */
+const SESSOES=[
+  {id:"captacao",         label:"Captação",               ic:"◈"},
+  {id:"gestao_projetos",  label:"Gestão de Projetos",     ic:"▤"},
+  {id:"estruturantes",    label:"Projetos Estruturantes", ic:"▨"},
+  {id:"eventos",          label:"Eventos",                ic:"◫"},
+  {id:"cursos",           label:"Cursos",                 ic:"◐"},
+  {id:"rotinas",          label:"Rotinas",                ic:"↻"}
+];
+function getSessao(id){ return SESSOES.find(s=>s.id===id); }
+function nomeSessao(id){ const s=getSessao(id); return s?s.label:"Não classificados"; }
+function projetoSessaoValida(p){ return !!(p.sessaoId && getSessao(p.sessaoId)); }
+function haProjetosNaoClassificados(){
+  return !!(DB.data && DB.data.projetos.some(p=>!projetoSessaoValida(p)));
+}
+
 const NAV=[
   {sec:"Visão geral"},
   {id:"painel",label:"Painel Geral",ic:"▦"},
-  {id:"portfolio",label:"Portfólio de Projetos",ic:"▤"},
+  {portfolioSection:true},
   {sec:"Operação"},
   {id:"horas",label:"Apontamento de Horas",ic:"◷"},
   {id:"ocupacao",label:"Ocupação da Equipe",ic:"▥"},
@@ -1259,20 +1283,42 @@ const NAV=[
   {id:"config",label:"Configurações",ic:"⚙"}
 ];
 
+
 function renderNav(){
   let h="";
   const gestor=isGestor();
+  const projetoAtivo=ST.view==="projeto"?getProjeto(ST.projetoId):null;
   NAV.forEach(it=>{
+    if(it.portfolioSection){
+      h+=`<div class="nav-label">Portfólio</div>`;
+      SESSOES.forEach(s=>{
+        const active=(ST.view==="portfolio"&&ST.sessaoAtiva===s.id)||
+          (!!projetoAtivo && projetoAtivo.sessaoId===s.id);
+        h+=`<button class="nav-item ${active?"active":""}" data-nav="portfolio" data-sessao="${s.id}">
+          <span class="ic">${s.ic}</span><span>${s.label}</span></button>`;
+      });
+      if(haProjetosNaoClassificados()){
+        const active=(ST.view==="portfolio"&&!ST.sessaoAtiva)||
+          (!!projetoAtivo && !projetoSessaoValida(projetoAtivo));
+        h+=`<button class="nav-item ${active?"active":""}" data-nav="portfolio" data-sessao="">
+          <span class="ic">❔</span><span>Não classificados</span></button>`;
+      }
+      return;
+    }
     if(it.sec){ h+=`<div class="nav-label">${it.sec}</div>`; return; }
     // colaboradores não veem Financeiro, Equipe nem Configurações
     if(!gestor && (it.id==="equipe"||it.id==="config"||it.id==="financeiro")) return;
-    const active=(ST.view===it.id)||(it.id==="portfolio"&&ST.view==="projeto");
+    const active=(ST.view===it.id);
     h+=`<button class="nav-item ${active?"active":""}" data-nav="${it.id}">
       <span class="ic">${it.ic}</span><span>${it.label}</span></button>`;
   });
   $("#nav").innerHTML=h;
   $("#nav").querySelectorAll("[data-nav]").forEach(b=>{
-    b.onclick=()=>{ ST.view=b.dataset.nav; ST.projetoId=null; render(); };
+    b.onclick=()=>{
+      ST.view=b.dataset.nav; ST.projetoId=null;
+      if(b.dataset.sessao!==undefined) ST.sessaoAtiva=b.dataset.sessao||null;
+      render();
+    };
   });
 }
 
@@ -1284,15 +1330,18 @@ function render(){
   if(!(ST.view==="projeto" && ST.projTab==="reunioes")) ST.reuniaoId=null;
   renderNav();
   renderUserWidget();
-  const titles={painel:"Painel Geral",portfolio:"Portfólio de Projetos",
+  const titles={painel:"Painel Geral",
     horas:"Apontamento de Horas",ocupacao:"Ocupação da Equipe",financeiro:"Controle Financeiro",
     equipe:"Equipe",config:"Configurações"};
-  const crumbs={painel:"Visão geral",portfolio:"Visão geral",horas:"Operação",
+  const crumbs={painel:"Visão geral",horas:"Operação",
     ocupacao:"Operação",financeiro:"Operação",equipe:"Operação",config:"Sistema"};
   let title=titles[ST.view]||"Painel", crumb=crumbs[ST.view]||"";
+  if(ST.view==="portfolio"){
+    title=nomeSessao(ST.sessaoAtiva); crumb="Portfólio";
+  }
   if(ST.view==="projeto"){
     const p=getProjeto(ST.projetoId);
-    title=p?p.nome:"Projeto"; crumb="Portfólio · Projeto";
+    title=p?p.nome:"Projeto"; crumb="Portfólio · "+(p?nomeSessao(p.sessaoId):"");
   }
   $("#page-title").textContent=title;
   $("#crumb").textContent=crumb;
@@ -1534,14 +1583,16 @@ function ordenarProjetos(lista, criterio){
   return arr;
 }
 function viewPortfolio(v){
-  const ps=DB.data.projetos;
-  if(isGestor()) setTopAction(`<button class="btn">+ Novo projeto</button>`,()=>formProjeto());
+  const sessaoId=ST.sessaoAtiva||null;
+  const ps=DB.data.projetos.filter(p=> sessaoId ? p.sessaoId===sessaoId : !projetoSessaoValida(p));
+  if(isGestor()) setTopAction(`<button class="btn">+ Novo projeto</button>`,()=>formProjeto(null,sessaoId));
   if(!ps.length){
+    const vazioMsg=sessaoId?`Nenhum projeto na sessão "${nomeSessao(sessaoId)}" ainda.`:"Nenhum projeto pendente de classificação.";
     v.innerHTML=`<div class="card"><div class="empty">
-      <span class="ic">▤</span><h3>Portfólio vazio</h3>
-      <p>${isGestor()?"Cadastre projetos com receita, prazos, stakeholders e rubricas de despesa.":"Nenhum projeto cadastrado ainda."}</p>
-      ${isGestor()?'<button class="btn" id="np">+ Criar projeto</button>':""}</div></div>`;
-    if(isGestor()) $("#np").onclick=()=>formProjeto();
+      <span class="ic">▤</span><h3>${sessaoId?"Sessão vazia":"Tudo classificado"}</h3>
+      <p>${isGestor()?vazioMsg:"Nenhum projeto cadastrado ainda."}</p>
+      ${isGestor()&&sessaoId?'<button class="btn" id="np">+ Criar projeto</button>':""}</div></div>`;
+    if(isGestor()&&sessaoId) $("#np").onclick=()=>formProjeto(null,sessaoId);
     return;
   }
   ST.portfolioOrdenar=ST.portfolioOrdenar||"status";
@@ -1646,7 +1697,9 @@ function viewProjeto(v){
   // valida aba atual
   if(!tabs.some(t=>t[0]===ST.projTab)) ST.projTab="resumo";
 
-  let h=`<div class="tabs">`;
+  let h=`<div class="field-inline" style="margin-bottom:10px;color:var(--ink-faint);font-size:12.5px">
+      Sessão: <b style="color:var(--ink-soft)">${esc(nomeSessao(p.sessaoId))}</b></div>
+    <div class="tabs">`;
   tabs.forEach(t=>h+=`<button class="tab ${ST.projTab===t[0]?"active":""}" data-pt="${t[0]}">${t[1]}</button>`);
   h+=`</div><div id="proj-tab"></div>`;
   v.innerHTML=h;
@@ -4985,10 +5038,13 @@ function openForm(cfg){
 }
 
 /* ---- FORM: PROJETO ---- */
-function formProjeto(p){
+function formProjeto(p,sessaoIdDefault){
   const edit=!!p;
   const fields=[
     {key:"nome",label:"Nome do projeto",required:true,full:true,placeholder:"Ex.: Implantação do Sistema X"},
+    {key:"sessaoId",label:"Sessão",type:"select",required:true,
+      options:SESSOES.map(s=>({value:s.id,label:s.label})),
+      help:"Área do portfólio onde este projeto vai aparecer no menu."},
     {key:"codigo",label:"Código / Sigla",placeholder:"Ex.: PRJ-2026-01"},
     {key:"cliente",label:"Cliente / Área demandante",placeholder:"Ex.: Diretoria Comercial"},
     {key:"gerente",label:"Gerente responsável",placeholder:"Nome do gestor do projeto"},
@@ -5002,7 +5058,7 @@ function formProjeto(p){
   openForm({
     title:edit?"Editar projeto":"Novo projeto",
     wide:true,
-    values:p||{status:"Planejado",dataInicio:todayStr()},
+    values:p||{status:"Planejado",dataInicio:todayStr(),sessaoId:sessaoIdDefault||null},
     fields,
     onSave:async(v)=>{
       v.receita=parseFloat(v.receita)||0;
