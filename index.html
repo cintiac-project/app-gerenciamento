@@ -1302,12 +1302,15 @@ const SESSAO_CONFIG={
   captacao:{
     camposExtras:[
       {key:"orgaoEdital",label:"Órgão / Edital",placeholder:"Ex.: FINEP, BNDES, Prefeitura..."},
-      {key:"valorPleiteado",label:"Valor pleiteado (R$)",type:"number",min:0,placeholder:"0,00"},
+      // "Valor do projeto" (campo padrão "receita") já cobre o valor pleiteado/contratado —
+      // este campo é só para o valor TOTAL do edital/programa, quando fizer sentido informar
+      // (pode ser diferente do valor pleiteado neste projeto). Por isso é opcional.
+      {key:"valorEdital",label:"Valor do Edital (R$)",type:"number",min:0,placeholder:"0,00",
+        help:"Opcional. Valor total do edital/programa de fomento, quando for diferente do valor pleiteado neste projeto."},
       {key:"prazoSubmissao",label:"Prazo de submissão",type:"date"},
       {key:"statusCaptacao",label:"Status da captação",type:"select",
         options:["Em prospecção","Em elaboração","Submetido","Aprovado","Reprovado"].map(s=>({value:s,label:s}))}
     ],
-    camposOcultosForm:["receita"],
     abasOcultas:["financeiro","raci"],
     linhaDoTempo:false,
     conversao:{statusField:"statusCaptacao", statusGatilho:"Aprovado", destino:"gestao_projetos"}
@@ -1317,7 +1320,8 @@ const SESSAO_CONFIG={
     camposExtras:[
       {key:"eixoEstrategico",label:"Eixo / Objetivo estratégico",full:true,
         placeholder:"Ex.: Transição energética, Capacitação, Inovação..."}
-    ]
+    ],
+    camposOcultosForm:["cliente"]
   },
   eventos:{
     camposExtras:[
@@ -1332,7 +1336,12 @@ const SESSAO_CONFIG={
       {key:"cargaHoraria",label:"Carga horária (h)",type:"number",min:0},
       {key:"modalidade",label:"Modalidade",type:"select",
         options:[{value:"Presencial",label:"Presencial"},{value:"EAD",label:"EAD"},{value:"Híbrido",label:"Híbrido"}]},
-      {key:"vagas",label:"Nº de vagas",type:"number",min:0}
+      {key:"vagas",label:"Nº de vagas",type:"number",min:0},
+      // só faz sentido informar o local quando o curso é presencial (ou híbrido);
+      // o campo some do formulário e do quadro "Informações" nos demais casos —
+      // ver showIf() em camposParaSessao() e em camposExtrasResumoHtml()
+      {key:"localCurso",label:"Local do curso",placeholder:"Ex.: Sede da empresa, Auditório X...",
+        showIf:vv=>vv&&(vv.modalidade==="Presencial"||vv.modalidade==="Híbrido")}
     ],
     abasOcultas:["stakeholders"],
     linhaDoTempo:false
@@ -1342,10 +1351,45 @@ const SESSAO_CONFIG={
     abasOcultas:["financeiro","raci","stakeholders"],
     linhaDoTempo:false,
     dataFimIndeterminada:true,
-    ocultarKpisResumo:true
+    ocultarKpisResumo:true,
+    // atividades rotineiras não têm um "gerente" nem datas fixas de início/
+    // fim de projeto, então esses campos somem do quadro de informações —
+    // e o card passa a se chamar apenas "Informações".
+    tituloCardInformacoes:"Informações",
+    camposOcultosResumo:["dataInicio","dataFim","gerente"],
+    // rotina não tem um "percentual concluído" que faça sentido (é um
+    // trabalho contínuo), então o número de progresso some do cronograma
+    ocultarPercentualAtividades:true
   }
 };
 function cfgSessao(id){ return SESSAO_CONFIG[id]||{}; }
+
+// campo foi removido do formulário desta sessão (ex.: "cliente" em Rotinas
+// e Projetos Estruturantes)
+function campoOcultoSessao(p,key){
+  return (cfgSessao(p.sessaoId).camposOcultosForm||[]).includes(key);
+}
+// campo continua existindo no formulário, mas some do quadro "Informações"
+// do resumo por não fazer sentido para o tipo de projeto (ex.: datas fixas
+// e gerente responsável em Rotinas)
+function campoOcultoResumo(p,key){
+  return (cfgSessao(p.sessaoId).camposOcultosResumo||[]).includes(key);
+}
+// exibe no quadro "Informações" os campos extras cadastrados na sessão do
+// projeto (ex.: Eixo/Objetivo estratégico em Projetos Estruturantes),
+// formatando o valor de acordo com o tipo do campo
+function camposExtrasResumoHtml(cfg,p){
+  return (cfg.camposExtras||[]).map(f=>{
+    if(f.showIf && !f.showIf(p)) return "";
+    const val=p[f.key];
+    if(val===undefined||val===null||val==="") return "";
+    let disp;
+    if(f.type==="date") disp=fmtDate(val);
+    else if(f.type==="number") disp=/\(R\$\)/.test(f.label)?fmtBRL(+val):fmtNum(+val,0);
+    else disp=esc(val);
+    return `<div class="mini-stat"><span>${esc(f.label)}</span><span class="v">${disp}</span></div>`;
+  }).join("");
+}
 
 const NAV=[
   {sec:"Visão geral"},
@@ -1915,12 +1959,6 @@ function projResumo(c,p){
   const ats=DB.data.atividades.filter(a=>a.projetoId===p.id);
   const concl=ats.filter(a=>(+a.progresso||0)>=100).length;
   const riscosAltos=(p.riscos||[]).filter(r=>severidadeRisco(r)==="Alta").length;
-  /* despesa por rubrica */
-  const rubMap={};
-  DB.data.financeiro.filter(f=>f.projetoId===p.id&&f.tipo==="despesa").forEach(f=>{
-    rubMap[f.rubricaId]=(rubMap[f.rubricaId]||0)+(+f.valor||0);
-  });
-  const rubData=Object.keys(rubMap).map((rid,i)=>({label:nomeRubrica(rid),value:rubMap[rid],color:PALETTE[i%PALETTE.length]}));
   /* horas por categoria neste projeto */
   const catMapP={};
   DB.data.horas.filter(h=>h.projetoId===p.id).forEach(h=>{
@@ -1956,7 +1994,7 @@ function projResumo(c,p){
       <div class="card-pad" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
         <div><b>Captação aprovada!</b><div style="font-size:12.5px;color:var(--ink-faint)">
           Converta este registro em projeto na sessão "${esc(nomeSessao(cfgAtual.conversao.destino))}", mantendo todo o histórico (atividades, horas, documentos, reuniões).</div></div>
-        <button class="btn" id="btn-converter-projeto">✓ Converter em projeto</button>
+        <button class="btn" id="btn-converter-projeto">Aprovado → converter em projeto</button>
       </div></div>` : "";
 
   c.innerHTML=`
@@ -1965,7 +2003,7 @@ function projResumo(c,p){
   <div class="grid g4">
     <div class="card kpi"><div class="lbl">Valor do projeto</div>
       <div class="val" style="font-size:21px">${fmtBRL(receita)}</div>
-      <div class="sub">${esc(p.cliente||"Sem cliente definido")}</div></div>
+      <div class="sub">${campoOcultoSessao(p,"cliente")?"":esc(p.cliente||"Sem cliente definido")}</div></div>
     <div class="card kpi"><div class="lbl">Despesas (total)</div>
       <div class="val" style="font-size:21px">${fmtBRL(despTotal)}</div>
       <div class="sub">Realizado ${fmtBRL(despReal)} · Previsto ${fmtBRL(despPrev)}</div></div>
@@ -1976,28 +2014,22 @@ function projResumo(c,p){
       <div class="val">${prog}%</div><div class="sub">${concl}/${ats.length} atividades concluídas</div></div>
   </div>
   <div style="height:18px"></div>`}
-  <div class="grid ${cfgAtual.abasOcultas&&cfgAtual.abasOcultas.includes("financeiro")?"":"g2"}">
-    <div class="card">
-      <div class="card-head"><h3>Informações do projeto</h3>
-        ${isGestor()?'<button class="btn ghost sm" id="edit-p">✎ Editar</button>':""}</div>
-      <div class="card-pad">
-        <div class="mini-stat"><span>Código</span><span class="v">${esc(p.codigo||"—")}</span></div>
-        <div class="mini-stat"><span>Status</span><span title="${esc(motivoStatusCalculado(p))}">${statusBadge(statusCalculado(p))}
-          ${isGestor()?`<button class="btn-icon" id="btn-cancelar-proj" title="${statusCalculado(p)==='Cancelado'?'Reativar projeto':'Marcar como cancelado'}" style="margin-left:6px;font-size:11px">${statusCalculado(p)==='Cancelado'?'↺':'✕'}</button>`:""}</span></div>
-        <div class="mini-stat" style="font-size:11px;color:var(--ink-faint)"><span></span><span>${esc(motivoStatusCalculado(p))}</span></div>
-        <div class="mini-stat"><span>Início</span><span class="v">${fmtDate(p.dataInicio)}</span></div>
-        <div class="mini-stat"><span>Término previsto</span><span class="v">${fmtDate(p.dataFim)}</span></div>
-        <div class="mini-stat"><span>Gerente responsável</span><span class="v">${esc(p.gerente||"—")}</span></div>
-        <div class="mini-stat"><span>Horas executadas</span><span class="v">${fmtH(horas)}</span></div>
-        <div class="mini-stat"><span>Riscos de alta severidade</span><span class="v" style="color:${riscosAltos?"var(--danger)":"inherit"}">${riscosAltos}</span></div>
-        ${p.descricao?`<div style="margin-top:12px;font-size:12.5px;color:var(--ink-soft);line-height:1.6">${esc(p.descricao)}</div>`:""}
-      </div>
+  <div class="card">
+    <div class="card-head"><h3>${esc(cfgAtual.tituloCardInformacoes||"Informações")}</h3>
+      ${isGestor()?'<button class="btn ghost sm" id="edit-p">✎ Editar</button>':""}</div>
+    <div class="card-pad">
+      <div class="mini-stat"><span>Código</span><span class="v">${esc(p.codigo||"—")}</span></div>
+      <div class="mini-stat"><span>Status</span><span title="${esc(motivoStatusCalculado(p))}">${statusBadge(statusCalculado(p))}
+        ${isGestor()?`<button class="btn-icon" id="btn-cancelar-proj" title="${statusCalculado(p)==='Cancelado'?'Reativar projeto':'Marcar como cancelado'}" style="margin-left:6px;font-size:11px">${statusCalculado(p)==='Cancelado'?'↺':'✕'}</button>`:""}</span></div>
+      <div class="mini-stat" style="font-size:11px;color:var(--ink-faint)"><span></span><span>${esc(motivoStatusCalculado(p))}</span></div>
+      ${campoOcultoResumo(p,"dataInicio")?"":`<div class="mini-stat"><span>Início</span><span class="v">${fmtDate(p.dataInicio)}</span></div>`}
+      ${campoOcultoResumo(p,"dataFim")?"":`<div class="mini-stat"><span>Término previsto</span><span class="v">${fmtDate(p.dataFim)}</span></div>`}
+      ${campoOcultoResumo(p,"gerente")?"":`<div class="mini-stat"><span>Gerente responsável</span><span class="v">${esc(p.gerente||"—")}</span></div>`}
+      <div class="mini-stat"><span>Horas executadas</span><span class="v">${fmtH(horas)}</span></div>
+      <div class="mini-stat"><span>Riscos de alta severidade</span><span class="v" style="color:${riscosAltos?"var(--danger)":"inherit"}">${riscosAltos}</span></div>
+      ${camposExtrasResumoHtml(cfgAtual,p)}
+      ${p.descricao?`<div style="margin-top:12px;font-size:12.5px;color:var(--ink-soft);line-height:1.6">${esc(p.descricao)}</div>`:""}
     </div>
-    ${(cfgAtual.abasOcultas&&cfgAtual.abasOcultas.includes("financeiro"))?"":`
-    <div class="card">
-      <div class="card-head"><h3>Despesas por rubrica</h3></div>
-      <div class="card-pad">${donutChart(rubData)}</div>
-    </div>`}
   </div>
   <div style="height:18px"></div>
   <div class="card">
@@ -2156,6 +2188,7 @@ function projCronograma(c,p){
     const dIni=a.dataInicioPrev?fmtDate(a.dataInicioPrev):"Indeterminada";
     const dFim=a.dataFimPrev?fmtDate(a.dataFimPrev):"Indeterminada";
     const responsaveis = nomesResponsaveisAtividade(a,p);
+    const ocultarPct=cfgSessao(p.sessaoId).ocultarPercentualAtividades;
     return `<tr>
       <td><div style="font-weight:600">${esc(a.nome)}</div>
         <div style="font-size:11px;color:var(--ink-faint)">${esc(nomeCategoria(a.categoriaId))} · Resp.: ${responsaveis.join(", ")||"—"}${horasAtiv?` · ${horasAtiv}h apontadas`:""}${totalHorasPrevistasAtividade(a)>0?` · ${fmtNum(totalHorasPrevistasAtividade(a),1)}h previstas (${pessoasAlocadasAtividade(a).length} pessoa(s))`:""}</div></td>
@@ -2163,7 +2196,7 @@ function projCronograma(c,p){
       <td>${atrasada?`<span class="badge b-danger">Atrasada</span>`:statusBadge(a.status||"Não iniciada")}</td>
       <td><div style="display:flex;align-items:center;gap:8px">
         <div class="pbar ${pcls}" style="flex:1"><div style="width:${prog}%"></div></div>
-        <span style="font-size:11.5px;font-weight:600;width:34px">${prog}%</span></div></td>
+        ${ocultarPct?"":`<span style="font-size:11.5px;font-weight:600;width:34px">${prog}%</span>`}</div></td>
       <td class="actions">${podeEditar?`
         <button class="btn-icon" data-eda="${a.id}">✎</button>
         <button class="btn-icon del" data-dla="${a.id}">🗑</button>`:""}</td></tr>`;
@@ -2612,6 +2645,12 @@ function projFinanceiro(c,p){
   const receitaLanc=lanc.filter(f=>f.tipo==="receita").reduce((s,f)=>s+(+f.valor||0),0);
   const despReal=despesasProjeto(p.id,"realizado");
   const despPrev=despesasProjeto(p.id,"previsto");
+  /* despesa por rubrica */
+  const rubMap={};
+  DB.data.financeiro.filter(f=>f.projetoId===p.id&&f.tipo==="despesa").forEach(f=>{
+    rubMap[f.rubricaId]=(rubMap[f.rubricaId]||0)+(+f.valor||0);
+  });
+  const rubData=Object.keys(rubMap).map((rid,i)=>({label:nomeRubrica(rid),value:rubMap[rid],color:PALETTE[i%PALETTE.length]}));
   const rows=lanc.map(f=>{
     const venc=f.status==="previsto"&&f.data&&daysBetween(todayStr(),f.data)<0;
     return `<tr>
@@ -2630,6 +2669,11 @@ function projFinanceiro(c,p){
     <div class="card kpi"><div class="lbl">Receita lançada</div><div class="val" style="font-size:20px;color:var(--ok)">${fmtBRL(receitaLanc)}</div></div>
     <div class="card kpi"><div class="lbl">Despesa realizada</div><div class="val" style="font-size:20px;color:var(--danger)">${fmtBRL(despReal)}</div></div>
     <div class="card kpi"><div class="lbl">Despesa prevista</div><div class="val" style="font-size:20px;color:var(--warn)">${fmtBRL(despPrev)}</div></div>
+  </div>
+  <div style="height:18px"></div>
+  <div class="card">
+    <div class="card-head"><h3>Despesas por rubrica</h3></div>
+    <div class="card-pad">${donutChart(rubData)}</div>
   </div>
   <div style="height:18px"></div>
   <div class="toolbar">
@@ -4511,7 +4555,7 @@ function gerarHtmlRelatorioProjeto(p){
 
     <h2>Identificação</h2>
     <dl class="meta">
-      <dt>Cliente:</dt><dd>${esc(p.cliente||"—")}</dd>
+      ${campoOcultoSessao(p,"cliente")?"":`<dt>Cliente:</dt><dd>${esc(p.cliente||"—")}</dd>`}
       <dt>Gerente:</dt><dd>${esc(p.gerente||"—")}</dd>
       <dt>Status:</dt><dd>${esc(statusCalculado(p))}</dd>
       <dt>Período:</dt><dd>${p.dataInicio?fmtDate(p.dataInicio):"—"} até ${p.dataFim?fmtDate(p.dataFim):"—"}</dd>
@@ -4540,7 +4584,7 @@ function gerarHtmlRelatorioProjeto(p){
 function gerarTextoRelatorioProjeto(p){
   let out="RELATÓRIO DO PROJETO\n"+"=".repeat(50)+"\n";
   out+=p.nome+"\n\n";
-  out+="Cliente: "+(p.cliente||"—")+"\n";
+  out+=campoOcultoSessao(p,"cliente")?"":"Cliente: "+(p.cliente||"—")+"\n";
   out+="Gerente: "+(p.gerente||"—")+"\n";
   out+="Status: "+statusCalculado(p)+"\n";
   out+="Período: "+(p.dataInicio?fmtDate(p.dataInicio):"—")+" a "+(p.dataFim?fmtDate(p.dataFim):"—")+"\n\n";
@@ -5266,9 +5310,12 @@ function formProjeto(p,sessaoIdDefault){
 
   // monta os campos do formulário a partir da sessão atual: campos padrão
   // menos os que essa sessão esconde, mais os campos extras dela.
-  function camposParaSessao(sessaoId){
+  function camposParaSessao(sessaoId,valsAtuais){
     const cfg=cfgSessao(sessaoId);
     const ocultos=new Set(cfg.camposOcultosForm||[]);
+    // campos extras podem depender de outro campo já preenchido no formulário
+    // (ex.: "Local do curso" só faz sentido quando a Modalidade é Presencial/Híbrido)
+    const extras=(cfg.camposExtras||[]).filter(f=>!f.showIf || f.showIf(valsAtuais||{}));
     const base=[
       {key:"nome",label:"Nome do projeto",required:true,full:true,placeholder:"Ex.: Implantação do Sistema X"},
       {key:"sessaoId",label:"Sessão",type:"select",required:true,
@@ -5287,19 +5334,20 @@ function formProjeto(p,sessaoIdDefault){
       {key:"descricao",label:"Descrição / Escopo",type:"textarea",full:true,
         placeholder:"Objetivo e escopo resumido do projeto"}
     ].filter(f=>!ocultos.has(f.key));
-    return [...base, ...(cfg.camposExtras||[])];
+    return [...base, ...extras];
   }
 
-  // reabre o formulário com os campos certos sempre que a sessão muda,
-  // preservando o que já foi digitado nos outros campos.
+  // reabre o formulário com os campos certos sempre que a sessão muda (ou um
+  // campo do qual outro depende, ex.: Modalidade), preservando o que já foi
+  // digitado nos demais campos.
   function abrir(valsAtuais){
-    const fields=camposParaSessao(valsAtuais.sessaoId||null);
+    const fields=camposParaSessao(valsAtuais.sessaoId||null,valsAtuais);
     openForm({
       title:edit?"Editar projeto":"Novo projeto",
       wide:true,
       values:valsAtuais,
       fields,
-      onFieldChange:(vv,key)=>{ if(key==="sessaoId") abrir(vv); },
+      onFieldChange:(vv,key)=>{ if(key==="sessaoId"||key==="modalidade") abrir(vv); },
       onSave:async(v)=>{
         v.receita=parseFloat(v.receita)||0;
         if(edit){
