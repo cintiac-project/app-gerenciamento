@@ -235,6 +235,7 @@
   .alert-row .alert-resp .rl{color:var(--ink-faint);font-weight:500}
   .alert-row .alert-resp.sem{background:#fdf0e8;color:#a8551f}
   .alert-row .alert-resp.sem .rl{color:#a8551f}
+  .alert-acoes{display:flex;gap:4px;flex-shrink:0}
 
   /* chart */
   .chart-svg{width:100%;height:auto;display:block}
@@ -973,11 +974,11 @@ function calcularAlertas(){
     if(d<0) out.push({tipo:"financeiro",sev:"danger",dias:d,
       titulo:`${lbl} vencida: ${f.descricao||nomeRubrica(f.rubricaId)}`,
       desc:`${nomeProjeto(f.projetoId)} · ${fmtBRL(f.valor)} · venceu há ${Math.abs(d)} dia(s)`,
-      responsavel:resp, projetoId:f.projetoId});
+      responsavel:resp, projetoId:f.projetoId, financeiroId:f.id});
     else if(d<=7) out.push({tipo:"financeiro",sev:"warn",dias:d,
       titulo:`${lbl} próxima: ${f.descricao||nomeRubrica(f.rubricaId)}`,
       desc:`${nomeProjeto(f.projetoId)} · ${fmtBRL(f.valor)} · vence em ${d} dia(s)`,
-      responsavel:resp, projetoId:f.projetoId});
+      responsavel:resp, projetoId:f.projetoId, financeiroId:f.id});
   });
   return out.sort((a,b)=>a.dias-b.dias);
 }
@@ -1528,11 +1529,26 @@ function viewPainel(v){
     const respHtml=a.responsavel
       ? `<div class="alert-resp"><span class="rl">Responsável:</span> <b>${esc(a.responsavel)}</b></div>`
       : `<div class="alert-resp sem"><span class="rl">Responsável:</span> <i>não atribuído</i></div>`;
+    // ações rápidas: permitem concluir/marcar como realizado ou editar o
+    // item (atividade/lançamento) direto a partir do alerta, sem precisar
+    // navegar até o projeto e procurar o item na lista.
+    const acoesHtml=isGestor()? (
+      a.tipo==="fisico"
+        ? `<div class="alert-acoes">
+            <button class="btn-icon" data-alerta-concluir-ativ="${a.atividadeId}" title="Marcar atividade como concluída">✓</button>
+            <button class="btn-icon" data-alerta-editar-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Editar atividade (ex.: novo prazo)">✎</button>
+          </div>`
+        : `<div class="alert-acoes">
+            <button class="btn-icon" data-alerta-realizar-fin="${a.financeiroId}" title="Marcar como realizado">✓</button>
+            <button class="btn-icon" data-alerta-editar-fin="${a.financeiroId}" data-proj="${a.projetoId}" title="Editar lançamento (ex.: nova data)">✎</button>
+          </div>`
+    ) : "";
     return `<div class="alert-row"><div class="ab" style="background:${col}"></div>
       <div class="at"><div class="t">${esc(a.titulo)}</div>
         <div class="d">${esc(a.desc)}</div>
         ${respHtml}</div>
-      <span class="badge ${a.sev==="danger"?"b-danger":"b-warn"}">${a.tipo==="fisico"?"Físico":"Financeiro"}</span></div>`;
+      <span class="badge ${a.sev==="danger"?"b-danger":"b-warn"}">${a.tipo==="fisico"?"Físico":"Financeiro"}</span>
+      ${acoesHtml}</div>`;
   }).join("") : `<div class="empty" style="padding:26px"><span class="ic">✓</span><p>Nenhum prazo crítico nos próximos 7 dias.</p></div>`;
 
   v.innerHTML=`
@@ -1581,6 +1597,61 @@ function viewPainel(v){
   $("#dash-mode").querySelectorAll("button").forEach(b=>{
     b.onclick=()=>{ ST.dashMode=b.dataset.m; render(); };
   });
+
+  // ações rápidas dos alertas de prazo (ver calcularAlertas/alertasHtml acima)
+  v.querySelectorAll("[data-alerta-concluir-ativ]").forEach(b=>{
+    b.onclick=()=>marcarAtividadeConcluidaRapido(b.dataset.alertaConcluirAtiv);
+  });
+  v.querySelectorAll("[data-alerta-editar-ativ]").forEach(b=>{
+    b.onclick=()=>formAtividade(b.dataset.proj, getAtividade(b.dataset.alertaEditarAtiv));
+  });
+  v.querySelectorAll("[data-alerta-realizar-fin]").forEach(b=>{
+    b.onclick=()=>marcarFinanceiroRealizadoRapido(b.dataset.alertaRealizarFin);
+  });
+  v.querySelectorAll("[data-alerta-editar-fin]").forEach(b=>{
+    b.onclick=()=>formFinanceiro(b.dataset.proj, DB.data.financeiro.find(x=>x.id===b.dataset.alertaEditarFin));
+  });
+}
+
+/* Ação rápida do Painel Geral: marca a atividade atrasada/próxima do prazo
+   como concluída (100%) direto da lista de alertas, sem precisar abrir o
+   projeto e procurar a atividade no cronograma. */
+async function marcarAtividadeConcluidaRapido(atividadeId){
+  const a=getAtividade(atividadeId);
+  if(!a) return;
+  confirmar("Marcar esta atividade como concluída?",
+    `"${a.nome}" será marcada como 100% concluída.`,
+    async()=>{
+      try{
+        const patch={status:"Concluída",progresso:100};
+        Object.assign(a,patch);
+        await sbUpdate("atividades", a.id, toSnake(patch));
+        toast("Atividade marcada como concluída.");
+        render();
+      }catch(e){
+        toast("Erro ao atualizar a atividade: "+(e.message||e));
+      }
+    });
+}
+
+/* Ação rápida do Painel Geral: marca o lançamento financeiro vencido/próximo
+   do vencimento como realizado direto da lista de alertas. */
+async function marcarFinanceiroRealizadoRapido(financeiroId){
+  const f=DB.data.financeiro.find(x=>x.id===financeiroId);
+  if(!f) return;
+  confirmar("Marcar este lançamento como realizado?",
+    `"${f.descricao||nomeRubrica(f.rubricaId)}" (${fmtBRL(f.valor)}) será marcado como realizado.`,
+    async()=>{
+      try{
+        const patch={status:"realizado"};
+        Object.assign(f,patch);
+        await sbUpdate("financeiro", f.id, patch);
+        toast("Lançamento marcado como realizado.");
+        render();
+      }catch(e){
+        toast("Erro ao atualizar o lançamento: "+(e.message||e));
+      }
+    });
 }
 function anosDisponiveis(){
   const set=new Set([String(new Date().getFullYear())]);
