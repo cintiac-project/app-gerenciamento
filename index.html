@@ -1261,6 +1261,8 @@ const ST = {
   dashYear:String(new Date().getFullYear()),
   dashMode:"mensal",
   search:{},
+  painelAlertaProjeto:"",   // filtro de projeto dos Alertas de prazo (Painel Geral)
+  painelAlertaResp:"",      // filtro de responsável dos Alertas de prazo (Painel Geral)
   // status visíveis no cronograma físico de cada projeto — "Concluída" some
   // da lista por padrão e só volta a aparecer quando marcada no filtro
   cronoStatusVisiveis:new Set(["Não iniciada","Em andamento","Atrasada","Cancelada"])
@@ -1446,6 +1448,12 @@ function renderNav(){
 /* ============================================================
    RENDER PRINCIPAL
    ============================================================ */
+// guarda a última "localização" renderizada (view + projeto + sessão + aba)
+// para só rolar a página ao topo quando o usuário efetivamente navega para
+// outro lugar — e não sempre que render() é chamado (ex.: ao salvar uma
+// edição), o que antes fazia a página voltar ao topo mesmo quando o usuário
+// estava rolado bem mais abaixo.
+let _ultimaLocalizacao=null;
 function render(){
   // reseta seleção de reunião quando não estamos na aba reuniões
   if(!(ST.view==="projeto" && ST.projTab==="reunioes")) ST.reuniaoId=null;
@@ -1482,7 +1490,10 @@ function render(){
   else if(ST.view==="financeiro") viewFinanceiro(v);
   else if(ST.view==="equipe") viewEquipe(v);
   else if(ST.view==="config") viewConfig(v);
-  window.scrollTo(0,0);
+
+  const localizacaoAtual=[ST.view,ST.projetoId,ST.sessaoAtiva,ST.projTab].join("|");
+  if(localizacaoAtual!==_ultimaLocalizacao) window.scrollTo(0,0);
+  _ultimaLocalizacao=localizacaoAtual;
 }
 
 function renderUserWidget(){
@@ -1521,6 +1532,24 @@ function viewPainel(v){
   const margemMedia=margens.length? margens.reduce((a,b)=>a+b,0)/margens.length : null;
   const alertas=calcularAlertas();
   const horasAno=DB.data.horas.filter(h=>yearOf(h.data)===ST.dashYear).reduce((s,h)=>s+(+h.horas||0),0);
+
+  // opções de filtro dos Alertas de prazo: apenas projetos e responsáveis que
+  // de fato aparecem nos alertas atuais (evita opções "vazias" no filtro).
+  // "responsavel" pode conter mais de um nome (ex.: "Fulano, Beltrano"), por
+  // isso é separado para virar opções individuais no filtro.
+  const projetosComAlerta=[...new Set(alertas.map(a=>a.projetoId))]
+    .map(getProjeto).filter(Boolean)
+    .sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"}));
+  const responsaveisComAlerta=[...new Set(
+    alertas.flatMap(a=>a.responsavel?a.responsavel.split(",").map(s=>s.trim()).filter(Boolean):[])
+  )].sort((a,b)=>a.localeCompare(b,"pt-BR",{sensitivity:"base"}));
+  // se o valor selecionado deixou de existir (ex.: alerta resolvido), volta para "Todos"
+  if(ST.painelAlertaProjeto && !projetosComAlerta.some(p=>p.id===ST.painelAlertaProjeto)) ST.painelAlertaProjeto="";
+  if(ST.painelAlertaResp && !responsaveisComAlerta.includes(ST.painelAlertaResp)) ST.painelAlertaResp="";
+  const alertasFiltrados=alertas.filter(a=>
+    (!ST.painelAlertaProjeto || a.projetoId===ST.painelAlertaProjeto) &&
+    (!ST.painelAlertaResp || (a.responsavel && a.responsavel.split(",").map(s=>s.trim()).includes(ST.painelAlertaResp)))
+  );
 
   if(!ps.length){
     v.innerHTML=`
@@ -1568,7 +1597,7 @@ function viewPainel(v){
   // tempo), não deveria limitar a QUANTIDADE de itens exibidos. Removido:
   // agora mostra todos os alertas encontrados, com rolagem interna quando
   // a lista fica longa, para não estourar o layout da página.
-  const alertasHtml=alertas.length? alertas.map(a=>{
+  const alertasHtml=alertasFiltrados.length? alertasFiltrados.map(a=>{
     const col=a.sev==="danger"?"var(--danger)":"var(--warn)";
     const respHtml=a.responsavel
       ? `<div class="alert-resp"><span class="rl">Responsável:</span> <b>${esc(a.responsavel)}</b></div>`
@@ -1593,17 +1622,34 @@ function viewPainel(v){
         ${respHtml}</div>
       <span class="badge ${a.sev==="danger"?"b-danger":"b-warn"}">${a.tipo==="fisico"?"Físico":"Financeiro"}</span>
       ${acoesHtml}</div>`;
-  }).join("") : `<div class="empty" style="padding:26px"><span class="ic">✓</span><p>Nenhum prazo crítico nos próximos 7 dias.</p></div>`;
+  }).join("") : `<div class="empty" style="padding:26px"><span class="ic">✓</span><p>${alertas.length?"Nenhum alerta para o filtro selecionado.":"Nenhum prazo crítico nos próximos 7 dias."}</p></div>`;
+
+  const alertasFiltroHtml=`
+    <div class="field-inline">Projeto
+      <select class="select" id="painel-alerta-proj">
+        <option value="">Todos</option>
+        ${projetosComAlerta.map(p=>`<option value="${p.id}" ${p.id===ST.painelAlertaProjeto?"selected":""}>${esc(p.nome)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="field-inline">Responsável
+      <select class="select" id="painel-alerta-resp">
+        <option value="">Todos</option>
+        ${responsaveisComAlerta.map(r=>`<option value="${esc(r)}" ${r===ST.painelAlertaResp?"selected":""}>${esc(r)}</option>`).join("")}
+      </select>
+    </div>`;
 
   v.innerHTML=`
   ${kpis}
   <div style="height:18px"></div>
   <div class="card" style="margin-bottom:18px">
-    <div class="card-head">
+    <div class="card-head" style="flex-wrap:wrap;gap:10px">
       <h3>⚠ Alertas de prazos — físicos e financeiros</h3>
-      <span class="hint">${alertas.length} alerta(s) · próximos 7 dias e itens vencidos</span>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <span class="hint">${alertasFiltrados.length} de ${alertas.length} alerta(s) · próximos 7 dias e itens vencidos</span>
+        ${alertasFiltroHtml}
+      </div>
     </div>
-    <div class="card-pad" style="${alertas.length>7?"max-height:520px;overflow-y:auto":""}">${alertasHtml}</div>
+    <div class="card-pad" style="${alertasFiltrados.length>7?"max-height:520px;overflow-y:auto":""}">${alertasHtml}</div>
   </div>
 
   <div class="toolbar">
@@ -1637,6 +1683,8 @@ function viewPainel(v){
   </div>`;
 
   if(isGestor()) setTopAction(`<button class="btn">+ Novo projeto</button>`,()=>formProjeto());
+  $("#painel-alerta-proj").onchange=e=>{ ST.painelAlertaProjeto=e.target.value; render(); };
+  $("#painel-alerta-resp").onchange=e=>{ ST.painelAlertaResp=e.target.value; render(); };
   $("#dash-year").onchange=e=>{ ST.dashYear=e.target.value; render(); };
   $("#dash-mode").querySelectorAll("button").forEach(b=>{
     b.onclick=()=>{ ST.dashMode=b.dataset.m; render(); };
@@ -5537,7 +5585,7 @@ function formHoras(h){
         options:(fixedColab?[getColab(fixedColab)]:getInternos()).filter(Boolean).map(c=>({value:c.id,label:c.nome})),
         help:fixedColab?"Apontamento vinculado ao usuário logado.":""},
       {key:"projetoId",label:"Projeto",type:"select",required:true,
-        options:DB.data.projetos.map(p=>({value:p.id,label:p.nome}))},
+        options:DB.data.projetos.slice().sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"})).map(p=>({value:p.id,label:p.nome}))},
       {key:"atividadeSel",label:"Atividade",type:"select",required:true,dynamic:true,
         optionsFn:opcoesAtividade,
         help:"Escolha uma atividade já cadastrada no cronograma do projeto, ou \"Outros\" para digitar uma atividade nova."},
@@ -5545,7 +5593,7 @@ function formHoras(h){
         placeholder:"Digite o nome da atividade",
         help:"Será criada automaticamente no cronograma do projeto."},
       {key:"categoriaId",label:"Categoria da atividade",type:"select",required:true,
-        options:DB.data.categorias.map(c=>({value:c.id,label:c.nome}))},
+        options:DB.data.categorias.slice().sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"})).map(c=>({value:c.id,label:c.nome}))},
       {key:"horas",label:"Horas executadas",type:"number",required:true,min:0,step:"0.25",
         placeholder:"Ex.: 4,5"},
       {key:"descricao",label:"Observação",type:"textarea",full:true,
