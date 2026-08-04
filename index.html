@@ -1333,6 +1333,34 @@ function projetoSessaoValida(p){ return !!(p.sessaoId && getSessao(p.sessaoId));
 function haProjetosNaoClassificados(){
   return !!(DB.data && DB.data.projetos.some(p=>!projetoSessaoValida(p)));
 }
+// Monta as opções de um <select> de projetos agrupadas por sessão do
+// portfólio (as mesmas sessões do menu lateral: Captação, Gestão de
+// Projetos, Projetos Estruturantes, Eventos, Cursos, Rotinas), na mesma
+// ordem, com os projetos em ordem alfabética dentro de cada grupo.
+// Projetos sem sessão válida caem no grupo "Não classificados" ao final.
+// Cada opção carrega "group" — usado por fieldHtml()/refreshDynamic() em
+// openForm() para renderizar o <select> com <optgroup> por sessão.
+function opcoesProjetosAgrupadasPorSessao(lista){
+  lista=lista||(DB.data?DB.data.projetos:[]);
+  const porSessao={};
+  SESSOES.forEach(s=>porSessao[s.id]=[]);
+  const semSessao=[];
+  lista.forEach(p=>{
+    if(projetoSessaoValida(p)) porSessao[p.sessaoId].push(p);
+    else semSessao.push(p);
+  });
+  const alfabetica=(a,b)=>a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"});
+  const opts=[];
+  SESSOES.forEach(s=>{
+    porSessao[s.id].slice().sort(alfabetica)
+      .forEach(p=>opts.push({value:p.id,label:p.nome,group:s.label}));
+  });
+  if(semSessao.length){
+    semSessao.slice().sort(alfabetica)
+      .forEach(p=>opts.push({value:p.id,label:p.nome,group:"Não classificados"}));
+  }
+  return opts;
+}
 
 /* ============================================================
    PERFIL DE CADA SESSÃO
@@ -5580,6 +5608,26 @@ function confirmarComOpcao(titulo,texto,opcaoLabel,onOk){
    campos: {key,label,type,required,options,help,dynamic,optionsFn} */
 function openForm(cfg){
   const fields=cfg.fields, vals=Object.assign({},cfg.values||{});
+  // renderiza <option>s de um select; quando as opções carregam "group",
+  // agrupa em <optgroup> (uma optgroup por bloco de opções consecutivas
+  // com o mesmo grupo). "marcarSelecionado"=false omite o atributo
+  // "selected" (usado ao reconstruir um select dinâmico, cujo valor é
+  // reaplicado depois via sel.value).
+  function renderOptionsAgrupadas(opts,valorAtual,marcarSelecionado){
+    let html="", grupoAberto=null;
+    (opts||[]).forEach(o=>{
+      const g=o.group||null;
+      if(g!==grupoAberto){
+        if(grupoAberto!==null) html+="</optgroup>";
+        if(g!==null) html+=`<optgroup label="${esc(g)}">`;
+        grupoAberto=g;
+      }
+      const sel=(marcarSelecionado!==false)&&String(valorAtual)===String(o.value)?"selected":"";
+      html+=`<option value="${esc(o.value)}" ${sel}>${esc(o.label)}</option>`;
+    });
+    if(grupoAberto!==null) html+="</optgroup>";
+    return html;
+  }
   function fieldHtml(f){
     const v=(f.computed&&f.computeFn)?f.computeFn(vals):vals[f.key];
     const req=f.required?'<span class="req"> *</span>':"";
@@ -5589,7 +5637,7 @@ function openForm(cfg){
       const opts=(f.dynamic?f.optionsFn(vals):f.options)||[];
       input=`<select data-k="${f.key}" ${dis} ${f.dynamic?'data-dyn="1"':""}>
         <option value="">${f.placeholder||"Selecione…"}</option>
-        ${opts.map(o=>`<option value="${esc(o.value)}" ${String(v)===String(o.value)?"selected":""}>${esc(o.label)}</option>`).join("")}</select>`;
+        ${renderOptionsAgrupadas(opts,v)}</select>`;
     }else if(f.type==="checklist"){
       // multi-seleção via checkboxes (ex.: vincular um parceiro a vários projetos)
       const opts=(f.dynamic?f.optionsFn(vals):f.options)||[];
@@ -5728,7 +5776,7 @@ function openForm(cfg){
         const cur=sel.value;
         const opts=f.optionsFn(vals)||[];
         sel.innerHTML=`<option value="">${f.placeholder||"Selecione…"}</option>`+
-          opts.map(o=>`<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
+          renderOptionsAgrupadas(opts,null,false);
         if(opts.some(o=>String(o.value)===String(cur))) sel.value=cur;
         else vals[f.key]="";
       }
@@ -6022,7 +6070,7 @@ function formHoras(h){
         options:(fixedColab?[getColab(fixedColab)]:getInternos()).filter(Boolean).map(c=>({value:c.id,label:c.nome})),
         help:fixedColab?"Apontamento vinculado ao usuário logado.":""},
       {key:"projetoId",label:"Projeto",type:"select",required:true,
-        options:DB.data.projetos.slice().sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"})).map(p=>({value:p.id,label:p.nome}))},
+        options:opcoesProjetosAgrupadasPorSessao()},
       {key:"atividadeSel",label:"Atividade",type:"select",required:true,dynamic:true,
         optionsFn:opcoesAtividade,
         help:"Escolha uma atividade já cadastrada no cronograma do projeto, ou \"Outros\" para digitar uma atividade nova."},
