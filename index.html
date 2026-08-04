@@ -576,7 +576,7 @@ const DB = {
     const [
       profilesData, categoriasData, rubricasData, projetosData, atividadesData,
       horasData, financeiroData, stakeholdersData, riscosData, reunioesData, raciData,
-      documentosData
+      documentosData, mciData, mdsData
     ] = await Promise.all([
       sbFetch("profiles?select=*"),
       sbFetch("categorias?select=*"),
@@ -589,7 +589,9 @@ const DB = {
       sbFetch("riscos?select=*"),
       sbFetch("reunioes?select=*"),
       sbFetch("raci?select=*"),
-      sbFetch("documentos_projeto?select=*")
+      sbFetch("documentos_projeto?select=*"),
+      sbFetch("mci?select=*"),
+      sbFetch("mds?select=*")
     ]);
     console.log("[PMO] DB.load dados recebidos, montando estrutura...");
 
@@ -632,7 +634,9 @@ const DB = {
       projetos,
       atividades: toCamel(atividadesData||[]),
       horas: toCamel(horasData||[]),
-      financeiro: toCamel(financeiroData||[])
+      financeiro: toCamel(financeiroData||[]),
+      mci: toCamel(mciData||[]),
+      mds: toCamel(mdsData||[])
     };
     console.log("[PMO] DB.load concluído:", this.data.projetos.length, "projetos,", this.data.horas.length, "horas");
   },
@@ -739,6 +743,7 @@ function uid(){
 }
 function $(sel,ctx){ return (ctx||document).querySelector(sel); }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function normTxt(s){ return String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim(); }
 function fmtBRL(n){ n=Number(n)||0; return "R$ "+n.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtNum(n,d){ return (Number(n)||0).toLocaleString("pt-BR",{minimumFractionDigits:d||0,maximumFractionDigits:d||0}); }
 function fmtH(n){ return fmtNum(n,1)+" h"; }
@@ -817,6 +822,30 @@ function abrirLegendaCategorias(){
 }
 function getRubrica(id){ return DB.data.rubricas.find(r=>r.id===id); }
 function getAtividade(id){ return DB.data.atividades.find(a=>a.id===id); }
+
+/* ============================================================
+   MCI / MDS — Meta Crucialmente Importante / Medidas de Direção
+   Semanal (Painel Geral). Registros globais do portfólio (não
+   por projeto). "Ativo" = ainda não concluído; ao concluir, o
+   registro não é apagado — vira histórico (concluido=true).
+   ============================================================ */
+function mciAtiva(){
+  const lista=(DB.data.mci||[]).filter(m=>!m.concluido)
+    .sort((a,b)=>(a.criadoEm||"").localeCompare(b.criadoEm||""));
+  return lista.length? lista[lista.length-1] : null;
+}
+function mciHistorico(){
+  return (DB.data.mci||[]).filter(m=>m.concluido)
+    .sort((a,b)=>(b.concluidoEm||"").localeCompare(a.concluidoEm||""));
+}
+function mdsAtivas(){
+  return (DB.data.mds||[]).filter(m=>!m.concluido)
+    .sort((a,b)=>(a.criadoEm||"").localeCompare(b.criadoEm||""));
+}
+function mdsHistorico(){
+  return (DB.data.mds||[]).filter(m=>m.concluido)
+    .sort((a,b)=>(b.concluidoEm||"").localeCompare(a.concluidoEm||""));
+}
 function getReuniao(rid){
   for(const p of DB.data.projetos){
     const r=(p.reunioes||[]).find(x=>x.id===rid);
@@ -979,6 +1008,20 @@ function calcularAlertas(){
       titulo:`${lbl} próxima: ${f.descricao||nomeRubrica(f.rubricaId)}`,
       desc:`${nomeProjeto(f.projetoId)} · ${fmtBRL(f.valor)} · vence em ${d} dia(s)`,
       responsavel:resp, projetoId:f.projetoId, financeiroId:f.id});
+  });
+  // reuniões agendadas para os próximos 7 dias — para providências cabíveis
+  // (preparar pauta, revisar resumo automático, confirmar participantes etc.)
+  DB.data.projetos.forEach(p=>{
+    (p.reunioes||[]).forEach(r=>{
+      if(!r.data) return;
+      const d=daysBetween(hoje,r.data);
+      if(d<0 || d>7) return;
+      const parts=(r.participantes||[]).filter(Boolean).join(", ");
+      out.push({tipo:"reuniao",sev:d<=2?"warn":"info",dias:d,
+        titulo:`Reunião: ${r.titulo||"(sem título)"}`,
+        desc:`${p.nome} · ${d===0?"hoje":d===1?"amanhã":"em "+d+" dia(s)"}${r.hora?" às "+r.hora:""}${parts?" · Participantes: "+parts:""}`,
+        responsavel:null, projetoId:p.id, reuniaoId:r.id});
+    });
   });
   return out.sort((a,b)=>a.dias-b.dias);
 }
@@ -1455,6 +1498,12 @@ function renderNav(){
 // estava rolado bem mais abaixo.
 let _ultimaLocalizacao=null;
 function render(){
+  // guarda a posição de rolagem ANTES de recriar o DOM. Recriar o conteúdo
+  // de #view (v.innerHTML=...) pode fazer o navegador ajustar a rolagem
+  // sozinho (ex.: ao remover o elemento que estava focado); por isso a
+  // posição é restaurada explicitamente no final, em vez de simplesmente
+  // "não chamar" scrollTo(0,0).
+  const scrollAntes=window.scrollY;
   // reseta seleção de reunião quando não estamos na aba reuniões
   if(!(ST.view==="projeto" && ST.projTab==="reunioes")) ST.reuniaoId=null;
   renderNav();
@@ -1492,8 +1541,14 @@ function render(){
   else if(ST.view==="config") viewConfig(v);
 
   const localizacaoAtual=[ST.view,ST.projetoId,ST.sessaoAtiva,ST.projTab].join("|");
-  if(localizacaoAtual!==_ultimaLocalizacao) window.scrollTo(0,0);
+  const navegou=localizacaoAtual!==_ultimaLocalizacao;
   _ultimaLocalizacao=localizacaoAtual;
+  // navegação real (trocou de tela/projeto/aba) -> sobe ao topo;
+  // re-renderização no mesmo lugar (ex.: salvar uma edição) -> mantém
+  // exatamente onde o usuário estava, mesmo que o navegador tenha tentado
+  // ajustar a rolagem sozinho ao recriar o DOM.
+  if(navegou) window.scrollTo(0,0);
+  else if(window.scrollY!==scrollAntes) window.scrollTo(0,scrollAntes);
 }
 
 function renderUserWidget(){
@@ -1518,6 +1573,182 @@ function setTopAction(html,handler){
   const c=$("#topbar-actions");
   c.innerHTML=html;
   if(handler){ const b=c.querySelector("button"); if(b) b.onclick=handler; }
+}
+
+/* ---------- BLOCO MCI / MDS (renderizado no Painel Geral) ---------- */
+function mciMdsPainelHtml(){
+  const mci=mciAtiva();
+  const histMci=mciHistorico();
+  const mdsList=mdsAtivas();
+  const histMds=mdsHistorico();
+
+  const mciHtml = mci
+    ? `<textarea id="mci-texto" placeholder="Descreva a Meta Crucialmente Importante atual…"
+         style="width:100%;min-height:70px;padding:11px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13.5px;font-weight:600;resize:vertical">${esc(mci.texto||"")}</textarea>
+       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:8px">
+         <span class="hint">Definida em ${fmtDate(mci.criadoEm)}</span>
+         <div style="display:flex;gap:8px">
+           <button class="btn ghost sm" id="mci-hist">🕘 Histórico${histMci.length?` (${histMci.length})`:""}</button>
+           <button class="btn sm" id="mci-concluir">✓ Marcar como concluída</button>
+         </div>
+       </div>`
+    : `<div class="empty" style="padding:20px 10px">
+         <span class="ic">🎯</span>
+         <p>Nenhuma MCI ativa no momento.</p>
+         <div style="display:flex;gap:8px;justify-content:center;margin-top:8px;flex-wrap:wrap">
+           <button class="btn sm" id="mci-nova">+ Definir MCI</button>
+           ${histMci.length?`<button class="btn ghost sm" id="mci-hist">🕘 Histórico (${histMci.length})</button>`:""}
+         </div>
+       </div>`;
+
+  const mdsRows = mdsList.length ? mdsList.map(m=>`
+    <div class="mds-row" data-id="${m.id}" style="display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line-soft);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fafbfc">
+      <input type="checkbox" class="mds-check" data-id="${m.id}" title="Marcar como concluída" style="margin-top:10px;width:16px;height:16px;flex-shrink:0">
+      <div style="flex:1;min-width:0">
+        <textarea class="mds-texto" data-id="${m.id}" placeholder="Descreva a medida de direção semanal…"
+          style="width:100%;min-height:44px;padding:8px 9px;border:1px solid var(--line);border-radius:6px;font-family:inherit;font-size:13px;background:#fff;resize:vertical">${esc(m.texto||"")}</textarea>
+        <select class="mds-resp select" data-id="${m.id}" style="margin-top:6px;max-width:240px">
+          <option value="">Responsável…</option>
+          ${getInternos().map(cIt=>`<option value="${cIt.id}" ${String(m.responsavelId||"")===String(cIt.id)?"selected":""}>${esc(cIt.nome)}</option>`).join("")}
+        </select>
+      </div>
+      <button class="btn-icon del mds-rm" data-id="${m.id}" title="Remover">🗑</button>
+    </div>`).join("")
+    : `<div class="empty" style="padding:16px 10px"><span class="ic">📌</span><p>Nenhuma MDS ativa esta semana.</p></div>`;
+
+  const mdsHtml = `
+    ${mdsRows}
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;flex-wrap:wrap;gap:8px">
+      <button class="btn ghost sm" id="mds-hist">🕘 Histórico${histMds.length?` (${histMds.length})`:""}</button>
+      <button class="btn sm" id="mds-add">+ Nova MDS</button>
+    </div>`;
+
+  return `
+  <div class="grid g2" style="grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+    <div class="card">
+      <div class="card-head"><h3>🎯 MCI — Meta Crucialmente Importante</h3></div>
+      <div class="card-pad">${mciHtml}</div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>📍 MDS — Medidas de Direção Semanal</h3>
+        <span class="hint">Concluída → sai da lista e vai pro histórico</span></div>
+      <div class="card-pad">${mdsHtml}</div>
+    </div>
+  </div>`;
+}
+
+function abrirHistoricoMci(){
+  const lista=mciHistorico();
+  $("#modal-root").innerHTML=`
+  <div class="overlay"><div class="modal">
+    <div class="modal-head"><h3>🕘 Histórico de MCIs concluídas</h3><button class="btn-icon" id="hm-x">✕</button></div>
+    <div class="modal-body" style="max-height:60vh;overflow:auto">
+      ${lista.length? lista.map(m=>`
+        <div style="border-bottom:1px solid var(--line-soft);padding:10px 0">
+          <div style="font-weight:600">${esc(m.texto||"(sem descrição)")}</div>
+          <div class="hint">Concluída em ${fmtDate(m.concluidoEm)} · definida em ${fmtDate(m.criadoEm)}</div>
+        </div>`).join("") : `<div class="empty"><span class="ic">🎯</span><p>Nenhuma MCI concluída ainda.</p></div>`}
+    </div>
+    <div class="modal-foot"><button class="btn ghost" id="hm-close">Fechar</button></div>
+  </div></div>`;
+  $("#hm-x").onclick=closeModal; $("#hm-close").onclick=closeModal;
+}
+
+function abrirHistoricoMds(){
+  const lista=mdsHistorico();
+  $("#modal-root").innerHTML=`
+  <div class="overlay"><div class="modal">
+    <div class="modal-head"><h3>🕘 Histórico de MDS concluídas</h3><button class="btn-icon" id="hd-x">✕</button></div>
+    <div class="modal-body" style="max-height:60vh;overflow:auto">
+      ${lista.length? lista.map(m=>{
+        const resp=getColab(m.responsavelId);
+        return `<div style="border-bottom:1px solid var(--line-soft);padding:10px 0">
+          <div style="font-weight:600">${esc(m.texto||"(sem descrição)")}</div>
+          <div class="hint">Responsável: ${resp?esc(resp.nome):"—"} · concluída em ${fmtDate(m.concluidoEm)}</div>
+        </div>`;
+      }).join("") : `<div class="empty"><span class="ic">📍</span><p>Nenhuma MDS concluída ainda.</p></div>`}
+    </div>
+    <div class="modal-foot"><button class="btn ghost" id="hd-close">Fechar</button></div>
+  </div></div>`;
+  $("#hd-x").onclick=closeModal; $("#hd-close").onclick=closeModal;
+}
+
+function wirePainelMciMds(v){
+  const mci=mciAtiva();
+  if($("#mci-nova")) $("#mci-nova").onclick=async()=>{
+    const novo={id:uid(), texto:"", criadoEm:todayStr(), concluido:false, concluidoEm:null};
+    DB.data.mci.push(novo);
+    try{ await sbInsert("mci", toSnake(novo)); }
+    catch(e){ toast("Erro ao criar MCI: "+e.message); }
+    render();
+  };
+  if($("#mci-texto")) $("#mci-texto").onblur=async(e)=>{
+    if(!mci) return;
+    mci.texto=e.target.value;
+    try{ await sbUpdate("mci", mci.id, {texto:mci.texto}); }
+    catch(err){ toast("Erro ao salvar MCI: "+err.message); }
+  };
+  if($("#mci-concluir")) $("#mci-concluir").onclick=()=>{
+    if(!mci) return;
+    confirmar("Concluir esta MCI?","Ela será movida para o histórico como alcançada.", async()=>{
+      mci.texto=$("#mci-texto")? $("#mci-texto").value : mci.texto;
+      mci.concluido=true; mci.concluidoEm=todayStr();
+      try{
+        await sbUpdate("mci", mci.id, {texto:mci.texto, concluido:true, concluidoEm:mci.concluidoEm});
+        toast("MCI concluída! 🎉");
+      }catch(err){ toast("Erro ao concluir MCI: "+err.message); }
+      render();
+    });
+  };
+  if($("#mci-hist")) $("#mci-hist").onclick=abrirHistoricoMci;
+
+  if($("#mds-add")) $("#mds-add").onclick=async()=>{
+    const novo={id:uid(), texto:"", responsavelId:null, criadoEm:todayStr(), concluido:false, concluidoEm:null};
+    DB.data.mds.push(novo);
+    try{ await sbInsert("mds", toSnake(novo)); }
+    catch(e){ toast("Erro ao criar MDS: "+e.message); }
+    render();
+  };
+  if($("#mds-hist")) $("#mds-hist").onclick=abrirHistoricoMds;
+  v.querySelectorAll(".mds-texto").forEach(t=>{
+    t.onblur=async()=>{
+      const item=DB.data.mds.find(m=>m.id===t.dataset.id); if(!item) return;
+      item.texto=t.value;
+      try{ await sbUpdate("mds", item.id, {texto:item.texto}); }
+      catch(e){ toast("Erro ao salvar MDS: "+e.message); }
+    };
+  });
+  v.querySelectorAll(".mds-resp").forEach(s=>{
+    s.onchange=async()=>{
+      const item=DB.data.mds.find(m=>m.id===s.dataset.id); if(!item) return;
+      item.responsavelId=s.value||null;
+      try{ await sbUpdate("mds", item.id, {responsavelId:item.responsavelId}); }
+      catch(e){ toast("Erro ao salvar responsável: "+e.message); }
+    };
+  });
+  v.querySelectorAll(".mds-check").forEach(chk=>{
+    chk.onchange=async()=>{
+      if(!chk.checked) return;
+      const item=DB.data.mds.find(m=>m.id===chk.dataset.id); if(!item) return;
+      item.concluido=true; item.concluidoEm=todayStr();
+      try{
+        await sbUpdate("mds", item.id, {concluido:true, concluidoEm:item.concluidoEm});
+        toast("MDS concluída e arquivada no histórico.");
+      }catch(e){ toast("Erro ao concluir MDS: "+e.message); }
+      render();
+    };
+  });
+  v.querySelectorAll(".mds-rm").forEach(b=>{
+    b.onclick=()=>{
+      confirmar("Remover esta MDS?","Essa ação não pode ser desfeita (não vai para o histórico).", async()=>{
+        const id=b.dataset.id;
+        DB.data.mds=DB.data.mds.filter(m=>m.id!==id);
+        try{ await sbDelete("mds", id); }
+        catch(e){ toast("Erro ao remover: "+e.message); }
+        render();
+      });
+    };
+  });
 }
 
 /* ============================================================
@@ -1573,8 +1804,8 @@ function viewPainel(v){
     <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--gold)"></span>Margem média</div>
       <div class="val">${margemMedia==null?"—":fmtNum(margemMedia,1)+"%"}</div>
       <div class="sub">Despesas: ${fmtBRL(despesaTotal)}</div></div>
-    <div class="card kpi"><div class="lbl"><span class="dot" style="background:${alertas.length?"var(--danger)":"var(--ok)"}"></span>Alertas de prazo</div>
-      <div class="val">${alertas.length}</div><div class="sub">${alertas.filter(a=>a.sev==="danger").length} vencido(s)</div></div>
+    <div class="card kpi"><div class="lbl"><span class="dot" style="background:${alertas.some(a=>a.tipo!=="reuniao")?"var(--danger)":"var(--ok)"}"></span>Alertas de prazo</div>
+      <div class="val">${alertas.filter(a=>a.tipo!=="reuniao").length}</div><div class="sub">${alertas.filter(a=>a.sev==="danger").length} vencido(s)</div></div>
   </div>`;
 
   /* dados dos gráficos por período */
@@ -1598,14 +1829,21 @@ function viewPainel(v){
   // agora mostra todos os alertas encontrados, com rolagem interna quando
   // a lista fica longa, para não estourar o layout da página.
   const alertasHtml=alertasFiltrados.length? alertasFiltrados.map(a=>{
-    const col=a.sev==="danger"?"var(--danger)":"var(--warn)";
-    const respHtml=a.responsavel
-      ? `<div class="alert-resp"><span class="rl">Responsável:</span> <b>${esc(a.responsavel)}</b></div>`
-      : `<div class="alert-resp sem"><span class="rl">Responsável:</span> <i>não atribuído</i></div>`;
+    const col=a.sev==="danger"?"var(--danger)":a.sev==="info"?"var(--info)":"var(--warn)";
+    const respHtml=a.tipo==="reuniao"
+      ? ""
+      : a.responsavel
+        ? `<div class="alert-resp"><span class="rl">Responsável:</span> <b>${esc(a.responsavel)}</b></div>`
+        : `<div class="alert-resp sem"><span class="rl">Responsável:</span> <i>não atribuído</i></div>`;
     // ações rápidas: permitem concluir/marcar como realizado ou editar o
     // item (atividade/lançamento) direto a partir do alerta, sem precisar
-    // navegar até o projeto e procurar o item na lista.
-    const acoesHtml=isGestor()? (
+    // navegar até o projeto e procurar o item na lista. Para reuniões, um
+    // atalho direto para a tela da reunião (preparar pauta/resumo).
+    const acoesHtml=a.tipo==="reuniao"
+      ? `<div class="alert-acoes">
+            <button class="btn-icon" data-alerta-ir-reuniao="${a.reuniaoId}" data-proj="${a.projetoId}" title="Ir para a reunião">↗</button>
+          </div>`
+      : isGestor()? (
       a.tipo==="fisico"
         ? `<div class="alert-acoes">
             <button class="btn-icon" data-alerta-concluir-ativ="${a.atividadeId}" title="Marcar atividade como concluída">✓</button>
@@ -1620,9 +1858,9 @@ function viewPainel(v){
       <div class="at"><div class="t">${esc(a.titulo)}</div>
         <div class="d">${esc(a.desc)}</div>
         ${respHtml}</div>
-      <span class="badge ${a.sev==="danger"?"b-danger":"b-warn"}">${a.tipo==="fisico"?"Físico":"Financeiro"}</span>
+      <span class="badge ${a.sev==="danger"?"b-danger":a.sev==="info"?"b-info":"b-warn"}">${a.tipo==="fisico"?"Físico":a.tipo==="financeiro"?"Financeiro":"Reunião"}</span>
       ${acoesHtml}</div>`;
-  }).join("") : `<div class="empty" style="padding:26px"><span class="ic">✓</span><p>${alertas.length?"Nenhum alerta para o filtro selecionado.":"Nenhum prazo crítico nos próximos 7 dias."}</p></div>`;
+  }).join("") : `<div class="empty" style="padding:26px"><span class="ic">✓</span><p>${alertas.length?"Nenhum alerta para o filtro selecionado.":"Nenhum prazo crítico nem reunião nos próximos 7 dias."}</p></div>`;
 
   const alertasFiltroHtml=`
     <div class="field-inline">Projeto
@@ -1643,14 +1881,16 @@ function viewPainel(v){
   <div style="height:18px"></div>
   <div class="card" style="margin-bottom:18px">
     <div class="card-head" style="flex-wrap:wrap;gap:10px">
-      <h3>⚠ Alertas de prazos — físicos e financeiros</h3>
+      <h3>⚠ Alertas de prazos — físicos-financeiros e reuniões</h3>
       <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-        <span class="hint">${alertasFiltrados.length} de ${alertas.length} alerta(s) · próximos 7 dias e itens vencidos</span>
+        <span class="hint">${alertasFiltrados.length} de ${alertas.length} alerta(s) · próximos 7 dias, itens vencidos e reuniões agendadas</span>
         ${alertasFiltroHtml}
       </div>
     </div>
     <div class="card-pad" style="${alertasFiltrados.length>7?"max-height:520px;overflow-y:auto":""}">${alertasHtml}</div>
   </div>
+
+  ${mciMdsPainelHtml()}
 
   <div class="toolbar">
     <span class="section-title" style="margin:0">Dashboards de horas</span>
@@ -1683,6 +1923,7 @@ function viewPainel(v){
   </div>`;
 
   if(isGestor()) setTopAction(`<button class="btn">+ Novo projeto</button>`,()=>formProjeto());
+  wirePainelMciMds(v);
   $("#painel-alerta-proj").onchange=e=>{ ST.painelAlertaProjeto=e.target.value; render(); };
   $("#painel-alerta-resp").onchange=e=>{ ST.painelAlertaResp=e.target.value; render(); };
   $("#dash-year").onchange=e=>{ ST.dashYear=e.target.value; render(); };
@@ -1702,6 +1943,12 @@ function viewPainel(v){
   });
   v.querySelectorAll("[data-alerta-editar-fin]").forEach(b=>{
     b.onclick=()=>formFinanceiro(b.dataset.proj, DB.data.financeiro.find(x=>x.id===b.dataset.alertaEditarFin));
+  });
+  v.querySelectorAll("[data-alerta-ir-reuniao]").forEach(b=>{
+    b.onclick=()=>{
+      ST.view="projeto"; ST.projetoId=b.dataset.proj; ST.projTab="reunioes";
+      ST.reuniaoId=b.dataset.alertaIrReuniao; render();
+    };
   });
 }
 
@@ -3073,6 +3320,63 @@ function miniCalendar(reunioes,mk){
   return h;
 }
 
+/* ---- RESUMO AUTOMÁTICO DO PERÍODO (entre a última reunião e a próxima) ----
+   "Atividades realizadas": vem do apontamento de horas (campo "descrição"
+   de cada lançamento) no período. "Próximas atividades": vem tanto das
+   Saídas e entregas combinadas na ata da reunião anterior (que ainda não
+   viraram atividade concluída no cronograma) quanto das atividades do
+   cronograma do projeto com janela prevista dentro do período. */
+function ultimaReuniaoAntesDe(p,dataRef){
+  return (p.reunioes||[])
+    .filter(r=>r.data && r.data<dataRef)
+    .sort((a,b)=>(b.data||"").localeCompare(a.data||""))[0] || null;
+}
+function gerarResumoAutomatico(p,dataAte){
+  const anterior=ultimaReuniaoAntesDe(p,dataAte);
+  const dataDe=(anterior&&anterior.data) ? anterior.data : (p.dataInicio||null);
+
+  /* --- Atividades realizadas: apontamentos de horas no período --- */
+  const horasPeriodo=DB.data.horas.filter(h=>h.projetoId===p.id && h.data &&
+    (!dataDe || h.data>=dataDe) && h.data<=dataAte);
+  const porAtividade={};
+  horasPeriodo.forEach(h=>{
+    const key=h.atividadeId||"__sem_atividade__";
+    porAtividade[key]=porAtividade[key]||{horas:0,descricoes:new Set()};
+    porAtividade[key].horas+=(+h.horas||0);
+    if(h.descricao && h.descricao.trim()) porAtividade[key].descricoes.add(h.descricao.trim());
+  });
+  const realizadas=Object.keys(porAtividade).map(key=>{
+    const ativ=key!=="__sem_atividade__"?getAtividade(key):null;
+    const info=porAtividade[key];
+    const nome=ativ?ativ.nome:"Apontamentos diversos";
+    const descs=[...info.descricoes];
+    return `${nome} (${fmtNum(info.horas,1)}h)${descs.length?": "+descs.join("; "):""}`;
+  }).sort((a,b)=>a.localeCompare(b,"pt-BR",{sensitivity:"base"}));
+
+  /* --- Próximas atividades: entregas pendentes da ata anterior --- */
+  const proximas=[];
+  if(anterior && anterior.ata && Array.isArray(anterior.ata.saidas)){
+    anterior.ata.saidas.forEach(s=>{
+      const ativ=s.atividadeId?getAtividade(s.atividadeId):null;
+      const concluida=ativ && (ativ.status==="Concluída" || (+ativ.progresso||0)>=100);
+      if(!concluida && s.descricao && s.descricao.trim()){
+        proximas.push(`${s.descricao.trim()}${s.responsavel?" — Responsável: "+s.responsavel:""}${s.dataEntrega?" (prevista para "+fmtDate(s.dataEntrega)+")":""}`);
+      }
+    });
+  }
+  /* --- Próximas atividades: cronograma planejado dentro do período --- */
+  const ativsCronograma=DB.data.atividades.filter(a=>a.projetoId===p.id &&
+    a.status!=="Concluída" && a.status!=="Cancelada" &&
+    a.dataInicioPrev && a.dataInicioPrev<=dataAte &&
+    (!a.dataFimPrev || !dataDe || a.dataFimPrev>=dataDe));
+  ativsCronograma.forEach(a=>{
+    const resp=a.responsavelId?getColab(a.responsavelId):null;
+    proximas.push(`${a.nome} — previsto de ${fmtDate(a.dataInicioPrev)} a ${a.dataFimPrev?fmtDate(a.dataFimPrev):"—"}${resp?" (Responsável: "+resp.nome+")":""}`);
+  });
+
+  return {de:dataDe, ate:dataAte, realizadas, proximas:[...new Set(proximas)]};
+}
+
 /* ---- FORMULÁRIO de NOVA REUNIÃO ---- */
 function formReuniao(p){
   openForm({
@@ -3090,15 +3394,23 @@ function formReuniao(p){
     ],
     onSave:async(v)=>{
       const parts=String(v.participantes||"").split(/[,\n;]/).map(s=>s.trim()).filter(Boolean);
+      // resumo automático: atividades realizadas (apontamento de horas) e
+      // próximas atividades (saídas pendentes da reunião anterior +
+      // cronograma), cobrindo o período entre a última reunião e esta.
+      const resumo=gerarResumoAutomatico(p, v.data);
       const r={
         id:uid(), projetoId:p.id, data:v.data, hora:v.hora||"", titulo:v.titulo,
         participantes:parts, transcricao:"",
         ata:{objetivo:"",topicos:[],saidas:[]},
+        resumoRealizadas:resumo.realizadas,
+        resumoProximas:resumo.proximas,
+        resumoDe:resumo.de, resumoAte:resumo.ate,
+        anotacoes:"",
         criadaEm:todayStr()
       };
       p.reunioes.push(r);
       await sbInsert("reunioes", toSnake(r));
-      toast("Reunião criada.");
+      toast("Reunião criada. Resumo do período gerado automaticamente.");
       ST.reuniaoId=r.id; render();
     }
   });
@@ -3110,6 +3422,40 @@ function reuniaoDetalhe(c,p,r){
   r.ata.topicos=r.ata.topicos||[];
   r.ata.saidas=r.ata.saidas||[];
   r.participantes=r.participantes||[];
+  r.resumoRealizadas=r.resumoRealizadas||[];
+  r.resumoProximas=r.resumoProximas||[];
+  r.anotacoes=r.anotacoes||"";
+
+  const listaEditavelHtml=(itens,cls)=> itens.length? itens.map((txt,i)=>`
+    <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px">
+      <textarea class="${cls}" data-i="${i}" style="flex:1;min-height:38px;padding:7px 9px;border:1px solid var(--line);
+        border-radius:6px;font-family:inherit;font-size:12.5px;background:#fff;resize:vertical">${esc(txt)}</textarea>
+      <button class="btn-icon del ${cls}-rm" data-i="${i}" title="Remover">🗑</button>
+    </div>`).join("")
+    : `<div style="color:var(--ink-faint);font-size:12px;padding:4px 0">Nada encontrado automaticamente para o período.</div>`;
+
+  const resumoHtml=`
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-head" style="flex-wrap:wrap;gap:8px">
+      <h3>📋 Resumo do período${r.resumoDe?` — ${fmtDate(r.resumoDe)} a ${fmtDate(r.resumoAte||r.data)}`:""}</h3>
+      <button class="btn ghost sm" id="reu-resumo-regenerar">🔄 Recalcular a partir dos dados atuais</button>
+    </div>
+    <div class="card-pad">
+      <div class="form-grid two">
+        <div>
+          <label style="font-weight:600;font-size:12.5px;display:block;margin-bottom:7px">✅ Atividades realizadas no período</label>
+          <div id="resumo-realizadas-list">${listaEditavelHtml(r.resumoRealizadas,"res-real")}</div>
+          <button class="btn ghost sm" id="add-res-real" style="margin-top:4px">+ Item</button>
+        </div>
+        <div>
+          <label style="font-weight:600;font-size:12.5px;display:block;margin-bottom:7px">➡️ Próximas atividades (até esta reunião)</label>
+          <div id="resumo-proximas-list">${listaEditavelHtml(r.resumoProximas,"res-prox")}</div>
+          <button class="btn ghost sm" id="add-res-prox" style="margin-top:4px">+ Item</button>
+        </div>
+      </div>
+      <span class="help" style="display:block;margin-top:10px">Gerado automaticamente a partir do apontamento de horas, das saídas/entregas da reunião anterior e do cronograma. Edite livremente antes da reunião.</span>
+    </div>
+  </div>`;
 
   const topicosHtml=r.ata.topicos.length? r.ata.topicos.map((t,i)=>`
     <div style="border:1px solid var(--line-soft);border-radius:8px;padding:11px 13px;margin-bottom:8px;background:#fafbfc">
@@ -3122,12 +3468,14 @@ function reuniaoDetalhe(c,p,r){
     </div>`).join("")
     :`<div style="color:var(--ink-faint);font-size:12.5px;padding:8px 0">Nenhum tópico ainda. Adicione manualmente ou gere a ata por IA.</div>`;
 
+  const pessoasSaidaDatalist=[...getInternos(),...getParceirosDoProjeto(p)]
+    .map(co=>co.nome).sort((a,b)=>a.localeCompare(b,"pt-BR",{sensitivity:"base"}));
   const saidasHtml=r.ata.saidas.length? r.ata.saidas.map((s,i)=>{
     const jaCriada=!!s.atividadeId && DB.data.atividades.find(a=>a.id===s.atividadeId);
     return `<tr>
-      <td><input class="sai-desc" data-i="${i}" value="${esc(s.descricao||"")}" style="width:100%;padding:5px 7px;border:1px solid var(--line);border-radius:5px"></td>
-      <td><input class="sai-resp" data-i="${i}" value="${esc(s.responsavel||"")}" placeholder="Nome" style="width:130px;padding:5px 7px;border:1px solid var(--line);border-radius:5px"></td>
-      <td><input class="sai-data" type="date" data-i="${i}" value="${esc(s.dataEntrega||"")}" style="width:140px;padding:5px 7px;border:1px solid var(--line);border-radius:5px"></td>
+      <td><input class="sai-desc" data-i="${i}" value="${esc(s.descricao||"")}" style="width:100%;min-width:280px;padding:7px 9px;border:1px solid var(--line);border-radius:5px"></td>
+      <td><input class="sai-resp" data-i="${i}" value="${esc(s.responsavel||"")}" placeholder="Nome" list="pessoas-saida" style="width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:5px"></td>
+      <td><input class="sai-data" type="date" data-i="${i}" value="${esc(s.dataEntrega||"")}" style="width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:5px"></td>
       <td class="actions" style="white-space:nowrap">
         ${jaCriada?`<span class="badge b-ok" title="Atividade existe no cronograma">✓ no cronograma</span>`
                    :`<button class="btn ghost sm" data-mksai="${i}" title="Criar atividade no cronograma">→ Cronograma</button>`}
@@ -3156,14 +3504,24 @@ function reuniaoDetalhe(c,p,r){
     </div>
   </div>
 
+  ${resumoHtml}
+
   <div class="grid g2" style="grid-template-columns:1fr 1fr;gap:18px">
     <div>
+      <div class="card" style="margin-bottom:14px">
+        <div class="card-head"><h3>🗒️ Anotações da reunião</h3>
+          <span class="hint">Use ao vivo durante a reunião</span></div>
+        <div class="card-pad">
+          <textarea id="reu-anotacoes" placeholder="Anote aqui pontos-chave durante a reunião. Este conteúdo é levado em conta ao gerar a ata por IA."
+            style="width:100%;min-height:110px;padding:11px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;line-height:1.5;resize:vertical">${esc(r.anotacoes||"")}</textarea>
+        </div>
+      </div>
       <div class="card">
         <div class="card-head"><h3>📝 Transcrição da reunião</h3>
           <span class="hint">Cole o texto da gravação aqui</span></div>
         <div class="card-pad">
           <textarea id="reu-transc" placeholder="Cole aqui a transcrição da reunião (texto da gravação ou notas brutas)…"
-            style="width:100%;min-height:340px;padding:11px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;line-height:1.55;resize:vertical">${esc(r.transcricao||"")}</textarea>
+            style="width:100%;min-height:260px;padding:11px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;line-height:1.55;resize:vertical">${esc(r.transcricao||"")}</textarea>
           <div style="margin-top:10px;font-size:12px;color:var(--ink-faint)">
             Depois de colar, clique em <b>✨ Gerar ata com IA</b> no topo para estruturar automaticamente.
           </div>
@@ -3185,15 +3543,17 @@ function reuniaoDetalhe(c,p,r){
           <button class="btn ghost sm" id="add-topico">+ Tópico</button></div>
         <div class="card-pad" id="topicos-list">${topicosHtml}</div>
       </div>
-
-      <div class="card">
-        <div class="card-head"><h3>📤 Saídas e entregas</h3>
-          <button class="btn ghost sm" id="add-saida">+ Entrega</button></div>
-        <div class="table-wrap"><table><thead><tr>
-          <th>Descrição da entrega</th><th>Responsável</th><th>Data prevista</th><th></th>
-        </tr></thead><tbody id="saidas-tbody">${saidasHtml}</tbody></table></div>
-      </div>
     </div>
+  </div>
+
+  <div style="height:18px"></div>
+  <div class="card">
+    <div class="card-head"><h3>📤 Saídas e entregas</h3>
+      <button class="btn ghost sm" id="add-saida">+ Entrega</button></div>
+    <datalist id="pessoas-saida">${pessoasSaidaDatalist.map(n=>`<option value="${esc(n)}">`).join("")}</datalist>
+    <div class="table-wrap"><table><thead><tr>
+      <th style="min-width:320px">Descrição da entrega</th><th style="width:170px">Responsável</th><th style="width:150px">Data prevista</th><th style="width:170px"></th>
+    </tr></thead><tbody id="saidas-tbody">${saidasHtml}</tbody></table></div>
   </div>`;
 
   /* helpers para coletar e salvar */
@@ -3203,7 +3563,11 @@ function reuniaoDetalhe(c,p,r){
     r.titulo=$("#reu-titulo").value.trim();
     r.participantes=$("#reu-parts").value.split(/[,\n;]/).map(s=>s.trim()).filter(Boolean);
     r.transcricao=$("#reu-transc").value;
+    r.anotacoes=$("#reu-anotacoes")? $("#reu-anotacoes").value : r.anotacoes;
     r.ata.objetivo=$("#reu-obj").value;
+    // resumo automático (editável)
+    c.querySelectorAll(".res-real").forEach(t=>{ const i=+t.dataset.i; if(r.resumoRealizadas[i]!==undefined) r.resumoRealizadas[i]=t.value; });
+    c.querySelectorAll(".res-prox").forEach(t=>{ const i=+t.dataset.i; if(r.resumoProximas[i]!==undefined) r.resumoProximas[i]=t.value; });
     // tópicos
     c.querySelectorAll(".reu-tema").forEach(inp=>{
       const i=+inp.dataset.i; if(r.ata.topicos[i]) r.ata.topicos[i].tema=inp.value;
@@ -3225,10 +3589,12 @@ function reuniaoDetalhe(c,p,r){
 
   /* salva a reunião inteira (ata é jsonb, então um update já basta) */
   async function persistirReuniao(){
-    await sbUpdate("reunioes", r.id, {
+    await sbUpdate("reunioes", r.id, toSnake({
       data: r.data, hora: r.hora, titulo: r.titulo,
-      participantes: r.participantes, transcricao: r.transcricao, ata: r.ata
-    });
+      participantes: r.participantes, transcricao: r.transcricao, ata: r.ata,
+      anotacoes: r.anotacoes, resumoRealizadas: r.resumoRealizadas, resumoProximas: r.resumoProximas,
+      resumoDe: r.resumoDe, resumoAte: r.resumoAte
+    }));
   }
 
   $("#reu-back").onclick=async()=>{ coletarBasico(); await persistirReuniao(); ST.reuniaoId=null; render(); };
@@ -3237,6 +3603,23 @@ function reuniaoDetalhe(c,p,r){
   $("#add-topico").onclick=async()=>{ coletarBasico(); r.ata.topicos.push({tema:"",notas:""}); await persistirReuniao(); reuniaoDetalhe(c,p,r); };
   $("#add-saida").onclick=async()=>{ coletarBasico(); r.ata.saidas.push({descricao:"",responsavel:"",dataEntrega:""}); await persistirReuniao(); reuniaoDetalhe(c,p,r); };
   $("#reu-ia").onclick=async()=>{ coletarBasico(); await persistirReuniao(); gerarAtaIA(p,r); };
+  $("#add-res-real").onclick=async()=>{ coletarBasico(); r.resumoRealizadas.push(""); await persistirReuniao(); reuniaoDetalhe(c,p,r); };
+  $("#add-res-prox").onclick=async()=>{ coletarBasico(); r.resumoProximas.push(""); await persistirReuniao(); reuniaoDetalhe(c,p,r); };
+  c.querySelectorAll(".res-real-rm").forEach(b=>b.onclick=async()=>{
+    coletarBasico(); r.resumoRealizadas.splice(+b.dataset.i,1); await persistirReuniao(); reuniaoDetalhe(c,p,r);
+  });
+  c.querySelectorAll(".res-prox-rm").forEach(b=>b.onclick=async()=>{
+    coletarBasico(); r.resumoProximas.splice(+b.dataset.i,1); await persistirReuniao(); reuniaoDetalhe(c,p,r);
+  });
+  $("#reu-resumo-regenerar").onclick=async()=>{
+    coletarBasico();
+    const resumo=gerarResumoAutomatico(p, r.data||todayStr());
+    r.resumoRealizadas=resumo.realizadas; r.resumoProximas=resumo.proximas;
+    r.resumoDe=resumo.de; r.resumoAte=resumo.ate;
+    await persistirReuniao();
+    toast("Resumo recalculado a partir dos dados atuais.");
+    reuniaoDetalhe(c,p,r);
+  };
   c.querySelectorAll("[data-rmtop]").forEach(b=>b.onclick=async()=>{
     coletarBasico(); r.ata.topicos.splice(+b.dataset.rmtop,1); await persistirReuniao(); reuniaoDetalhe(c,p,r);
   });
@@ -3257,10 +3640,17 @@ function reuniaoDetalhe(c,p,r){
       dataFimPrev:s.dataEntrega||null,
       progresso:0, status:"Não iniciada"
     };
-    // tenta mapear responsavel para colaborador interno
+    // tenta mapear o nome digitado em "Responsável" para uma pessoa cadastrada
+    // (colaborador interno ou parceiro vinculado a este projeto) e grava em
+    // responsaveisIds — é esse campo (não o antigo "responsavelId") que o
+    // cronograma, a RACI e a ocupação da equipe realmente usam para exibir
+    // e calcular o responsável de uma atividade.
     if(s.responsavel){
-      const match=getInternos().find(c=>c.nome.toLowerCase().includes(s.responsavel.toLowerCase())||s.responsavel.toLowerCase().includes(c.nome.toLowerCase()));
-      if(match) novaAtiv.responsavelId=match.id;
+      const alvo=normTxt(s.responsavel);
+      const pessoas=[...getInternos(),...getParceirosDoProjeto(p)];
+      const match=pessoas.find(c=>normTxt(c.nome)===alvo)
+        || pessoas.find(c=>normTxt(c.nome).includes(alvo)||alvo.includes(normTxt(c.nome)));
+      if(match) novaAtiv.responsaveisIds=[match.id];
     }
     DB.data.atividades.push(novaAtiv);
     s.atividadeId=novaAtiv.id;
@@ -3273,7 +3663,23 @@ function reuniaoDetalhe(c,p,r){
 /* ---- GERAR ATA COM IA (via prompt copiável) ---- */
 function gerarAtaIA(p,r){
   const transc=(r.transcricao||"").trim();
-  const prompt=`Você é um assistente de gestão de projetos. Receberá a TRANSCRIÇÃO de uma reunião e deve produzir uma ata estruturada em JSON.
+  const anotacoes=(r.anotacoes||"").trim();
+  const realizadas=(r.resumoRealizadas||[]).filter(Boolean);
+  const proximas=(r.resumoProximas||[]).filter(Boolean);
+  const contextoResumo=(realizadas.length||proximas.length)? `
+CONTEXTO — RESUMO DO PERÍODO (gerado automaticamente pelo sistema, use como pano de fundo, não copie literalmente):
+Atividades realizadas desde a última reunião:
+${realizadas.length? realizadas.map(x=>"- "+x).join("\n") : "- (nenhuma registrada)"}
+Próximas atividades previstas até esta reunião:
+${proximas.length? proximas.map(x=>"- "+x).join("\n") : "- (nenhuma registrada)"}
+` : "";
+  const contextoAnotacoes=anotacoes? `
+CONTEXTO — ANOTAÇÕES FEITAS DURANTE A REUNIÃO (use como fonte adicional de informação, com a mesma prioridade da transcrição):
+"""
+${anotacoes}
+"""
+` : "";
+  const prompt=`Você é um assistente de gestão de projetos. Receberá a TRANSCRIÇÃO de uma reunião (e, quando disponível, anotações feitas ao vivo e um resumo automático do período) e deve produzir uma ata estruturada em JSON.
 
 Retorne APENAS um objeto JSON válido, sem comentários, sem texto antes ou depois, sem markdown ou cercas de código. O JSON deve seguir EXATAMENTE este formato:
 
@@ -3291,9 +3697,9 @@ Regras:
 - Identifique de 3 a 8 tópicos relevantes discutidos.
 - Liste TODAS as entregas/ações acordadas na reunião, com responsável (se mencionado) e data (se mencionada).
 - Use o formato AAAA-MM-DD para datas. Se não houver data definida, use "".
-- Seja objetivo e fiel ao conteúdo da transcrição. Não invente informações.
+- Seja objetivo e fiel ao conteúdo da transcrição e das anotações. Não invente informações.
 - Idioma: português do Brasil.
-
+${contextoResumo}${contextoAnotacoes}
 TRANSCRIÇÃO:
 """
 ${transc||"(cole aqui a transcrição se ainda não estiver na reunião)"}
@@ -3354,7 +3760,13 @@ ${transc||"(cole aqui a transcrição se ainda não estiver na reunião)"}
         descricao:String(s.descricao||""),
         responsavel:String(s.responsavel||""),
         dataEntrega:String(s.dataEntrega||"")
-      })):[]
+      })):[],
+      // atribui à ata, no momento em que é gerada por IA, as anotações feitas
+      // ao vivo e o resumo do período usado como contexto — fica registrado
+      // permanentemente junto da ata, mesmo que o campo de anotações mude depois.
+      anotacoes: r.anotacoes||"",
+      resumoRealizadas: (r.resumoRealizadas||[]).filter(Boolean),
+      resumoProximas: (r.resumoProximas||[]).filter(Boolean)
     };
     r.ata=ata;
     await sbUpdate("reunioes", r.id, { ata });
@@ -4428,6 +4840,11 @@ function gerarHtmlAta(p,r){
          <td>${esc(s.responsavel||"—")}</td>
          <td>${s.dataEntrega?fmtDate(s.dataEntrega):"—"}</td></tr>`).join("")}</tbody></table>`
     : "<p style='color:#8a98a6'>Nenhuma entrega registrada.</p>";
+  const resumoRealizadasHtml=(ata.resumoRealizadas||[]).length
+    ? "<ul>"+ata.resumoRealizadas.map(x=>`<li>${esc(x)}</li>`).join("")+"</ul>" : "";
+  const resumoProximasHtml=(ata.resumoProximas||[]).length
+    ? "<ul>"+ata.resumoProximas.map(x=>`<li>${esc(x)}</li>`).join("")+"</ul>" : "";
+  const anotacoesHtml=ata.anotacoes? `<p>${esc(ata.anotacoes).replace(/\n/g,"<br>")}</p>` : "";
   const style=`<style>
   .ata-doc{max-width:780px;margin:0 auto;font-family:'Inter',system-ui,-apple-system,sans-serif;color:#2a3744;line-height:1.55;padding:18px}
   .ata-doc h1{color:#1f6f6b;margin:0 0 4px;font-size:24px;font-weight:700}
@@ -4455,8 +4872,12 @@ function gerarHtmlAta(p,r){
       <dt>Participantes:</dt><dd>${partsHtml}</dd>
     </dl>
     <h2>Objetivo da reunião</h2>${objHtml}
+    ${(resumoRealizadasHtml||resumoProximasHtml)?`<h2>Resumo do período</h2>
+    ${resumoRealizadasHtml?`<p><b>Atividades realizadas:</b></p>${resumoRealizadasHtml}`:""}
+    ${resumoProximasHtml?`<p><b>Próximas atividades:</b></p>${resumoProximasHtml}`:""}`:""}
     <h2>Tópicos de discussão</h2>${topsHtml}
     <h2>Saídas e entregas acordadas</h2>${saiHtml}
+    ${anotacoesHtml?`<h2>Anotações da reunião</h2>${anotacoesHtml}`:""}
     <div class="rodape">Documento gerado em ${fmtDate(todayStr())} pelo aplicativo de Gestão de Portfólio.</div>
   </div>`;
 }
@@ -4471,6 +4892,19 @@ function gerarTextoAta(p,r){
   out+="Assunto: "+(r.titulo||"(sem título)")+"\n";
   out+="Participantes: "+(parts.join(", ")||"—")+"\n\n";
   out+="OBJETIVO\n"+"-".repeat(8)+"\n"+(ata.objetivo||"—")+"\n\n";
+  if((ata.resumoRealizadas||[]).length || (ata.resumoProximas||[]).length){
+    out+="RESUMO DO PERÍODO\n"+"-".repeat(18)+"\n";
+    if((ata.resumoRealizadas||[]).length){
+      out+="Atividades realizadas:\n";
+      ata.resumoRealizadas.forEach(x=>out+="• "+x+"\n");
+      out+="\n";
+    }
+    if((ata.resumoProximas||[]).length){
+      out+="Próximas atividades:\n";
+      ata.resumoProximas.forEach(x=>out+="• "+x+"\n");
+      out+="\n";
+    }
+  }
   out+="TÓPICOS DE DISCUSSÃO\n"+"-".repeat(20)+"\n";
   if((ata.topicos||[]).length){
     ata.topicos.forEach((t,i)=>{
@@ -4487,6 +4921,9 @@ function gerarTextoAta(p,r){
       out+="  Data prevista: "+(s.dataEntrega?fmtDate(s.dataEntrega):"—")+"\n\n";
     });
   } else out+="Nenhuma entrega registrada.\n\n";
+  if(ata.anotacoes){
+    out+="ANOTAÇÕES DA REUNIÃO\n"+"-".repeat(21)+"\n"+ata.anotacoes+"\n\n";
+  }
   out+="—\nGerado em "+fmtDate(todayStr())+" pelo aplicativo de Gestão de Portfólio.";
   return out;
 }
