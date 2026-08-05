@@ -756,6 +756,24 @@ function daysBetween(a,b){ // b - a em dias (strings YYYY-MM-DD)
 }
 function monthKey(s){ return s? s.slice(0,7):""; }
 function yearOf(s){ return s? s.slice(0,4):""; }
+// Gera a lista de datas (YYYY-MM-DD) entre dataIni e dataFim (inclusive),
+// restrita aos dias da semana presentes em diasSemanaSet (0=domingo ...
+// 6=sábado, convenção de Date.getDay()). Usada para apontar a mesma
+// atividade em vários dias de uma vez ("repetir em vários dias").
+function gerarDatasRepeticao(dataIni,dataFim,diasSemanaSet){
+  const datas=[];
+  if(!dataIni||!dataFim||!diasSemanaSet||!diasSemanaSet.size) return datas;
+  let d=new Date(dataIni+"T00:00:00");
+  const fim=new Date(dataFim+"T00:00:00");
+  if(isNaN(d.getTime())||isNaN(fim.getTime())||fim<d) return datas;
+  let guarda=0; // limite de segurança (~2 anos) contra loop gigante por data errada
+  while(d<=fim && guarda<800){
+    if(diasSemanaSet.has(d.getDay())) datas.push(d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()));
+    d.setDate(d.getDate()+1);
+    guarda++;
+  }
+  return datas;
+}
 const MONTHS=["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
 const PALETTE=["#1f6f6b","#2563a8","#b8852a","#7a4fb3","#2f8f4e","#c2362f","#0e7a8c","#d06a1f","#5b6b7b","#4a7d3a"];
 
@@ -3707,7 +3725,12 @@ CONTEXTO — ANOTAÇÕES FEITAS DURANTE A REUNIÃO (use como fonte adicional de 
 ${anotacoes}
 """
 ` : "";
-  const prompt=`Você é um assistente de gestão de projetos. Receberá a TRANSCRIÇÃO de uma reunião (e, quando disponível, anotações feitas ao vivo e um resumo automático do período) e deve produzir uma ata estruturada em JSON.
+  // monta o prompt a partir de um texto de transcrição informado — permite
+  // recalcular o prompt ao vivo quando a transcrição é colada/editada
+  // diretamente aqui no modal, sem precisar fechar e editar a reunião.
+  function montarPrompt(textoTranscricao){
+    const t=(textoTranscricao||"").trim();
+    return `Você é um assistente de gestão de projetos. Receberá a TRANSCRIÇÃO de uma reunião (e, quando disponível, anotações feitas ao vivo e um resumo automático do período) e deve produzir uma ata estruturada em JSON.
 
 Retorne APENAS um objeto JSON válido, sem comentários, sem texto antes ou depois, sem markdown ou cercas de código. O JSON deve seguir EXATAMENTE este formato:
 
@@ -3730,23 +3753,32 @@ Regras:
 ${contextoResumo}${contextoAnotacoes}
 TRANSCRIÇÃO:
 """
-${transc||"(cole aqui a transcrição se ainda não estiver na reunião)"}
+${t||"(cole a transcrição da reunião no campo acima)"}
 """`;
+  }
+  const prompt=montarPrompt(transc);
 
   $("#modal-root").innerHTML=`
   <div class="overlay"><div class="modal wide">
     <div class="modal-head"><h3>✨ Gerar ata com IA</h3>
       <button class="btn-icon" id="ia-x">✕</button></div>
     <div class="modal-body">
-      <div class="help-banner" style="margin-bottom:14px"><span>ℹ️</span><span><b>Como funciona:</b> 1) Copie o prompt abaixo. 2) Cole em qualquer ferramenta de IA (Claude, ChatGPT, Gemini…). 3) Copie a resposta JSON e cole no campo de baixo. 4) Clique em <b>Aplicar ata</b>.</span></div>
+      <div class="help-banner" style="margin-bottom:14px"><span>ℹ️</span><span><b>Como funciona:</b> 1) Cole a transcrição da reunião abaixo (ou edite a que já estava salva). 2) Copie o prompt, já atualizado com ela. 3) Cole em qualquer ferramenta de IA (Claude, ChatGPT, Gemini…). 4) Copie a resposta JSON e cole no campo indicado. 5) Clique em <b>Aplicar ata</b>.</span></div>
 
       <div class="fld full" style="margin-bottom:14px">
-        <label>1️⃣ Prompt para a IA <button class="btn ghost sm" id="ia-copy" style="margin-left:10px">📋 Copiar prompt</button></label>
+        <label>1️⃣ Transcrição da reunião</label>
+        <textarea id="ia-transc" placeholder="Cole aqui o texto da transcrição (ou notas brutas) da reunião…"
+          style="width:100%;min-height:140px;padding:11px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;line-height:1.5">${esc(transc)}</textarea>
+        <span class="help">Colar aqui atualiza automaticamente o prompt abaixo. Ao aplicar a ata, este texto também é salvo como a transcrição da reunião.</span>
+      </div>
+
+      <div class="fld full" style="margin-bottom:14px">
+        <label>2️⃣ Prompt para a IA <button class="btn ghost sm" id="ia-copy" style="margin-left:10px">📋 Copiar prompt</button></label>
         <textarea id="ia-prompt" readonly style="width:100%;min-height:160px;padding:11px;border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:#f8fafb">${esc(prompt)}</textarea>
       </div>
 
       <div class="fld full">
-        <label>2️⃣ Cole aqui a resposta JSON da IA</label>
+        <label>3️⃣ Cole aqui a resposta JSON da IA</label>
         <textarea id="ia-resp" placeholder='Cole aqui o JSON retornado pela IA. Ex.: {"objetivo":"…","topicos":[…],"saidas":[…] }'
           style="width:100%;min-height:170px;padding:11px;border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px"></textarea>
         <span class="help">A ata atual (se houver) será substituída pela nova. Você poderá editar tudo depois.</span>
@@ -3760,11 +3792,12 @@ ${transc||"(cole aqui a transcrição se ainda não estiver na reunião)"}
 
   $("#ia-x").onclick=closeModal;
   $("#ia-cancel").onclick=closeModal;
+  $("#ia-transc").oninput=e=>{ $("#ia-prompt").value=montarPrompt(e.target.value); };
   $("#ia-copy").onclick=()=>{
     const ta=$("#ia-prompt"); ta.select();
     try{ document.execCommand("copy"); toast("Prompt copiado para a área de transferência."); }
     catch(e){
-      if(navigator.clipboard) navigator.clipboard.writeText(prompt).then(()=>toast("Prompt copiado."));
+      if(navigator.clipboard) navigator.clipboard.writeText(ta.value).then(()=>toast("Prompt copiado."));
       else toast("Selecione manualmente e copie (Ctrl+C).");
     }
     window.getSelection().removeAllRanges();
@@ -3797,7 +3830,8 @@ ${transc||"(cole aqui a transcrição se ainda não estiver na reunião)"}
       resumoProximas: (r.resumoProximas||[]).filter(Boolean)
     };
     r.ata=ata;
-    await sbUpdate("reunioes", r.id, { ata });
+    r.transcricao=$("#ia-transc").value; // salva também a transcrição colada/editada aqui no modal
+    await sbUpdate("reunioes", r.id, { ata, transcricao:r.transcricao });
     closeModal();
     toast("Ata aplicada com sucesso. Edite os campos conforme necessário.");
     render();
@@ -6024,6 +6058,9 @@ function formHoras(h){
   const fixedColab=currentColabId(); // colaborador logado (não-gestor): campo travado
   const meuId=USER.current?USER.current.colabId:null; // usado para pré-selecionar mesmo quando gestor
   const initial=h||{data:todayStr()};
+  // preenchida logo abaixo (só ao criar, nunca ao editar) com o estado da
+  // seção "repetir esta atividade em vários dias"; lida dentro de onSave.
+  let repeticaoUI=null;
   // se editando, pré-seleciona a atividade do cronograma vinculada; se a
   // atividade não existir mais (ou o registro nunca teve uma), cai em
   // "Outros" com o nome antigo preenchido no campo manual.
@@ -6065,7 +6102,8 @@ function formHoras(h){
     wide:true,
     values:initial,
     fields:[
-      {key:"data",label:"Data",type:"date",required:true},
+      {key:"data",label:"Data",type:"date",required:true,
+        help:"Também é a data inicial, se \"repetir em vários dias\" estiver marcado."},
       {key:"colaboradorId",label:"Colaborador",type:"select",required:true,
         options:(fixedColab?[getColab(fixedColab)]:getInternos()).filter(Boolean).map(c=>({value:c.id,label:c.nome})),
         help:fixedColab?"Apontamento vinculado ao usuário logado.":""},
@@ -6147,6 +6185,40 @@ function formHoras(h){
         await sbUpdate("horas", h.id, toSnake(v));
         toast("Apontamento atualizado.");
         await DB.load();
+      } else if(repeticaoUI && repeticaoUI.lerEstado().repetir){
+        // ---- REPETIR EM VÁRIOS DIAS: cria um apontamento igual para cada
+        // data do intervalo que cair nos dias da semana selecionados ----
+        const estado=repeticaoUI.lerEstado();
+        if(!estado.dataFinal) throw new Error('Informe a "data final" da repetição.');
+        if(estado.dataFinal<v.data) throw new Error('A data final da repetição não pode ser anterior à data inicial.');
+        if(!estado.dias.size) throw new Error("Selecione ao menos um dia da semana para repetir.");
+        const datas=gerarDatasRepeticao(v.data, estado.dataFinal, estado.dias);
+        if(!datas.length) throw new Error("Nenhuma data do intervalo cai nos dias da semana selecionados.");
+
+        // verifica no servidor quais dessas datas já têm um apontamento
+        // idêntico (mesma pessoa+atividade+horas) para não duplicar o que
+        // já foi registrado antes
+        let jaExistentes=new Set();
+        try{
+          const rows = await sbFetch(
+            "horas?select=data&colaborador_id=eq."+encodeURIComponent(v.colaboradorId)+
+            (atividadeId?("&atividade_id=eq."+encodeURIComponent(atividadeId)):"&atividade_id=is.null")+
+            "&horas=eq."+encodeURIComponent(v.horas)+
+            "&data=in.("+datas.join(",")+")"
+          );
+          (rows||[]).forEach(r=>jaExistentes.add(r.data));
+        }catch(_e){ /* se a checagem falhar, segue e tenta inserir todas as datas */ }
+
+        const datasParaInserir=datas.filter(d=>!jaExistentes.has(d));
+        if(!datasParaInserir.length){
+          throw new Error("Todas as datas desse intervalo já têm este apontamento registrado (mesma pessoa, atividade e horas).");
+        }
+        await sbInsert("horas", datasParaInserir.map(d=>toSnake({
+          id:uid(), data:d, colaboradorId:v.colaboradorId, projetoId:v.projetoId,
+          atividadeId, categoriaId:v.categoriaId, horas:v.horas, descricao:v.descricao||""
+        })));
+        toast(`${datasParaInserir.length} apontamento(s) registrado(s) (${fmtDate(datasParaInserir[0])} a ${fmtDate(datasParaInserir[datasParaInserir.length-1])})`+
+          (jaExistentes.size?`, ${jaExistentes.size} data(s) já existiam e foram ignoradas.`:"."));
       } else {
         // Proteção contra duplicata: busca no SERVIDOR (não só no cache
         // local, que pode estar desatualizado) se já existe um apontamento
@@ -6197,6 +6269,77 @@ function formHoras(h){
     }
   });
   syncCampoManual(); // aplica a visibilidade inicial do campo manual
+
+  // ---- "Repetir esta atividade em vários dias" (só ao criar um novo
+  // apontamento; editar continua sendo sempre um registro único) ----
+  if(!edit){
+    const dataFld=document.querySelector('#f-grid [data-k="data"]');
+    const wrapDataFld=dataFld?dataFld.closest(".fld"):null;
+    if(wrapDataFld){
+      const DIAS_SEMANA=[ // convenção Date.getDay(): 0=domingo ... 6=sábado
+        {value:1,label:"Seg",padrao:true},{value:2,label:"Ter",padrao:true},
+        {value:3,label:"Qua",padrao:true},{value:4,label:"Qui",padrao:true},
+        {value:5,label:"Sex",padrao:true},{value:6,label:"Sáb",padrao:false},
+        {value:0,label:"Dom",padrao:false}
+      ];
+      const bloco=document.createElement("div");
+      bloco.className="fld full";
+      bloco.innerHTML=`
+        <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;color:var(--ink)">
+          <input type="checkbox" id="repetir-chk" style="width:auto;margin:0">
+          🔁 Repetir esta atividade em vários dias
+        </label>
+        <div id="repetir-painel" style="display:none;margin-top:10px;padding:12px 14px;
+            border:1px solid var(--line);border-radius:8px;background:#fafbfc">
+          <div class="fld" style="margin-bottom:10px;max-width:220px">
+            <label>Repetir até (data final)<span class="req"> *</span></label>
+            <input type="date" id="repetir-ate">
+          </div>
+          <div class="fld">
+            <label>Nos dias da semana</label>
+            <div style="display:flex;flex-wrap:wrap;gap:12px">
+              ${DIAS_SEMANA.map(d=>`<label style="display:flex;align-items:center;gap:5px;
+                  font-weight:400;font-size:12.5px;cursor:pointer">
+                  <input type="checkbox" class="repetir-dia" value="${d.value}" ${d.padrao?"checked":""}
+                    style="width:auto;margin:0">${d.label}</label>`).join("")}
+            </div>
+          </div>
+          <div id="repetir-preview" style="margin-top:10px;font-size:12.5px;color:var(--ink-soft)"></div>
+        </div>`;
+      wrapDataFld.insertAdjacentElement("afterend",bloco);
+
+      const chk=bloco.querySelector("#repetir-chk");
+      const painel=bloco.querySelector("#repetir-painel");
+      const ateInput=bloco.querySelector("#repetir-ate");
+      const preview=bloco.querySelector("#repetir-preview");
+      function diasSelecionados(){
+        return new Set([...bloco.querySelectorAll(".repetir-dia:checked")].map(el=>+el.value));
+      }
+      function atualizarPreview(){
+        if(!chk.checked){ preview.innerHTML=""; return; }
+        const dataIni=document.querySelector('#f-grid [data-k="data"]')?.value||"";
+        const dataFim=ateInput.value||"";
+        if(!dataIni||!dataFim){ preview.innerHTML=""; return; }
+        const datas=gerarDatasRepeticao(dataIni,dataFim,diasSelecionados());
+        if(!datas.length){
+          preview.innerHTML=`<span style="color:var(--danger)">Nenhuma data do intervalo cai nos dias da semana selecionados.</span>`;
+        }else{
+          preview.innerHTML=`Serão criados <b>${datas.length}</b> apontamento(s), de ${fmtDate(datas[0])} até ${fmtDate(datas[datas.length-1])}.`;
+        }
+      }
+      chk.onchange=()=>{ painel.style.display=chk.checked?"":"none"; atualizarPreview(); };
+      ateInput.onchange=atualizarPreview;
+      bloco.querySelectorAll(".repetir-dia").forEach(el=>el.onchange=atualizarPreview);
+      document.querySelector('#f-grid [data-k="data"]')?.addEventListener("change",atualizarPreview);
+
+      repeticaoUI={
+        lerEstado(){
+          return { repetir:chk.checked, dataFinal:ateInput.value||"", dias:diasSelecionados() };
+        }
+      };
+    }
+  }
+
   // atalho para consultar a legenda das categorias sem fechar o formulário
   const catSelect=document.querySelector('#f-grid [data-k="categoriaId"]');
   if(catSelect){
