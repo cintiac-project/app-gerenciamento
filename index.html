@@ -744,6 +744,26 @@ function uid(){
 function $(sel,ctx){ return (ctx||document).querySelector(sel); }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function normTxt(s){ return String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim(); }
+/* Recebe um texto de "responsável" (pode conter mais de um nome, separados por
+   vírgula/ponto-e-vírgula/" e ") vindo da Ata de reunião e devolve os IDs das
+   pessoas cadastradas (equipe interna + parceiros vinculados ao projeto p)
+   cujo nome bate exata ou parcialmente com cada nome informado. Usado para
+   atribuir automaticamente o(s) responsável(is) de uma atividade a partir do
+   que foi registrado na Ata, tanto ao criar quanto ao ressincronizar. */
+function matchPessoasPorNomes(texto,p){
+  if(!texto) return [];
+  const pessoas=[...getInternos(),...getParceirosDoProjeto(p)];
+  const nomes=String(texto).split(/[,;/]| e (?=\S)/i).map(n=>n.trim()).filter(Boolean);
+  const ids=[];
+  nomes.forEach(nome=>{
+    const alvo=normTxt(nome);
+    if(!alvo) return;
+    const match=pessoas.find(c=>normTxt(c.nome)===alvo)
+      || pessoas.find(c=>normTxt(c.nome).includes(alvo)||alvo.includes(normTxt(c.nome)));
+    if(match && !ids.includes(match.id)) ids.push(match.id);
+  });
+  return ids;
+}
 function fmtBRL(n){ n=Number(n)||0; return "R$ "+n.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtNum(n,d){ return (Number(n)||0).toLocaleString("pt-BR",{minimumFractionDigits:d||0,maximumFractionDigits:d||0}); }
 function fmtH(n){ return fmtNum(n,1)+" h"; }
@@ -840,6 +860,31 @@ function abrirLegendaCategorias(){
 }
 function getRubrica(id){ return DB.data.rubricas.find(r=>r.id===id); }
 function getAtividade(id){ return DB.data.atividades.find(a=>a.id===id); }
+/* exclui uma atividade (com confirmação e opção de excluir também os
+   apontamentos de horas vinculados) — usado tanto no Cronograma quanto no
+   botão de excluir dos Alertas de prazo no Painel Geral, para não duplicar
+   a lógica de exclusão nos dois lugares. */
+function excluirAtividadeComConfirmacao(a,onDone){
+  const nHoras=DB.data.horas.filter(h=>h.atividadeId===a.id).length;
+  confirmarComOpcao(
+    `Excluir atividade "${a.nome}"?`,
+    nHoras?`Há ${nHoras} apontamento(s) de horas vinculado(s) a esta atividade.`:"Esta atividade não tem apontamentos de horas vinculados.",
+    "Excluir também os apontamentos de horas vinculados (em vez de só desvincular) — libera espaço no banco",
+    async(excluirHoras)=>{
+      DB.data.atividades=DB.data.atividades.filter(x=>x.id!==a.id);
+      if(excluirHoras){
+        const idsHoras=DB.data.horas.filter(h=>h.atividadeId===a.id).map(h=>h.id);
+        DB.data.horas=DB.data.horas.filter(h=>h.atividadeId!==a.id);
+        if(idsHoras.length) await sbDeleteWhere("horas", "id=in.("+idsHoras.join(",")+")");
+      } else {
+        DB.data.horas.forEach(h=>{ if(h.atividadeId===a.id) h.atividadeId=null; });
+      }
+      await sbDelete("atividades", a.id); // on delete set null cuida das horas restantes
+      toast(excluirHoras?`Atividade e ${nHoras} apontamento(s) excluídos definitivamente.`:"Atividade excluída.");
+      if(onDone) onDone(); else render();
+    }
+  );
+}
 
 /* ============================================================
    MCI / MDS — Meta Crucialmente Importante / Medidas de Direção
@@ -1006,11 +1051,11 @@ function calcularAlertas(){
     if(d<0) out.push({tipo:"fisico",sev:"danger",dias:d,
       titulo:`Atividade atrasada: ${a.nome}`,
       desc:`${nomeProjeto(a.projetoId)} · venceu há ${Math.abs(d)} dia(s) · ${a.progresso||0}% concluído`,
-      responsavel:resp, projetoId:a.projetoId, atividadeId:a.id});
+      responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:a.notasProgresso||""});
     else if(d<=7) out.push({tipo:"fisico",sev:"warn",dias:d,
       titulo:`Prazo próximo: ${a.nome}`,
       desc:`${nomeProjeto(a.projetoId)} · vence em ${d} dia(s) · ${a.progresso||0}% concluído`,
-      responsavel:resp, projetoId:a.projetoId, atividadeId:a.id});
+      responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:a.notasProgresso||""});
   });
   DB.data.financeiro.forEach(f=>{
     if(f.status!=="previsto" || !f.data) return;
@@ -1884,6 +1929,12 @@ function viewPainel(v){
       : a.responsavel
         ? `<div class="alert-resp"><span class="rl">Responsável:</span> <b>${esc(a.responsavel)}</b></div>`
         : `<div class="alert-resp sem"><span class="rl">Responsável:</span> <i>não atribuído</i></div>`;
+    // anotações de progresso da atividade (preenchidas em "Editar atividade",
+    // logo abaixo de "% Concluído"), exibidas aqui para dar contexto rápido
+    // do andamento sem precisar abrir a atividade.
+    const notasHtml=(a.tipo==="fisico" && a.notasProgresso)
+      ? `<div class="alert-resp"><span class="rl">Anotações:</span> ${esc(a.notasProgresso)}</div>`
+      : "";
     // ações rápidas: permitem concluir/marcar como realizado ou editar o
     // item (atividade/lançamento) direto a partir do alerta, sem precisar
     // navegar até o projeto e procurar o item na lista. Para reuniões, um
@@ -1898,6 +1949,7 @@ function viewPainel(v){
         ? `<div class="alert-acoes">
             <button class="btn-icon" data-alerta-concluir-ativ="${a.atividadeId}" title="Marcar atividade como concluída">✓</button>
             <button class="btn-icon" data-alerta-editar-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Editar atividade (ex.: novo prazo)">✎</button>
+            <button class="btn-icon del" data-alerta-excluir-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Excluir atividade">🗑</button>
           </div>`
         : `<div class="alert-acoes">
             <button class="btn-icon" data-alerta-realizar-fin="${a.financeiroId}" title="Marcar como realizado">✓</button>
@@ -1907,23 +1959,25 @@ function viewPainel(v){
     return `<div class="alert-row"><div class="ab" style="background:${col}"></div>
       <div class="at"><div class="t">${esc(a.titulo)}</div>
         <div class="d">${esc(a.desc)}</div>
-        ${respHtml}</div>
+        ${respHtml}${notasHtml}</div>
       <span class="badge ${a.sev==="danger"?"b-danger":a.sev==="info"?"b-info":"b-warn"}">${a.tipo==="fisico"?"Físico":a.tipo==="financeiro"?"Financeiro":"Reunião"}</span>
       ${acoesHtml}</div>`;
   }).join("") : `<div class="empty" style="padding:26px"><span class="ic">✓</span><p>${alertas.length?"Nenhum alerta para o filtro selecionado.":"Nenhum prazo crítico nem reunião nos próximos 7 dias."}</p></div>`;
 
   const alertasFiltroHtml=`
-    <div class="field-inline">Projeto
-      <select class="select" id="painel-alerta-proj">
-        <option value="">Todos</option>
-        ${projetosComAlerta.map(p=>`<option value="${p.id}" ${p.id===ST.painelAlertaProjeto?"selected":""}>${esc(p.nome)}</option>`).join("")}
-      </select>
-    </div>
-    <div class="field-inline">Responsável
-      <select class="select" id="painel-alerta-resp">
-        <option value="">Todos</option>
-        ${responsaveisComAlerta.map(r=>`<option value="${esc(r)}" ${r===ST.painelAlertaResp?"selected":""}>${esc(r)}</option>`).join("")}
-      </select>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:nowrap">
+      <div class="field-inline">Projeto
+        <select class="select" id="painel-alerta-proj">
+          <option value="">Todos</option>
+          ${projetosComAlerta.map(p=>`<option value="${p.id}" ${p.id===ST.painelAlertaProjeto?"selected":""}>${esc(p.nome)}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field-inline">Responsável
+        <select class="select" id="painel-alerta-resp">
+          <option value="">Todos</option>
+          ${responsaveisComAlerta.map(r=>`<option value="${esc(r)}" ${r===ST.painelAlertaResp?"selected":""}>${esc(r)}</option>`).join("")}
+        </select>
+      </div>
     </div>`;
 
   v.innerHTML=`
@@ -1987,6 +2041,9 @@ function viewPainel(v){
   });
   v.querySelectorAll("[data-alerta-editar-ativ]").forEach(b=>{
     b.onclick=()=>formAtividade(b.dataset.proj, getAtividade(b.dataset.alertaEditarAtiv));
+  });
+  v.querySelectorAll("[data-alerta-excluir-ativ]").forEach(b=>{
+    b.onclick=()=>excluirAtividadeComConfirmacao(getAtividade(b.dataset.alertaExcluirAtiv));
   });
   v.querySelectorAll("[data-alerta-realizar-fin]").forEach(b=>{
     b.onclick=()=>marcarFinanceiroRealizadoRapido(b.dataset.alertaRealizarFin);
@@ -2625,26 +2682,7 @@ function projCronograma(c,p){
   };
   c.querySelectorAll("[data-eda]").forEach(b=>b.onclick=()=>formAtividade(p.id,getAtividade(b.dataset.eda)));
   c.querySelectorAll("[data-dla]").forEach(b=>b.onclick=()=>{
-    const a=getAtividade(b.dataset.dla);
-    const nHoras=DB.data.horas.filter(h=>h.atividadeId===a.id).length;
-    confirmarComOpcao(
-      `Excluir atividade "${a.nome}"?`,
-      nHoras?`Há ${nHoras} apontamento(s) de horas vinculado(s) a esta atividade.`:"Esta atividade não tem apontamentos de horas vinculados.",
-      "Excluir também os apontamentos de horas vinculados (em vez de só desvincular) — libera espaço no banco",
-      async(excluirHoras)=>{
-        DB.data.atividades=DB.data.atividades.filter(x=>x.id!==a.id);
-        if(excluirHoras){
-          const idsHoras=DB.data.horas.filter(h=>h.atividadeId===a.id).map(h=>h.id);
-          DB.data.horas=DB.data.horas.filter(h=>h.atividadeId!==a.id);
-          if(idsHoras.length) await sbDeleteWhere("horas", "id=in.("+idsHoras.join(",")+")");
-        } else {
-          DB.data.horas.forEach(h=>{ if(h.atividadeId===a.id) h.atividadeId=null; });
-        }
-        await sbDelete("atividades", a.id); // on delete set null cuida das horas restantes
-        toast(excluirHoras?`Atividade e ${nHoras} apontamento(s) excluídos definitivamente.`:"Atividade excluída.");
-        render();
-      }
-    );
+    excluirAtividadeComConfirmacao(getAtividade(b.dataset.dla));
   });
 }
 function ganttHtml(p,ats){
@@ -3664,6 +3702,26 @@ function reuniaoDetalhe(c,p,r){
     });
   }
 
+  /* ressincroniza o responsável das atividades do cronograma já criadas a
+     partir de uma saída/entrega, sempre que a reunião é salva — assim, se o
+     nome em "Responsável" na Ata for corrigido/preenchido depois de a
+     atividade já existir no cronograma, o campo é atualizado automaticamente
+     sem precisar editar a atividade manualmente. */
+  async function ressincronizarResponsaveis(){
+    for(const s of r.ata.saidas){
+      if(!s.atividadeId) continue;
+      const ativ=DB.data.atividades.find(x=>x.id===s.atividadeId);
+      if(!ativ) continue;
+      const idsResp=matchPessoasPorNomes(s.responsavel,p);
+      const atual=Array.isArray(ativ.responsaveisIds)?ativ.responsaveisIds:[];
+      const mudou=idsResp.length!==atual.length || idsResp.some(id=>!atual.includes(id));
+      if(mudou && idsResp.length){
+        ativ.responsaveisIds=idsResp;
+        await sbUpdate("atividades", ativ.id, toSnake({responsaveisIds:idsResp}));
+      }
+    }
+  }
+
   /* salva a reunião inteira (ata é jsonb, então um update já basta) */
   async function persistirReuniao(){
     // se a data mudou depois que a reunião foi marcada com "OK", reativa o
@@ -3675,6 +3733,7 @@ function reuniaoDetalhe(c,p,r){
       anotacoes: r.anotacoes, resumoRealizadas: r.resumoRealizadas, resumoProximas: r.resumoProximas,
       resumoDe: r.resumoDe, resumoAte: r.resumoAte, alertaDispensado: r.alertaDispensado||false
     }));
+    await ressincronizarResponsaveis();
   }
 
   $("#reu-back").onclick=async()=>{ coletarBasico(); await persistirReuniao(); ST.reuniaoId=null; render(); };
@@ -3720,18 +3779,13 @@ function reuniaoDetalhe(c,p,r){
       dataFimPrev:s.dataEntrega||null,
       progresso:0, status:"Não iniciada"
     };
-    // tenta mapear o nome digitado em "Responsável" para uma pessoa cadastrada
-    // (colaborador interno ou parceiro vinculado a este projeto) e grava em
+    // mapeia o(s) nome(s) digitado(s) em "Responsável" (pode ter mais de uma
+    // pessoa, separadas por vírgula) para pessoas cadastradas e grava em
     // responsaveisIds — é esse campo (não o antigo "responsavelId") que o
     // cronograma, a RACI e a ocupação da equipe realmente usam para exibir
     // e calcular o responsável de uma atividade.
-    if(s.responsavel){
-      const alvo=normTxt(s.responsavel);
-      const pessoas=[...getInternos(),...getParceirosDoProjeto(p)];
-      const match=pessoas.find(c=>normTxt(c.nome)===alvo)
-        || pessoas.find(c=>normTxt(c.nome).includes(alvo)||alvo.includes(normTxt(c.nome)));
-      if(match) novaAtiv.responsaveisIds=[match.id];
-    }
+    const idsResp=matchPessoasPorNomes(s.responsavel,p);
+    if(idsResp.length) novaAtiv.responsaveisIds=idsResp;
     DB.data.atividades.push(novaAtiv);
     s.atividadeId=novaAtiv.id;
     await sbInsert("atividades", toSnake(novaAtiv));
@@ -3848,14 +3902,24 @@ ${t||"(cole a transcrição da reunião no campo acima)"}
     try{ parsed=JSON.parse(jsonStr); }
     catch(e){ err.textContent="Não foi possível interpretar o JSON. Verifique se está no formato correto."; err.style.display="block"; return; }
     // valida e aplica
+    // preserva o vínculo com atividades do cronograma já criadas a partir de
+    // uma saída anterior (mesma descrição), para que reaplicar a ata (ex.:
+    // depois de editar a transcrição) não "perca" a atividade já existente
+    // nem crie uma atividade duplicada no cronograma.
+    const saidasAnteriores=(r.ata&&Array.isArray(r.ata.saidas))?r.ata.saidas:[];
     const ata={
       objetivo: typeof parsed.objetivo==="string"?parsed.objetivo:"",
       topicos: Array.isArray(parsed.topicos)? parsed.topicos.map(t=>({tema:String(t.tema||""),notas:String(t.notas||"")})):[],
-      saidas: Array.isArray(parsed.saidas)? parsed.saidas.map(s=>({
-        descricao:String(s.descricao||""),
-        responsavel:String(s.responsavel||""),
-        dataEntrega:String(s.dataEntrega||"")
-      })):[],
+      saidas: Array.isArray(parsed.saidas)? parsed.saidas.map(s=>{
+        const descricao=String(s.descricao||"");
+        const anterior=saidasAnteriores.find(x=>x.atividadeId && normTxt(x.descricao)===normTxt(descricao));
+        return {
+          descricao,
+          responsavel:String(s.responsavel||""),
+          dataEntrega:String(s.dataEntrega||""),
+          ...(anterior?{atividadeId:anterior.atividadeId}:{})
+        };
+      }):[],
       // atribui à ata, no momento em que é gerada por IA, as anotações feitas
       // ao vivo e o resumo do período usado como contexto — fica registrado
       // permanentemente junto da ata, mesmo que o campo de anotações mude depois.
@@ -6007,6 +6071,9 @@ function formAtividade(projetoId,a){
         help:"Marcar como \"Concluída\" preenche automaticamente 100% em % Concluído."},
       {key:"progresso",label:"% Concluído",type:"number",min:0,
         help:"Valor de 0 a 100",placeholder:"0"},
+      {key:"notasProgresso",label:"Anotações de progresso",type:"textarea",full:true,
+        placeholder:"Ex.: o que foi feito, pendências, próximos passos…",
+        help:"Aparece também no alerta desta atividade em Alertas de prazos, no Painel Geral."},
       {key:"estimativasPessoas",label:"Horas previstas por colaborador (estimativa de esforço)",
         type:"estimativas",full:true,dynamic:true,
         optionsFn:()=>[...getInternos(),...getParceirosDoProjeto(getProjeto(projetoId))]
