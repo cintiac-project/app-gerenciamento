@@ -1031,7 +1031,7 @@ function calcularAlertas(){
   // (preparar pauta, revisar resumo automático, confirmar participantes etc.)
   DB.data.projetos.forEach(p=>{
     (p.reunioes||[]).forEach(r=>{
-      if(!r.data) return;
+      if(!r.data || r.alertaDispensado) return;
       const d=daysBetween(hoje,r.data);
       if(d<0 || d>7) return;
       const parts=(r.participantes||[]).filter(Boolean).join(", ");
@@ -1888,6 +1888,7 @@ function viewPainel(v){
     const acoesHtml=a.tipo==="reuniao"
       ? `<div class="alert-acoes">
             <button class="btn-icon" data-alerta-ir-reuniao="${a.reuniaoId}" data-proj="${a.projetoId}" title="Ir para a reunião">↗</button>
+            <button class="btn-icon" data-alerta-ok-reuniao="${a.reuniaoId}" data-proj="${a.projetoId}" title="OK — reunião concluída, remover deste painel">✓</button>
           </div>`
       : isGestor()? (
       a.tipo==="fisico"
@@ -1996,6 +1997,9 @@ function viewPainel(v){
       ST.reuniaoId=b.dataset.alertaIrReuniao; render();
     };
   });
+  v.querySelectorAll("[data-alerta-ok-reuniao]").forEach(b=>{
+    b.onclick=()=>marcarReuniaoOkRapido(b.dataset.alertaOkReuniao, b.dataset.proj);
+  });
 }
 
 /* Ação rápida do Painel Geral: marca a atividade atrasada/próxima do prazo
@@ -2035,6 +2039,29 @@ async function marcarFinanceiroRealizadoRapido(financeiroId){
         render();
       }catch(e){
         toast("Erro ao atualizar o lançamento: "+(e.message||e));
+      }
+    });
+}
+/* Ação rápida do Painel Geral: dá "OK" numa reunião (já ocorreu/providências
+   já tomadas), removendo-a do painel de alertas sem apagar a reunião nem
+   sua ata. Fica marcada para toda a equipe (o campo é salvo na reunião,
+   não é uma preferência só deste usuário). Se a data da reunião for
+   alterada depois, o alerta volta a aparecer automaticamente. */
+async function marcarReuniaoOkRapido(reuniaoId, projetoId){
+  const proj=getProjeto(projetoId);
+  const r=proj && (proj.reunioes||[]).find(x=>x.id===reuniaoId);
+  if(!r) return;
+  confirmar("Marcar esta reunião como concluída?",
+    `"${r.titulo||"(sem título)"}" vai sair do painel de alertas para todo mundo. A reunião e a ata continuam salvas normalmente — se a data for alterada depois, o alerta volta a aparecer.`,
+    async()=>{
+      try{
+        r.alertaDispensado=true;
+        await sbUpdate("reunioes", r.id, {alerta_dispensado:true});
+        toast("Reunião marcada como concluída.");
+        render();
+      }catch(e){
+        r.alertaDispensado=false;
+        toast("Erro ao atualizar a reunião: "+(e.message||e));
       }
     });
 }
@@ -3471,6 +3498,7 @@ function reuniaoDetalhe(c,p,r){
   r.resumoRealizadas=r.resumoRealizadas||[];
   r.resumoProximas=r.resumoProximas||[];
   r.anotacoes=r.anotacoes||"";
+  const dataAoAbrir=r.data; // se a data mudar e a reunião já estava com "OK", reativa o alerta
 
   const listaEditavelHtml=(itens,cls)=> itens.length? itens.map((txt,i)=>`
     <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px">
@@ -3635,11 +3663,14 @@ function reuniaoDetalhe(c,p,r){
 
   /* salva a reunião inteira (ata é jsonb, então um update já basta) */
   async function persistirReuniao(){
+    // se a data mudou depois que a reunião foi marcada com "OK", reativa o
+    // alerta — presume-se que uma reunião reagendada precisa aparecer de novo
+    if(r.data!==dataAoAbrir && r.alertaDispensado) r.alertaDispensado=false;
     await sbUpdate("reunioes", r.id, toSnake({
       data: r.data, hora: r.hora, titulo: r.titulo,
       participantes: r.participantes, transcricao: r.transcricao, ata: r.ata,
       anotacoes: r.anotacoes, resumoRealizadas: r.resumoRealizadas, resumoProximas: r.resumoProximas,
-      resumoDe: r.resumoDe, resumoAte: r.resumoAte
+      resumoDe: r.resumoDe, resumoAte: r.resumoAte, alertaDispensado: r.alertaDispensado||false
     }));
   }
 
