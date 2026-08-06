@@ -1027,17 +1027,20 @@ function calcularAlertas(){
       desc:`${nomeProjeto(f.projetoId)} · ${fmtBRL(f.valor)} · vence em ${d} dia(s)`,
       responsavel:resp, projetoId:f.projetoId, financeiroId:f.id});
   });
-  // reuniões agendadas para os próximos 7 dias — para providências cabíveis
-  // (preparar pauta, revisar resumo automático, confirmar participantes etc.)
+  // reuniões: futuras (até 7 dias à frente, para preparar pauta/providências)
+  // e passadas (sem limite de tempo) que ainda não receberam "OK" — a única
+  // forma de uma reunião sair deste painel é o botão "OK" (marcarReuniaoOkRapido),
+  // nunca pelo simples fato da data já ter passado.
   DB.data.projetos.forEach(p=>{
     (p.reunioes||[]).forEach(r=>{
       if(!r.data || r.alertaDispensado) return;
       const d=daysBetween(hoje,r.data);
-      if(d<0 || d>7) return;
+      if(d>7) return;
       const parts=(r.participantes||[]).filter(Boolean).join(", ");
-      out.push({tipo:"reuniao",sev:d<=2?"warn":"info",dias:d,
+      const quando=d===0?"hoje":d===1?"amanhã":d>1?`em ${d} dia(s)`:d===-1?"ontem":`há ${Math.abs(d)} dia(s)`;
+      out.push({tipo:"reuniao",sev:d<0?"danger":d<=2?"warn":"info",dias:d,
         titulo:`Reunião: ${r.titulo||"(sem título)"}`,
-        desc:`${p.nome} · ${d===0?"hoje":d===1?"amanhã":"em "+d+" dia(s)"}${r.hora?" às "+r.hora:""}${parts?" · Participantes: "+parts:""}`,
+        desc:`${p.nome} · ${quando}${r.hora?" às "+r.hora:""}${parts?" · Participantes: "+parts:""}`,
         responsavel:null, projetoId:p.id, reuniaoId:r.id});
     });
   });
