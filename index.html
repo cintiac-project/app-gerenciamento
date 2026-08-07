@@ -570,6 +570,7 @@ function toSnake(obj){
 const DB = {
   data:null,
   channel:null,
+  _realtimeTimer:null,
 
   async load(){
     console.log("[PMO] DB.load iniciando...");
@@ -715,9 +716,18 @@ const DB = {
     try{
       if(this.channel){ await sb.removeChannel(this.channel); this.channel=null; }
       this.channel = sb.channel("portfolio-changes")
-        .on("postgres_changes", { event:"*", schema:"public" }, async ()=>{
-          await DB.load();
-          render();
+        .on("postgres_changes", { event:"*", schema:"public" }, ()=>{
+          // várias alterações costumam chegar em rajada (ex.: salvar uma
+          // atividade única às vezes gera mais de um evento). Agrupa tudo
+          // num único DB.load()+render() em vez de um para cada evento —
+          // além de mais eficiente, evita um re-render "extra" concorrendo
+          // logo depois do re-render que a própria ação do usuário já
+          // disparou, que era uma das causas da lista voltar ao topo.
+          clearTimeout(this._realtimeTimer);
+          this._realtimeTimer=setTimeout(async()=>{
+            await DB.load();
+            render();
+          },400);
         })
         .subscribe();
     } finally {
@@ -1594,10 +1604,17 @@ let _ultimaLocalizacao=null;
 function render(){
   // guarda a posição de rolagem ANTES de recriar o DOM. Recriar o conteúdo
   // de #view (v.innerHTML=...) pode fazer o navegador ajustar a rolagem
-  // sozinho (ex.: ao remover o elemento que estava focado); por isso a
-  // posição é restaurada explicitamente no final, em vez de simplesmente
-  // "não chamar" scrollTo(0,0).
+  // sozinho — em especial quando o elemento que estava com foco (ex.: o
+  // botão "editar" que o usuário acabou de clicar numa lista) é destruído
+  // na hora da troca de conteúdo, e o navegador devolve o foco para <body>,
+  // o que em alguns navegadores rola a página para o topo. Por isso: tira
+  // o foco ANTES de recriar o DOM (evita esse ajuste automático) e a
+  // posição também é restaurada explicitamente no final — inclusive num
+  // frame seguinte, caso o navegador aplique o ajuste de forma assíncrona.
   const scrollAntes=window.scrollY;
+  if(document.activeElement && document.activeElement!==document.body && document.activeElement.blur){
+    document.activeElement.blur();
+  }
   // reseta seleção de reunião quando não estamos na aba reuniões
   if(!(ST.view==="projeto" && ST.projTab==="reunioes")) ST.reuniaoId=null;
   renderNav();
@@ -1638,11 +1655,18 @@ function render(){
   const navegou=localizacaoAtual!==_ultimaLocalizacao;
   _ultimaLocalizacao=localizacaoAtual;
   // navegação real (trocou de tela/projeto/aba) -> sobe ao topo;
-  // re-renderização no mesmo lugar (ex.: salvar uma edição) -> mantém
+  // re-renderização no mesmo lugar (ex.: salvar uma edição, ou uma
+  // atualização em tempo real chegando de outro usuário) -> mantém
   // exatamente onde o usuário estava, mesmo que o navegador tenha tentado
-  // ajustar a rolagem sozinho ao recriar o DOM.
-  if(navegou) window.scrollTo(0,0);
-  else if(window.scrollY!==scrollAntes) window.scrollTo(0,scrollAntes);
+  // ajustar a rolagem sozinho ao recriar o DOM. O reforço num frame
+  // seguinte cobre o caso do navegador aplicar seu próprio ajuste de forma
+  // assíncrona, depois do nosso scrollTo já ter rodado.
+  if(navegou){
+    window.scrollTo(0,0);
+  } else if(window.scrollY!==scrollAntes){
+    window.scrollTo(0,scrollAntes);
+    requestAnimationFrame(()=>{ if(window.scrollY!==scrollAntes) window.scrollTo(0,scrollAntes); });
+  }
 }
 
 function renderUserWidget(){
@@ -5699,7 +5723,22 @@ function importarBackup(e){
 /* ============================================================
    SISTEMA DE MODAL E FORMULÁRIOS
    ============================================================ */
-function closeModal(){ $("#modal-root").innerHTML=""; }
+// fecha o modal preservando a posição de rolagem da página por trás dele.
+// Ao remover o modal do DOM, se o botão/campo que estava com foco (ex.: o
+// próprio botão "Salvar" que acabou de ser clicado) for destruído junto,
+// alguns navegadores devolvem o foco para <body> e, ao fazer isso, rolam a
+// página para o topo — mesmo que render() já tenha restaurado a posição
+// certa um instante antes. Por isso: 1) tira o foco do elemento ANTES de
+// remover o modal (evita o navegador "decidir" mover a rolagem sozinho) e
+// 2) reforça a posição depois, inclusive num frame seguinte, caso o
+// navegador aplique o ajuste de forma assíncrona.
+function closeModal(){
+  const y=window.scrollY;
+  if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  $("#modal-root").innerHTML="";
+  if(window.scrollY!==y) window.scrollTo(0,y);
+  requestAnimationFrame(()=>{ if(window.scrollY!==y) window.scrollTo(0,y); });
+}
 function confirmar(titulo,texto,onOk){
   $("#modal-root").innerHTML=`
   <div class="overlay"><div class="modal" style="max-width:420px">
