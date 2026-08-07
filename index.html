@@ -925,7 +925,7 @@ function excluirAtividadeComConfirmacao(a,onDone){
 }
 
 /* ============================================================
-   MCI / MDS — Meta Crucialmente Importante / Medidas de Direção
+   MCI / MCS — Meta Crucialmente Importante / Medidas de Direção
    Semanal (Painel Geral). Registros globais do portfólio (não
    por projeto). "Ativo" = ainda não concluído; ao concluir, o
    registro não é apagado — vira histórico (concluido=true).
@@ -1720,7 +1720,11 @@ function setTopAction(html,handler){
   if(handler){ const b=c.querySelector("button"); if(b) b.onclick=handler; }
 }
 
-/* ---------- BLOCO MCI / MDS (renderizado no Painel Geral) ---------- */
+/* ---------- BLOCO MCI / MCS (renderizado no Painel Geral) — nota: os
+   identificadores internos (tabela "mds" no Supabase, ids "mds-add",
+   "mds-texto" etc.) continuam com o nome antigo "mds" de propósito, para
+   não quebrar a ligação com o banco de dados; só o texto exibido na tela
+   mudou de MDS para MCS. ---------- */
 function mciMdsPainelHtml(){
   const mci=mciAtiva();
   const histMci=mciHistorico();
@@ -1759,13 +1763,13 @@ function mciMdsPainelHtml(){
       </div>
       <button class="btn-icon del mds-rm" data-id="${m.id}" title="Remover">🗑</button>
     </div>`).join("")
-    : `<div class="empty" style="padding:16px 10px"><span class="ic">📌</span><p>Nenhuma MDS ativa esta semana.</p></div>`;
+    : `<div class="empty" style="padding:16px 10px"><span class="ic">📌</span><p>Nenhuma MCS ativa esta semana.</p></div>`;
 
   const mdsHtml = `
     ${mdsRows}
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;flex-wrap:wrap;gap:8px">
       <button class="btn ghost sm" id="mds-hist">🕘 Histórico${histMds.length?` (${histMds.length})`:""}</button>
-      <button class="btn sm" id="mds-add">+ Nova MDS</button>
+      <button class="btn sm" id="mds-add">+ Nova MCS</button>
     </div>`;
 
   return `
@@ -1775,7 +1779,7 @@ function mciMdsPainelHtml(){
       <div class="card-pad">${mciHtml}</div>
     </div>
     <div class="card">
-      <div class="card-head"><h3>📍 MDS — Medidas de Direção Semanal</h3>
+      <div class="card-head"><h3>📍 MCS — Medidas de Direção Semanal</h3>
         <span class="hint">Concluída → sai da lista e vai pro histórico</span></div>
       <div class="card-pad">${mdsHtml}</div>
     </div>
@@ -1803,7 +1807,7 @@ function abrirHistoricoMds(){
   const lista=mdsHistorico();
   $("#modal-root").innerHTML=`
   <div class="overlay"><div class="modal">
-    <div class="modal-head"><h3>🕘 Histórico de MDS concluídas</h3><button class="btn-icon" id="hd-x">✕</button></div>
+    <div class="modal-head"><h3>🕘 Histórico de MCS concluídas</h3><button class="btn-icon" id="hd-x">✕</button></div>
     <div class="modal-body" style="max-height:60vh;overflow:auto">
       ${lista.length? lista.map(m=>{
         const resp=getColab(m.responsavelId);
@@ -1811,7 +1815,7 @@ function abrirHistoricoMds(){
           <div style="font-weight:600">${esc(m.texto||"(sem descrição)")}</div>
           <div class="hint">Responsável: ${resp?esc(resp.nome):"—"} · concluída em ${fmtDate(m.concluidoEm)}</div>
         </div>`;
-      }).join("") : `<div class="empty"><span class="ic">📍</span><p>Nenhuma MDS concluída ainda.</p></div>`}
+      }).join("") : `<div class="empty"><span class="ic">📍</span><p>Nenhuma MCS concluída ainda.</p></div>`}
     </div>
     <div class="modal-foot"><button class="btn ghost" id="hd-close">Fechar</button></div>
   </div></div>`;
@@ -1851,7 +1855,7 @@ function wirePainelMciMds(v){
     const novo={id:uid(), texto:"", responsavelId:null, criadoEm:todayStr(), concluido:false, concluidoEm:null};
     DB.data.mds.push(novo);
     try{ await sbInsert("mds", toSnake(novo)); }
-    catch(e){ toast("Erro ao criar MDS: "+e.message); }
+    catch(e){ toast("Erro ao criar MCS: "+e.message); }
     render();
   };
   if($("#mds-hist")) $("#mds-hist").onclick=abrirHistoricoMds;
@@ -1860,7 +1864,7 @@ function wirePainelMciMds(v){
       const item=DB.data.mds.find(m=>m.id===t.dataset.id); if(!item) return;
       item.texto=t.value;
       try{ await sbUpdate("mds", item.id, {texto:item.texto}); }
-      catch(e){ toast("Erro ao salvar MDS: "+e.message); }
+      catch(e){ toast("Erro ao salvar MCS: "+e.message); }
     };
   });
   v.querySelectorAll(".mds-resp").forEach(s=>{
@@ -1878,14 +1882,14 @@ function wirePainelMciMds(v){
       item.concluido=true; item.concluidoEm=todayStr();
       try{
         await sbUpdate("mds", item.id, {concluido:true, concluido_em:item.concluidoEm});
-        toast("MDS concluída e arquivada no histórico.");
-      }catch(e){ toast("Erro ao concluir MDS: "+e.message); }
+        toast("MCS concluída e arquivada no histórico.");
+      }catch(e){ toast("Erro ao concluir MCS: "+e.message); }
       render();
     };
   });
   v.querySelectorAll(".mds-rm").forEach(b=>{
     b.onclick=()=>{
-      confirmar("Remover esta MDS?","Essa ação não pode ser desfeita (não vai para o histórico).", async()=>{
+      confirmar("Remover esta MCS?","Essa ação não pode ser desfeita (não vai para o histórico).", async()=>{
         const id=b.dataset.id;
         DB.data.mds=DB.data.mds.filter(m=>m.id!==id);
         try{ await sbDelete("mds", id); }
@@ -1919,12 +1923,23 @@ function viewPainel(v){
   const responsaveisComAlerta=[...new Set(
     alertas.flatMap(a=>a.responsavel?a.responsavel.split(",").map(s=>s.trim()).filter(Boolean):[])
   )].sort((a,b)=>a.localeCompare(b,"pt-BR",{sensitivity:"base"}));
+  // "__sem__" é um valor especial (não é nome de ninguém) para filtrar
+  // alertas de atividade/financeiro sem responsável atribuído. Só aparece
+  // no filtro quando existe pelo menos um alerta nessa situação — alertas
+  // de reunião não entram aqui, pois não têm o conceito de "responsável".
+  const SEM_RESP="__sem__";
+  const temAlertaSemResp=alertas.some(a=>a.tipo!=="reuniao" && !a.responsavel);
   // se o valor selecionado deixou de existir (ex.: alerta resolvido), volta para "Todos"
   if(ST.painelAlertaProjeto && !projetosComAlerta.some(p=>p.id===ST.painelAlertaProjeto)) ST.painelAlertaProjeto="";
-  if(ST.painelAlertaResp && !responsaveisComAlerta.includes(ST.painelAlertaResp)) ST.painelAlertaResp="";
+  if(ST.painelAlertaResp && ST.painelAlertaResp!==SEM_RESP && !responsaveisComAlerta.includes(ST.painelAlertaResp)) ST.painelAlertaResp="";
+  if(ST.painelAlertaResp===SEM_RESP && !temAlertaSemResp) ST.painelAlertaResp="";
   const alertasFiltrados=alertas.filter(a=>
     (!ST.painelAlertaProjeto || a.projetoId===ST.painelAlertaProjeto) &&
-    (!ST.painelAlertaResp || (a.responsavel && a.responsavel.split(",").map(s=>s.trim()).includes(ST.painelAlertaResp)))
+    (!ST.painelAlertaResp || (
+      ST.painelAlertaResp===SEM_RESP
+        ? (a.tipo!=="reuniao" && !a.responsavel)
+        : (a.responsavel && a.responsavel.split(",").map(s=>s.trim()).includes(ST.painelAlertaResp))
+    ))
   );
 
   if(!ps.length){
@@ -2026,6 +2041,7 @@ function viewPainel(v){
       <div class="field-inline">Responsável
         <select class="select" id="painel-alerta-resp">
           <option value="">Todos</option>
+          ${temAlertaSemResp?`<option value="${SEM_RESP}" ${ST.painelAlertaResp===SEM_RESP?"selected":""}>Não atribuído</option>`:""}
           ${responsaveisComAlerta.map(r=>`<option value="${esc(r)}" ${r===ST.painelAlertaResp?"selected":""}>${esc(r)}</option>`).join("")}
         </select>
       </div>
