@@ -19,6 +19,17 @@
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
+  /* Desliga o "scroll anchoring" automático do navegador (Chrome/Firefox).
+     Esse recurso tenta sozinho "corrigir" a rolagem sempre que o conteúdo
+     acima da área visível muda de tamanho — mas como a lista de atividades
+     (e outras listas do painel) são recriadas por inteiro a cada alteração
+     (innerHTML novo, nenhum nó do DOM é reaproveitado), o navegador não
+     consegue achar um ponto de referência estável para se ancorar e, em
+     alguns casos, isso fazia a página pular para o topo mesmo depois do
+     código já ter restaurado a posição certa. Desligando aqui, quem manda
+     na posição de rolagem é sempre o nosso próprio código (função render()
+     e closeModal()), nunca um ajuste automático do navegador. */
+  html{overflow-anchor:none}
   body{
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
     background:var(--bg);color:var(--ink);font-size:14px;line-height:1.5;
@@ -752,6 +763,23 @@ function uid(){
   });
 }
 function $(sel,ctx){ return (ctx||document).querySelector(sel); }
+/* Reaplica a posição de rolagem "y" em vários momentos seguintes (frame
+   atual, frame seguinte, dois frames seguintes e um pequeno timeout).
+   Usado depois de recriar o DOM (render()) ou fechar um modal (closeModal())
+   para garantir que a posição do usuário na página não se perca, mesmo que
+   o navegador tente ajustar a rolagem sozinho de forma assíncrona (por
+   exemplo ao mover o foco para <body> quando um elemento focado é removido
+   do DOM). Reaplicar mais de uma vez é redundante na maioria das vezes, mas
+   é a forma mais confiável de "vencer" um ajuste automático do navegador
+   que aconteça depois da nossa primeira correção.
+*/
+function reforcarScroll(y){
+  const fix=()=>{ if(window.scrollY!==y) window.scrollTo(0,y); };
+  fix();
+  requestAnimationFrame(()=>{ fix(); requestAnimationFrame(fix); });
+  setTimeout(fix,60);
+  setTimeout(fix,200);
+}
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function normTxt(s){ return String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim(); }
 /* Recebe um texto de "responsável" (pode conter mais de um nome, separados por
@@ -1664,8 +1692,7 @@ function render(){
   if(navegou){
     window.scrollTo(0,0);
   } else if(window.scrollY!==scrollAntes){
-    window.scrollTo(0,scrollAntes);
-    requestAnimationFrame(()=>{ if(window.scrollY!==scrollAntes) window.scrollTo(0,scrollAntes); });
+    reforcarScroll(scrollAntes);
   }
 }
 
@@ -1812,7 +1839,7 @@ function wirePainelMciMds(v){
       mci.texto=$("#mci-texto")? $("#mci-texto").value : mci.texto;
       mci.concluido=true; mci.concluidoEm=todayStr();
       try{
-        await sbUpdate("mci", mci.id, {texto:mci.texto, concluido:true, concluidoEm:mci.concluidoEm});
+        await sbUpdate("mci", mci.id, {texto:mci.texto, concluido:true, concluido_em:mci.concluidoEm});
         toast("MCI concluída! 🎉");
       }catch(err){ toast("Erro ao concluir MCI: "+err.message); }
       render();
@@ -1840,7 +1867,7 @@ function wirePainelMciMds(v){
     s.onchange=async()=>{
       const item=DB.data.mds.find(m=>m.id===s.dataset.id); if(!item) return;
       item.responsavelId=s.value||null;
-      try{ await sbUpdate("mds", item.id, {responsavelId:item.responsavelId}); }
+      try{ await sbUpdate("mds", item.id, {responsavel_id:item.responsavelId}); }
       catch(e){ toast("Erro ao salvar responsável: "+e.message); }
     };
   });
@@ -1850,7 +1877,7 @@ function wirePainelMciMds(v){
       const item=DB.data.mds.find(m=>m.id===chk.dataset.id); if(!item) return;
       item.concluido=true; item.concluidoEm=todayStr();
       try{
-        await sbUpdate("mds", item.id, {concluido:true, concluidoEm:item.concluidoEm});
+        await sbUpdate("mds", item.id, {concluido:true, concluido_em:item.concluidoEm});
         toast("MDS concluída e arquivada no histórico.");
       }catch(e){ toast("Erro ao concluir MDS: "+e.message); }
       render();
@@ -5736,8 +5763,7 @@ function closeModal(){
   const y=window.scrollY;
   if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
   $("#modal-root").innerHTML="";
-  if(window.scrollY!==y) window.scrollTo(0,y);
-  requestAnimationFrame(()=>{ if(window.scrollY!==y) window.scrollTo(0,y); });
+  reforcarScroll(y);
 }
 function confirmar(titulo,texto,onOk){
   $("#modal-root").innerHTML=`
