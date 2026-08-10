@@ -6096,6 +6096,15 @@ function formProjeto(p,sessaoIdDefault){
       onFieldChange:(vv,key)=>{ if(key==="sessaoId"||key==="modalidade") abrir(vv); },
       onSave:async(v)=>{
         v.receita=parseFloat(v.receita)||0;
+        // demais campos numéricos do formulário (ex.: valorEdital, cargaHoraria,
+        // vagas, publicoEstimado) são opcionais: se vierem vazios ("") o Postgres
+        // rejeita com "invalid input syntax for type numeric", então aqui eles
+        // viram null (campo vazio) ou Number válido antes de seguir para o Supabase.
+        fields.forEach(f=>{
+          if(f.type==="number" && f.key!=="receita"){
+            v[f.key]=(v[f.key]===""||v[f.key]==null)?null:Number(v[f.key]);
+          }
+        });
         if(edit){
           Object.assign(p,v);
           // envia só os campos deste formulário — o objeto 'p' em memória também
