@@ -1640,6 +1640,20 @@ function render(){
   // posição também é restaurada explicitamente no final — inclusive num
   // frame seguinte, caso o navegador aplique o ajuste de forma assíncrona.
   const scrollAntes=window.scrollY;
+  // Além da rolagem da JANELA (tratada abaixo), alguns blocos têm rolagem
+  // PRÓPRIA (overflow-y:auto) — ex.: a barra lateral #nav (quando há muitos
+  // projetos) e a lista de Alertas de prazo no Painel Geral. Como esses
+  // blocos são recriados do zero a cada render() (innerHTML novo), o
+  // scrollTop interno deles sempre volta a 0, mesmo que a página em si não
+  // tenha rolado — é isso que dava a impressão de "a visão voltou pro
+  // topo" mesmo com a proteção da rolagem da janela já funcionando.
+  // Guarda o quanto cada um estava rolado agora, e restaura depois de
+  // recriá-los.
+  const scrollsInternosAntes={};
+  ["nav","alertas-scroll-box"].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el && el.scrollTop>0) scrollsInternosAntes[id]=el.scrollTop;
+  });
   if(document.activeElement && document.activeElement!==document.body && document.activeElement.blur){
     document.activeElement.blur();
   }
@@ -1693,6 +1707,15 @@ function render(){
     window.scrollTo(0,0);
   } else if(window.scrollY!==scrollAntes){
     reforcarScroll(scrollAntes);
+  }
+  // restaura a rolagem interna da barra lateral e da lista de Alertas de
+  // prazo (ver captura no início da função) — só quando a navegação não
+  // mudou de tela, senão faz sentido mesmo começar do topo desses blocos.
+  if(!navegou){
+    Object.keys(scrollsInternosAntes).forEach(id=>{
+      const el=document.getElementById(id);
+      if(el) el.scrollTop=scrollsInternosAntes[id];
+    });
   }
 }
 
@@ -2058,7 +2081,7 @@ function viewPainel(v){
         ${alertasFiltroHtml}
       </div>
     </div>
-    <div class="card-pad" style="${alertasFiltrados.length>7?"max-height:520px;overflow-y:auto":""}">${alertasHtml}</div>
+    <div class="card-pad" id="alertas-scroll-box" style="${alertasFiltrados.length>7?"max-height:520px;overflow-y:auto":""}">${alertasHtml}</div>
   </div>
 
   ${mciMdsPainelHtml()}
@@ -6106,19 +6129,33 @@ function formProjeto(p,sessaoIdDefault){
           }
         });
         if(edit){
-          Object.assign(p,v);
           // envia só os campos deste formulário — o objeto 'p' em memória também
           // carrega raci/stakeholders/riscos/reunioes, que não são colunas da
           // tabela 'projetos' (ficam em tabelas próprias) e não podem ir no update.
           const payload={};
           fields.forEach(f=>{ payload[f.key]=v[f.key]; });
+          // IMPORTANTE: só aplica a mudança no objeto 'p' em memória (usado por
+          // TODAS as telas, inclusive o Painel Geral) depois que o servidor
+          // confirmar o sucesso. Antes disso, Object.assign(p,v) rodava ANTES do
+          // await: se o PATCH falhasse (erro de validação, rede, RLS etc.), a
+          // tela atual até parava de refletir a mudança (pois render() nunca
+          // era chamado no catch), mas o objeto em memória já tinha sido
+          // alterado — daí em diante, qualquer outro re-render (real-time,
+          // navegação) mostrava o valor "novo" nunca salvo de fato. E pior:
+          // se a pessoa recarregasse a página depois, DB.load() buscava a
+          // verdade do servidor — que nunca recebeu a mudança — e o valor
+          // antigo/errado voltava a aparecer (ex.: no Painel Geral), dando a
+          // impressão de que a correção "sumiu".
           await sbUpdate("projetos", p.id, toSnake(payload));
+          Object.assign(p,v);
           toast("Projeto atualizado.");
         } else {
           const novo=Object.assign({id:uid(),stakeholders:[],riscos:[],raci:{}},v);
-          DB.data.projetos.push(novo);
           const {stakeholders,riscos,raci,...rest}=novo;
+          // mesmo motivo do 'edit' acima: só entra na lista em memória (e some
+          // do Painel Geral, contagens etc.) depois que o insert for confirmado.
           await sbInsert("projetos", toSnake(rest));
+          DB.data.projetos.push(novo);
           ST.view="projeto"; ST.projetoId=novo.id; ST.projTab="resumo";
           toast("Projeto criado.");
         }
