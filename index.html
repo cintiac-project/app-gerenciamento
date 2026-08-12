@@ -3194,8 +3194,13 @@ function projFinanceiro(c,p){
   c.querySelectorAll("[data-dlf]").forEach(b=>b.onclick=()=>{
     confirmar("Excluir este lançamento financeiro?","",async()=>{
       const fid=b.dataset.dlf;
-      DB.data.financeiro=DB.data.financeiro.filter(x=>x.id!==fid);
+      // só remove da lista em memória DEPOIS de confirmar que o servidor
+      // apagou de verdade — antes disso, se sbDelete falhasse (rede, RLS,
+      // etc.), o lançamento sumia da tela na hora mas continuava existindo
+      // no banco; ao recarregar a página ele reaparecia, como se a exclusão
+      // "não tivesse pegado".
       await sbDelete("financeiro", fid);
+      DB.data.financeiro=DB.data.financeiro.filter(x=>x.id!==fid);
       toast("Lançamento excluído."); render();
     });
   });
@@ -4508,8 +4513,12 @@ function viewFinanceiro(v){
   v.querySelectorAll("[data-dlf]").forEach(b=>b.onclick=()=>{
     confirmar("Excluir este lançamento?","",async()=>{
       const fid=b.dataset.dlf;
-      DB.data.financeiro=DB.data.financeiro.filter(x=>x.id!==fid);
+      // mesmo motivo do outro ponto de exclusão de lançamento (ver
+      // viewProjeto): só tira da lista em memória depois que o servidor
+      // confirmar a exclusão, para não "perder" a alteração se o pedido
+      // falhar e o item reaparecer sozinho ao recarregar a página.
       await sbDelete("financeiro", fid);
+      DB.data.financeiro=DB.data.financeiro.filter(x=>x.id!==fid);
       toast("Lançamento excluído."); render();
     });
   });
@@ -6629,14 +6638,18 @@ function formFinanceiro(projetoId,f){
       v.quantidade=parseFloat(v.quantidade)||0;
       v.valorUnitario=parseFloat(v.valorUnitario)||0;
       v.valor=Math.round(v.quantidade*v.valorUnitario*100)/100;
+      // mesmo cuidado do formulário de projeto: só reflete a mudança na
+      // memória (usada por Painel Geral, Controle Financeiro etc.) depois
+      // que o servidor confirmar — evita reaparecer um valor antigo/errado
+      // após um recarregamento se o salvamento tiver falhado.
       if(edit){
-        Object.assign(f,v);
         await sbUpdate("financeiro", f.id, toSnake(v));
+        Object.assign(f,v);
         toast("Lançamento atualizado.");
       } else {
         const novo=Object.assign({id:uid()},v);
-        DB.data.financeiro.push(novo);
         await sbInsert("financeiro", toSnake(novo));
+        DB.data.financeiro.push(novo);
         toast("Lançamento registrado.");
       }
       render();
