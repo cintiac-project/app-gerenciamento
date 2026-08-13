@@ -1412,7 +1412,9 @@ const ST = {
   painelAlertaResp:"",      // filtro de responsável dos Alertas de prazo (Painel Geral)
   // status visíveis no cronograma físico de cada projeto — "Concluída" some
   // da lista por padrão e só volta a aparecer quando marcada no filtro
-  cronoStatusVisiveis:new Set(["Não iniciada","Em andamento","Atrasada","Cancelada"])
+  cronoStatusVisiveis:new Set(["Não iniciada","Em andamento","Atrasada","Cancelada"]),
+  // filtro de período do cronograma físico (aplicado junto com o de status)
+  cronoFiltroData:{de:"",ate:""}
 };
 
 /* ============================================================
@@ -2712,6 +2714,21 @@ function responsaveisRaci(p,atividadeId){
 }
 function projCronograma(c,p){
   const podeEditar=isGestor();
+  // filtro de período: uma atividade "passa" se o intervalo dela
+  // [dataInicioPrev, dataFimPrev] cruza com o período escolhido — não exige
+  // que ela caiba 100% dentro, senão uma atividade longa que só começa
+  // antes do período (mas ainda está em andamento nele) desapareceria.
+  // Atividades sem nenhuma data cadastrada sempre aparecem (não dá pra
+  // filtrar o que não tem data).
+  const cronoDataOk=(a)=>{
+    const fd=ST.cronoFiltroData;
+    if(!fd.de && !fd.ate) return true;
+    const ini=a.dataInicioPrev, fim=a.dataFimPrev;
+    if(!ini && !fim) return true;
+    if(fd.de && fim && fim<fd.de) return false;
+    if(fd.ate && ini && ini>fd.ate) return false;
+    return true;
+  };
   const todasAts=DB.data.atividades.filter(a=>a.projetoId===p.id)
     .sort((a,b)=>(a.dataInicioPrev||"").localeCompare(b.dataInicioPrev||""));
   // status "efetivo" de cada atividade para fins de filtro — usa o mesmo
@@ -2722,10 +2739,12 @@ function projCronograma(c,p){
     const atrasada=a.status!=="Cancelada" && a.dataFimPrev && daysBetween(todayStr(),a.dataFimPrev)<0 && prog<100;
     return atrasada ? "Atrasada" : (a.status||"Não iniciada");
   };
-  const ats=todasAts.filter(a=>ST.cronoStatusVisiveis.has(statusEfetivo(a)));
+  const ats=todasAts.filter(a=>ST.cronoStatusVisiveis.has(statusEfetivo(a)) && cronoDataOk(a));
   const ocultas=todasAts.length-ats.length;
+  const fd=ST.cronoFiltroData;
+  const filtroDataAtivo=!!(fd.de||fd.ate);
   const filtroHtml=`
-  <div class="toolbar" style="margin-bottom:12px">
+  <div class="toolbar" style="margin-bottom:12px;flex-wrap:wrap">
     <span class="field-inline" style="font-weight:600;color:var(--ink)">Status:</span>
     <div class="status-filter" id="crono-status-filter">
       ${STATUS_ATIV.map(s=>{
@@ -2734,6 +2753,11 @@ function projCronograma(c,p){
           <span class="ck">${on?"✓":""}</span>${esc(s)}</button>`;
       }).join("")}
     </div>
+    <span class="field-inline" style="font-weight:600;color:var(--ink);margin-left:14px">Período:</span>
+    <input type="date" id="crono-data-de" value="${esc(fd.de||"")}" style="width:auto" title="De (mostra atividades que terminam a partir desta data)">
+    <span style="color:var(--ink-faint)">até</span>
+    <input type="date" id="crono-data-ate" value="${esc(fd.ate||"")}" style="width:auto" title="Até (mostra atividades que começam até esta data)">
+    ${filtroDataAtivo?`<button class="btn ghost sm" id="crono-data-limpar">✕ Limpar período</button>`:""}
     <div class="spacer"></div>
     ${ocultas>0?`<span class="hint">${ocultas} atividade(s) oculta(s) pelo filtro</span>`:""}
   </div>`;
@@ -2782,7 +2806,7 @@ function projCronograma(c,p){
       <th style="min-width:150px">Progresso</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table>
   </div>`:todasAts.length?`<div class="card"><div class="empty"><span class="ic">◷</span>
-    <h3>Nenhuma atividade com esse filtro</h3><p>${ocultas} atividade(s) está(ão) oculta(s) pelo filtro de status acima. Marque outro status para visualizá-las.</p>
+    <h3>Nenhuma atividade com esse filtro</h3><p>${ocultas} atividade(s) está(ão) oculta(s) pelo filtro de status e/ou período acima. Ajuste os filtros para visualizá-las.</p>
     </div></div>`:`<div class="card"><div class="empty"><span class="ic">◷</span>
     <h3>Sem atividades</h3><p>${podeEditar?"Cadastre as atividades para montar o cronograma físico.":"Nenhuma atividade cadastrada ainda."}</p>
     ${podeEditar?'<button class="btn" id="add-ativ2">+ Nova atividade</button>':""}</div></div>`}`;
@@ -2797,6 +2821,11 @@ function projCronograma(c,p){
         render();
       };
     });
+    $("#crono-data-de").onchange=(e)=>{ ST.cronoFiltroData.de=e.target.value; render(); };
+    $("#crono-data-ate").onchange=(e)=>{ ST.cronoFiltroData.ate=e.target.value; render(); };
+    if($("#crono-data-limpar")) $("#crono-data-limpar").onclick=()=>{
+      ST.cronoFiltroData={de:"",ate:""}; render();
+    };
   }
 
   if(!podeEditar) return;
@@ -2864,7 +2893,7 @@ function ganttHtml(p,ats){
       <div style="width:200px;flex-shrink:0"></div>
       <div class="gantt-months" style="flex:1;position:relative;height:16px">${mesesHtml}</div></div>
     <div style="position:relative">
-      <div class="gantt-today" style="left:calc(200px + ${todayPct}% * (100% - 200px)/100)" title="Hoje: ${esc(fmtDate(today))}"></div>
+      <div class="gantt-today" style="left:calc(200px + (100% - 200px) * ${(todayPct/100).toFixed(4)})" title="Hoje: ${esc(fmtDate(today))}"></div>
       ${rows}</div></div>`;
 }
 /* esconde rótulos de mês que colidiriam visualmente com o anterior (o
