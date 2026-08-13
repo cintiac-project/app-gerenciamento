@@ -1982,8 +1982,8 @@ function viewPainel(v){
   <div class="grid g4">
     <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--accent)"></span>Projetos ativos</div>
       <div class="val">${ativos.length}</div><div class="sub">${ps.length} no portfólio</div></div>
-    <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--info)"></span>Receita do portfólio</div>
-      <div class="val" style="font-size:22px">${fmtBRL(receitaTotal)}</div><div class="sub">Valor contratado total</div></div>
+    <div class="card kpi" id="kpi-receita" style="cursor:pointer" title="Ver detalhamento por projeto"><div class="lbl"><span class="dot" style="background:var(--info)"></span>Receita do portfólio</div>
+      <div class="val" style="font-size:22px">${fmtBRL(receitaTotal)}</div><div class="sub">Valor contratado total · clique para detalhar</div></div>
     <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--gold)"></span>Margem média</div>
       <div class="val">${margemMedia==null?"—":fmtNum(margemMedia,1)+"%"}</div>
       <div class="sub">Despesas: ${fmtBRL(despesaTotal)}</div></div>
@@ -2149,6 +2149,45 @@ function viewPainel(v){
   });
   v.querySelectorAll("[data-alerta-ok-reuniao]").forEach(b=>{
     b.onclick=()=>marcarReuniaoOkRapido(b.dataset.alertaOkReuniao, b.dataset.proj);
+  });
+  $("#kpi-receita").onclick=()=>abrirDetalheReceitaPortfolio(ps);
+}
+
+// Raio-x de "Receita do portfólio": lista TODOS os projetos (de todas as
+// sessões) ordenados do maior valor contratado para o menor, para achar
+// rapidamente algum projeto com valor errado/esquecido sem precisar abrir
+// sessão por sessão.
+function abrirDetalheReceitaPortfolio(ps){
+  const ordenado=ps.slice().sort((a,b)=>(+b.receita||0)-(+a.receita||0));
+  const total=ordenado.reduce((s,p)=>s+(+p.receita||0),0);
+  const linhas=ordenado.map(p=>`
+    <tr class="clickable" data-abrir-proj="${p.id}">
+      <td>${esc(p.nome)}<div style="font-size:11.5px;color:var(--ink-faint)">${esc(nomeSessao(p.sessaoId)||"")}</div></td>
+      <td class="num" style="${(+p.receita||0)===0?"color:var(--ink-faint)":""}">${fmtBRL(p.receita)}</td>
+    </tr>`).join("");
+  $("#modal-root").innerHTML=`
+  <div class="overlay"><div class="modal wide">
+    <div class="modal-head"><h3>💰 Receita do portfólio — por projeto</h3>
+      <button class="btn-icon" id="drp-x">✕</button></div>
+    <div class="modal-body">
+      <div class="help-banner" style="margin-bottom:14px"><span>ℹ️</span><span>
+        Todos os projetos, de todas as sessões, ordenados do maior para o menor valor contratado. Clique num projeto para abri-lo e conferir/corrigir o campo "Receita / Valor do projeto".</span></div>
+      <div style="max-height:55vh;overflow-y:auto" class="table-wrap">
+        <table><thead><tr><th>Projeto</th><th class="num">Receita</th></tr></thead>
+        <tbody>${linhas||`<tr><td colspan="2" style="text-align:center;color:var(--ink-faint);padding:20px">Nenhum projeto.</td></tr>`}</tbody></table>
+      </div>
+      <div style="text-align:right;margin-top:10px;font-weight:600">Total: ${fmtBRL(total)}</div>
+    </div>
+    <div class="modal-foot"><button class="btn" id="drp-fechar">Fechar</button></div>
+  </div></div>`;
+  $("#drp-x").onclick=closeModal;
+  $("#drp-fechar").onclick=closeModal;
+  document.querySelectorAll("[data-abrir-proj]").forEach(tr=>{
+    tr.onclick=()=>{
+      closeModal();
+      ST.view="projeto"; ST.projetoId=tr.dataset.abrirProj; ST.projTab="resumo";
+      render();
+    };
   });
 }
 
