@@ -5169,8 +5169,8 @@ function gerarHtmlAta(p,r){
     : "<p style='color:#8a98a6'>Nenhuma entrega registrada.</p>";
   const resumoRealizadasHtml=(ata.resumoRealizadas||[]).length
     ? "<ul>"+ata.resumoRealizadas.map(x=>`<li>${esc(x)}</li>`).join("")+"</ul>" : "";
-  const resumoProximasHtml=(ata.resumoProximas||[]).length
-    ? "<ul>"+ata.resumoProximas.map(x=>`<li>${esc(x)}</li>`).join("")+"</ul>" : "";
+  // Próximas atividades NÃO entra na ata exportada (a pedido: a ata deve trazer
+  // apenas o que já foi realizado no período, não o planejamento futuro).
   const anotacoesHtml=ata.anotacoes? `<p>${esc(ata.anotacoes).replace(/\n/g,"<br>")}</p>` : "";
   const style=`<style>
   .ata-doc{max-width:780px;margin:0 auto;font-family:'Inter',system-ui,-apple-system,sans-serif;color:#2a3744;line-height:1.55;padding:18px}
@@ -5199,9 +5199,8 @@ function gerarHtmlAta(p,r){
       <dt>Participantes:</dt><dd>${partsHtml}</dd>
     </dl>
     <h2>Objetivo da reunião</h2>${objHtml}
-    ${(resumoRealizadasHtml||resumoProximasHtml)?`<h2>Resumo do período</h2>
-    ${resumoRealizadasHtml?`<p><b>Atividades realizadas:</b></p>${resumoRealizadasHtml}`:""}
-    ${resumoProximasHtml?`<p><b>Próximas atividades:</b></p>${resumoProximasHtml}`:""}`:""}
+    ${resumoRealizadasHtml?`<h2>Resumo do período</h2>
+    <p><b>Atividades realizadas:</b></p>${resumoRealizadasHtml}`:""}
     <h2>Tópicos de discussão</h2>${topsHtml}
     <h2>Saídas e entregas acordadas</h2>${saiHtml}
     ${anotacoesHtml?`<h2>Anotações da reunião</h2>${anotacoesHtml}`:""}
@@ -5219,18 +5218,13 @@ function gerarTextoAta(p,r){
   out+="Assunto: "+(r.titulo||"(sem título)")+"\n";
   out+="Participantes: "+(parts.join(", ")||"—")+"\n\n";
   out+="OBJETIVO\n"+"-".repeat(8)+"\n"+(ata.objetivo||"—")+"\n\n";
-  if((ata.resumoRealizadas||[]).length || (ata.resumoProximas||[]).length){
+  // Próximas atividades NÃO entra na ata exportada (a pedido: a ata deve trazer
+  // apenas o que já foi realizado no período, não o planejamento futuro).
+  if((ata.resumoRealizadas||[]).length){
     out+="RESUMO DO PERÍODO\n"+"-".repeat(18)+"\n";
-    if((ata.resumoRealizadas||[]).length){
-      out+="Atividades realizadas:\n";
-      ata.resumoRealizadas.forEach(x=>out+="• "+x+"\n");
-      out+="\n";
-    }
-    if((ata.resumoProximas||[]).length){
-      out+="Próximas atividades:\n";
-      ata.resumoProximas.forEach(x=>out+="• "+x+"\n");
-      out+="\n";
-    }
+    out+="Atividades realizadas:\n";
+    ata.resumoRealizadas.forEach(x=>out+="• "+x+"\n");
+    out+="\n";
   }
   out+="TÓPICOS DE DISCUSSÃO\n"+"-".repeat(20)+"\n";
   if((ata.topicos||[]).length){
