@@ -1127,6 +1127,37 @@ function calcularAlertas(){
         responsavel:null, projetoId:p.id, reuniaoId:r.id});
     });
   });
+  // atividades duplicadas: mesmo nome (ignorando acentos/maiúsculas) repetido
+  // no cronograma de um mesmo projeto ou em mais de um projeto — geralmente
+  // sinal de cadastro em duplicidade. A sessão Rotinas fica de fora dessa
+  // checagem: nela é normal e esperado repetir nomes de atividade entre
+  // diferentes rotinas/projetos (ex.: "Reunião semanal" em vários rotineiros).
+  const gruposDuplicados={};
+  DB.data.atividades.forEach(a=>{
+    if(a.duplicataIgnorada) return;
+    const proj=getProjeto(a.projetoId);
+    if(!proj || proj.sessaoId==="rotinas") return;
+    const chave=normTxt(a.nome);
+    if(!chave) return;
+    (gruposDuplicados[chave]=gruposDuplicados[chave]||[]).push(a);
+  });
+  Object.values(gruposDuplicados).forEach(grupo=>{
+    if(grupo.length<2) return;
+    grupo.forEach(a=>{
+      const outras=grupo.filter(x=>x.id!==a.id);
+      const noMesmoProjeto=outras.filter(x=>x.projetoId===a.projetoId).length;
+      const outrosProjetosNomes=[...new Set(outras.filter(x=>x.projetoId!==a.projetoId).map(x=>nomeProjeto(x.projetoId)))];
+      const partes=[];
+      if(noMesmoProjeto) partes.push(`${noMesmoProjeto} vez(es) no mesmo cronograma`);
+      if(outrosProjetosNomes.length) partes.push("em: "+outrosProjetosNomes.join(", "));
+      const proj=getProjeto(a.projetoId);
+      const resp=nomesResponsaveisAtividade(a,proj).join(", ");
+      out.push({tipo:"duplicada",sev:"warn",dias:9999, // não é baseado em prazo; sempre aparece por último
+        titulo:`Atividade duplicada: ${a.nome}`,
+        desc:`${nomeProjeto(a.projetoId)} · também aparece ${partes.join(" · ")}`,
+        responsavel:resp, projetoId:a.projetoId, atividadeId:a.id});
+    });
+  });
   return out.sort((a,b)=>a.dias-b.dias);
 }
 
@@ -1989,8 +2020,8 @@ function viewPainel(v){
     <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--gold)"></span>Margem média</div>
       <div class="val">${margemMedia==null?"—":fmtNum(margemMedia,1)+"%"}</div>
       <div class="sub">Despesas: ${fmtBRL(despesaTotal)}</div></div>
-    <div class="card kpi"><div class="lbl"><span class="dot" style="background:${alertas.some(a=>a.tipo!=="reuniao")?"var(--danger)":"var(--ok)"}"></span>Alertas de prazo</div>
-      <div class="val">${alertas.filter(a=>a.tipo!=="reuniao").length}</div><div class="sub">${alertas.filter(a=>a.sev==="danger").length} vencido(s)</div></div>
+    <div class="card kpi"><div class="lbl"><span class="dot" style="background:${alertas.some(a=>a.tipo==="fisico"||a.tipo==="financeiro")?"var(--danger)":"var(--ok)"}"></span>Alertas de prazo</div>
+      <div class="val">${alertas.filter(a=>a.tipo==="fisico"||a.tipo==="financeiro").length}</div><div class="sub">${alertas.filter(a=>a.sev==="danger").length} vencido(s)</div></div>
   </div>`;
 
   /* dados dos gráficos por período */
@@ -2035,6 +2066,12 @@ function viewPainel(v){
             <button class="btn-icon" data-alerta-ir-reuniao="${a.reuniaoId}" data-proj="${a.projetoId}" title="Ir para a reunião">↗</button>
             <button class="btn-icon" data-alerta-ok-reuniao="${a.reuniaoId}" data-proj="${a.projetoId}" title="OK — reunião concluída, remover deste painel">✓</button>
           </div>`
+      : a.tipo==="duplicada"
+      ? (isGestor()? `<div class="alert-acoes">
+            <button class="btn-icon" data-alerta-editar-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Editar atividade">✎</button>
+            <button class="btn-icon" data-alerta-ignorar-dup="${a.atividadeId}" title="Ignorar — não é duplicata, não avisar de novo para esta atividade">🙈</button>
+            <button class="btn-icon del" data-alerta-excluir-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Excluir esta atividade duplicada">🗑</button>
+          </div>` : "")
       : isGestor()? (
       a.tipo==="fisico"
         ? `<div class="alert-acoes">
@@ -2051,7 +2088,7 @@ function viewPainel(v){
       <div class="at"><div class="t">${esc(a.titulo)}</div>
         <div class="d">${esc(a.desc)}</div>
         ${respHtml}${notasHtml}</div>
-      <span class="badge ${a.sev==="danger"?"b-danger":a.sev==="info"?"b-info":"b-warn"}">${a.tipo==="fisico"?"Físico":a.tipo==="financeiro"?"Financeiro":"Reunião"}</span>
+      <span class="badge ${a.sev==="danger"?"b-danger":a.sev==="info"?"b-info":"b-warn"}">${a.tipo==="fisico"?"Físico":a.tipo==="financeiro"?"Financeiro":a.tipo==="duplicada"?"Duplicada":"Reunião"}</span>
       ${acoesHtml}</div>`;
   }).join("") : `<div class="empty" style="padding:26px"><span class="ic">✓</span><p>${alertas.length?"Nenhum alerta para o filtro selecionado.":"Nenhum prazo crítico nem reunião nos próximos 7 dias."}</p></div>`;
 
@@ -2077,7 +2114,7 @@ function viewPainel(v){
   <div style="height:18px"></div>
   <div class="card" style="margin-bottom:18px">
     <div class="card-head" style="flex-wrap:wrap;gap:10px">
-      <h3>⚠ Alertas de prazos — físicos-financeiros e reuniões</h3>
+      <h3>⚠ Alertas de prazos, reuniões e duplicidades</h3>
       <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
         <span class="hint">${alertasFiltrados.length} de ${alertas.length} alerta(s) · próximos 7 dias, itens vencidos e reuniões agendadas</span>
         ${alertasFiltroHtml}
@@ -2136,6 +2173,9 @@ function viewPainel(v){
   });
   v.querySelectorAll("[data-alerta-excluir-ativ]").forEach(b=>{
     b.onclick=()=>excluirAtividadeComConfirmacao(getAtividade(b.dataset.alertaExcluirAtiv));
+  });
+  v.querySelectorAll("[data-alerta-ignorar-dup]").forEach(b=>{
+    b.onclick=()=>ignorarDuplicataAtividade(b.dataset.alertaIgnorarDup);
   });
   v.querySelectorAll("[data-alerta-realizar-fin]").forEach(b=>{
     b.onclick=()=>marcarFinanceiroRealizadoRapido(b.dataset.alertaRealizarFin);
@@ -2209,6 +2249,29 @@ async function marcarAtividadeConcluidaRapido(atividadeId){
         toast("Atividade marcada como concluída.");
         render();
       }catch(e){
+        toast("Erro ao atualizar a atividade: "+(e.message||e));
+      }
+    });
+}
+
+/* Ação rápida do Painel Geral: marca uma atividade como "não é duplicata",
+   removendo-a do alerta de duplicidade sem excluir nem alterar mais nada
+   nela. Fica salvo na própria atividade (vale para toda a equipe) — se o
+   nome dela for alterado depois, o aviso volta a valer normalmente para o
+   nome novo (ver formAtividade). */
+async function ignorarDuplicataAtividade(atividadeId){
+  const a=getAtividade(atividadeId);
+  if(!a) return;
+  confirmar("Ignorar este alerta de duplicidade?",
+    `"${a.nome}" deixa de aparecer no alerta de atividades duplicadas. Se o nome dela mudar depois, o aviso pode voltar a aparecer.`,
+    async()=>{
+      try{
+        a.duplicataIgnorada=true;
+        await sbUpdate("atividades", a.id, {duplicata_ignorada:true});
+        toast("Alerta de duplicidade ignorado para esta atividade.");
+        render();
+      }catch(e){
+        a.duplicataIgnorada=false;
         toast("Erro ao atualizar a atividade: "+(e.message||e));
       }
     });
@@ -6305,6 +6368,9 @@ function formAtividade(projetoId,a){
       if(v.status==="Concluída") v.progresso=100;
       else if(v.progresso>=100) v.status="Concluída";
       if(edit){
+        // se o nome mudou, o "ignorar duplicata" anterior valia para o nome
+        // antigo — deixa o alerta livre para reavaliar o nome novo.
+        if(a.duplicataIgnorada && v.nome && normTxt(v.nome)!==normTxt(a.nome)) v.duplicataIgnorada=false;
         Object.assign(a,v);
         await sbUpdate("atividades", a.id, toSnake(v));
         toast("Atividade atualizada.");
