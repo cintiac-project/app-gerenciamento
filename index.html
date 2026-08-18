@@ -5167,11 +5167,12 @@ function modalExportar(titulo,htmlConteudo,textoConteudo,nomeArquivo){
       <button class="btn-icon" id="mx-x">✕</button></div>
     <div class="modal-body">
       <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-        <button class="btn" id="mx-html">💾 Baixar arquivo (.html)</button>
+        <button class="btn" id="mx-doc">📝 Baixar arquivo (.doc)</button>
+        <button class="btn ghost" id="mx-html">💾 Baixar arquivo (.html)</button>
         <button class="btn ghost" id="mx-open">🖨️ Abrir em nova aba (imprimir / salvar PDF)</button>
         <button class="btn ghost" id="mx-text">📋 Copiar como texto</button>
       </div>
-      <div class="help-banner" style="margin-bottom:14px"><span>💡</span><span>O arquivo HTML pode ser anexado a e-mails ou aberto direto no navegador pelo destinatário. Para virar PDF, clique em "Abrir em nova aba" e use <b>Ctrl+P → Salvar como PDF</b>.</span></div>
+      <div class="help-banner" style="margin-bottom:14px"><span>💡</span><span>O arquivo <b>.doc</b> abre direto no Word (ou Google Docs/LibreOffice) já formatado e pronto para editar. O HTML pode ser anexado a e-mails ou aberto direto no navegador. Para virar PDF, clique em "Abrir em nova aba" e use <b>Ctrl+P → Salvar como PDF</b>.</span></div>
       <div style="max-height:55vh;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px;background:#fafbfc">
         ${htmlConteudo}
       </div>
@@ -5180,7 +5181,39 @@ function modalExportar(titulo,htmlConteudo,textoConteudo,nomeArquivo){
   function montarStandalone(){
     return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(titulo)}</title></head><body style="background:#fff;margin:0;padding:18px 0">${htmlConteudo}</body></html>`;
   }
+  // .doc compatível com Word: envelope HTML com os namespaces e comentários
+  // condicionais "mso" que o Word reconhece para abrir como documento nativo
+  // (com régua, páginas A4 e formatação preservada), continuando 100% editável
+  // depois de aberto — sem depender de nenhuma biblioteca externa.
+  function montarWord(){
+    return `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="utf-8">
+<title>${esc(titulo)}</title>
+<!--[if gte mso 9]><xml>
+ <w:WordDocument>
+  <w:View>Print</w:View>
+  <w:Zoom>100</w:Zoom>
+  <w:DoNotOptimizeForBrowser/>
+ </w:WordDocument>
+</xml><![endif]-->
+<style>
+@page{ size:21cm 29.7cm; margin:2.4cm 2.2cm 2.2cm 2.2cm; }
+body{ font-family:Calibri,Arial,sans-serif; }
+</style>
+</head>
+<body>${htmlConteudo}</body>
+</html>`;
+  }
   $("#mx-x").onclick=closeModal;
+  $("#mx-doc").onclick=()=>{
+    const blob=new Blob([montarWord()],{type:"application/msword"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download=nomeArquivo+".doc";
+    a.click(); URL.revokeObjectURL(a.href);
+    toast("Arquivo .doc baixado — abra no Word para editar.");
+  };
   $("#mx-html").onclick=()=>{
     const blob=new Blob([montarStandalone()],{type:"text/html;charset=utf-8"});
     const a=document.createElement("a");
@@ -5216,51 +5249,65 @@ function gerarHtmlAta(p,r){
   const parts=(r.participantes||[]).filter(Boolean);
   const partsHtml=parts.length
     ? "<ul>"+parts.map(x=>`<li>${esc(x)}</li>`).join("")+"</ul>"
-    : "<p style='margin:0;color:#8a98a6'>—</p>";
+    : "<p class='vazio'>—</p>";
   const objHtml=ata.objetivo
     ? `<p>${esc(ata.objetivo).replace(/\n/g,"<br>")}</p>`
-    : "<p style='color:#8a98a6'>(não informado)</p>";
+    : "<p class='vazio'>(não informado)</p>";
   const topsHtml=(ata.topicos||[]).length
-    ? "<ol>"+ata.topicos.map(t=>`<li><b>${esc(t.tema||"(sem tema)")}</b><div>${esc(t.notas||"").replace(/\n/g,"<br>")||"<span style='color:#8a98a6'>—</span>"}</div></li>`).join("")+"</ol>"
-    : "<p style='color:#8a98a6'>Nenhum tópico registrado.</p>";
+    ? "<ol>"+ata.topicos.map(t=>`<li><b>${esc(t.tema||"(sem tema)")}</b><div>${esc(t.notas||"").replace(/\n/g,"<br>")||"<span class='vazio'>—</span>"}</div></li>`).join("")+"</ol>"
+    : "<p class='vazio'>Nenhum tópico registrado.</p>";
   const saiHtml=(ata.saidas||[]).length
-    ? `<table><thead><tr><th>Descrição da entrega</th><th>Responsável</th><th>Data prevista</th></tr></thead>
+    ? `<table class="tb"><thead><tr><th>Descrição da entrega</th><th style="width:130px">Responsável</th><th style="width:110px">Data prevista</th></tr></thead>
        <tbody>${ata.saidas.map(s=>`<tr>
          <td>${esc(s.descricao||"—")}</td>
          <td>${esc(s.responsavel||"—")}</td>
          <td>${s.dataEntrega?fmtDate(s.dataEntrega):"—"}</td></tr>`).join("")}</tbody></table>`
-    : "<p style='color:#8a98a6'>Nenhuma entrega registrada.</p>";
+    : "<p class='vazio'>Nenhuma entrega registrada.</p>";
   const resumoRealizadasHtml=(ata.resumoRealizadas||[]).length
     ? "<ul>"+ata.resumoRealizadas.map(x=>`<li>${esc(x)}</li>`).join("")+"</ul>" : "";
   // Próximas atividades NÃO entra na ata exportada (a pedido: a ata deve trazer
   // apenas o que já foi realizado no período, não o planejamento futuro).
   const anotacoesHtml=ata.anotacoes? `<p>${esc(ata.anotacoes).replace(/\n/g,"<br>")}</p>` : "";
+  // Layout "executivo": tipografia serifada nos títulos + sans no corpo,
+  // paleta tinta/bronze sóbria, seções marcadas por um pequeno rótulo com
+  // barra de destaque em vez de blocos coloridos. Metadados e tabelas usam
+  // <table> (em vez de CSS grid) de propósito, para renderizar de forma
+  // idêntica tanto no navegador/impressão quanto ao abrir o .doc no Word,
+  // que não interpreta grid/flexbox.
   const style=`<style>
-  .ata-doc{max-width:780px;margin:0 auto;font-family:'Inter',system-ui,-apple-system,sans-serif;color:#2a3744;line-height:1.55;padding:18px}
-  .ata-doc h1{color:#1f6f6b;margin:0 0 4px;font-size:24px;font-weight:700}
-  .ata-doc .sub{color:#5d6c7a;font-size:14px;margin-bottom:18px}
-  .ata-doc h2{border-bottom:2px solid #1f6f6b;padding-bottom:4px;margin:26px 0 10px;color:#1f3a3a;font-size:16px}
-  .ata-doc dl.meta{display:grid;grid-template-columns:140px 1fr;gap:6px 14px;margin:14px 0 22px;font-size:14px}
-  .ata-doc dl.meta dt{color:#5d6c7a;font-weight:600}
-  .ata-doc dl.meta dd{margin:0}
-  .ata-doc table{width:100%;border-collapse:collapse;margin-top:8px}
-  .ata-doc th,.ata-doc td{border:1px solid #d8dde2;padding:8px 10px;text-align:left;font-size:13.5px;vertical-align:top}
-  .ata-doc th{background:#f4f7f8;font-weight:600}
-  .ata-doc ul{padding-left:22px;margin:4px 0}
-  .ata-doc ol{padding-left:22px;margin:0}
-  .ata-doc ol li{margin-bottom:13px}
-  .ata-doc ol li b{display:block;color:#1f3a3a;margin-bottom:3px}
-  .ata-doc .rodape{margin-top:36px;padding-top:12px;border-top:1px solid #e1e6ea;color:#8a98a6;font-size:11.5px}
+  .ata-doc{max-width:800px;margin:0 auto;font-family:Calibri,Arial,sans-serif;color:#232f3a;line-height:1.6;padding:6px 4px 18px}
+  .ata-doc .eyebrow{font-family:Georgia,'Times New Roman',serif;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#8a6d3b;margin:0 0 6px}
+  .ata-doc h1{font-family:Georgia,'Times New Roman',serif;color:#1c2b39;margin:0 0 14px;font-size:26px;font-weight:700;letter-spacing:.2px}
+  .ata-doc .faixa{border-top:2.5px solid #1c2b39;border-bottom:.75px solid #c9ab73;margin:0 0 22px;padding-top:16px}
+  .ata-doc table.info{width:100%;border-collapse:collapse;margin:0 0 26px}
+  .ata-doc table.info td{padding:5px 0;font-size:13.5px;vertical-align:top;border-bottom:.75px solid #e7e1d3}
+  .ata-doc table.info td.lbl{width:150px;color:#6b7a87;font-weight:600;font-family:Georgia,'Times New Roman',serif;font-style:italic}
+  .ata-doc table.info td.val{color:#232f3a}
+  .ata-doc table.info td.val b{color:#1c2b39}
+  .ata-doc h2{font-family:Georgia,'Times New Roman',serif;font-weight:700;font-size:14px;letter-spacing:1px;text-transform:uppercase;color:#1c2b39;margin:28px 0 10px;padding-left:12px;border-left:4px solid #8a6d3b}
+  .ata-doc p{margin:0 0 8px;font-size:13.5px}
+  .ata-doc .vazio{color:#9aa4ac;font-style:italic}
+  .ata-doc table.tb{width:100%;border-collapse:collapse;margin-top:6px}
+  .ata-doc table.tb th{background:#1c2b39;color:#f4f1e8;font-family:Georgia,'Times New Roman',serif;font-weight:600;font-size:12px;letter-spacing:.4px;text-transform:uppercase;text-align:left;padding:8px 10px;border:.75px solid #1c2b39}
+  .ata-doc table.tb td{border:.75px solid #d9dee2;padding:8px 10px;text-align:left;font-size:13px;vertical-align:top}
+  .ata-doc table.tb tr:nth-child(even) td{background:#f7f6f1}
+  .ata-doc ul{padding-left:20px;margin:4px 0 8px;font-size:13.5px}
+  .ata-doc ol{padding-left:20px;margin:0}
+  .ata-doc ol li{margin-bottom:13px;font-size:13.5px}
+  .ata-doc ol li b{display:block;color:#1c2b39;margin-bottom:3px}
+  .ata-doc .rodape{margin-top:38px;padding-top:10px;border-top:.75px solid #d9dee2;color:#9aa4ac;font-size:10.5px;font-family:Georgia,'Times New Roman',serif;font-style:italic}
   @media print{.ata-doc{margin:0;padding:0}body{background:#fff}}
   </style>`;
   return `${style}<div class="ata-doc">
-    <h1>Ata de reunião</h1>
-    <div class="sub">Projeto: <b>${esc(p.nome)}</b></div>
-    <dl class="meta">
-      <dt>Data:</dt><dd>${fmtDate(r.data)}${r.hora?" · "+esc(r.hora):""}</dd>
-      <dt>Assunto:</dt><dd>${esc(r.titulo||"(sem título)")}</dd>
-      <dt>Participantes:</dt><dd>${partsHtml}</dd>
-    </dl>
+    <div class="eyebrow">Documento interno · Ata de reunião</div>
+    <h1>${esc(p.nome)}</h1>
+    <div class="faixa">
+      <table class="info">
+        <tr><td class="lbl">Assunto</td><td class="val"><b>${esc(r.titulo||"(sem título)")}</b></td></tr>
+        <tr><td class="lbl">Data</td><td class="val">${fmtDate(r.data)}${r.hora?" · "+esc(r.hora):""}</td></tr>
+        <tr><td class="lbl">Participantes</td><td class="val">${partsHtml}</td></tr>
+      </table>
+    </div>
     <h2>Objetivo da reunião</h2>${objHtml}
     ${resumoRealizadasHtml?`<h2>Resumo do período</h2>
     <p><b>Atividades realizadas:</b></p>${resumoRealizadasHtml}`:""}
