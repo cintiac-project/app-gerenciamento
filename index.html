@@ -228,6 +228,24 @@
     outline:2px solid var(--accent-soft);border-color:var(--accent);
   }
   .fld textarea{resize:vertical;min-height:64px}
+
+  /* campo de busca (autocomplete) — ex.: Projeto por Código/Sigla no Apontamento de Horas */
+  .busca-select{position:relative}
+  .busca-select .bs-input{
+    padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface);
+    color:var(--ink);width:100%;
+  }
+  .busca-select .bs-input:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+  .busca-select .bs-results{
+    display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:40;
+    background:var(--surface);border:1px solid var(--line);border-radius:8px;
+    max-height:230px;overflow-y:auto;box-shadow:0 8px 24px rgba(16,32,46,.14);
+  }
+  .busca-select .bs-item{padding:8px 11px;font-size:13px;cursor:pointer;border-bottom:1px solid var(--line-soft)}
+  .busca-select .bs-item:last-child{border-bottom:none}
+  .busca-select .bs-item:hover,.busca-select .bs-item.hl{background:var(--accent-soft)}
+  .busca-select .bs-item b{color:var(--accent)}
+  .busca-select .bs-empty{padding:9px 11px;font-size:12.5px;color:var(--ink-faint)}
   .fld .help{font-size:11px;color:var(--ink-faint)}
   .form-err{background:var(--danger-bg);color:var(--danger);padding:9px 12px;border-radius:8px;
     font-size:12.5px;font-weight:500;margin-bottom:14px;display:none}
@@ -1507,6 +1525,26 @@ function opcoesProjetosAgrupadasPorSessao(lista){
       .forEach(p=>opts.push({value:p.id,label:p.nome,group:"Não classificados"}));
   }
   return opts;
+}
+
+// opções de projeto para o campo de busca (autocomplete) do Apontamento de
+// Horas: cada opção carrega, além do nome, o Código/Sigla — tanto para
+// buscar (campo "busca", usado na filtragem) quanto para destacar
+// visualmente no resultado (campo "html"). Ao escolher um resultado, o
+// nome completo do projeto é preenchido automaticamente no campo.
+function opcoesProjetosBusca(){
+  return opcoesProjetosAgrupadasPorSessao().map(o=>{
+    const p=getProjeto(o.value);
+    const codigo=(p&&p.codigo)?String(p.codigo).trim():"";
+    return {
+      value:o.value,
+      label: codigo?`${codigo} — ${o.label}`:o.label,
+      busca: codigo?`${codigo} ${o.label}`:o.label,
+      html: `${codigo?`<b>${esc(codigo)}</b> — `:""}${esc(o.label)}`+
+        `<div style="font-size:11px;color:var(--ink-faint)">${esc(o.group||"")}</div>`,
+      group:o.group
+    };
+  });
 }
 
 /* ============================================================
@@ -6245,6 +6283,18 @@ function openForm(cfg){
           ${f.prefillButton?`<button type="button" class="btn ghost sm estim-prefill">${esc(f.prefillButton.label)}</button>`:""}
         </div>
       </div>`;
+    }else if(f.type==="buscaSelect"){
+      // campo de busca (autocomplete): digita e filtra por qualquer termo em
+      // f.busca (ex.: código OU nome do projeto) — ao clicar num resultado,
+      // guarda o value real (ex.: o id do projeto) e mostra o label escolhido.
+      // Ver wireBuscaSelectField() logo abaixo, que cuida de toda a interação.
+      const opts0=(f.dynamic?f.optionsFn(vals):f.options)||[];
+      const atual=opts0.find(o=>String(o.value)===String(v));
+      input=`<div class="busca-select" data-k="${f.key}">
+        <input type="text" class="bs-input" autocomplete="off" value="${esc(atual?atual.label:"")}"
+          placeholder="${esc(f.placeholder||"Digite para buscar…")}">
+        <div class="bs-results"></div>
+      </div>`;
     }else if(f.type==="textarea"){
       input=`<textarea data-k="${f.key}" ${dis} placeholder="${esc(f.placeholder||"")}">${esc(v||"")}</textarea>`;
     }else if(f.type==="date" && f.allowIndeterminate){
@@ -6329,6 +6379,64 @@ function openForm(cfg){
   }
   fields.forEach(f=>{ if(f.type==="estimativas") wireEstimativasField(f); });
 
+  // campo de busca (autocomplete) — ver o tipo "buscaSelect" em fieldHtml().
+  // Guarda o valor de verdade (ex.: o id do projeto) em vals[f.key]; o
+  // <input> de texto só existe para digitar/exibir o que a pessoa está
+  // procurando (por código ou nome) — por isso ele é tratado à parte em
+  // collect() (não tem ".value" equivalente ao id escolhido).
+  function wireBuscaSelectField(f){
+    const wrap=$("#f-grid").querySelector(`[data-k="${f.key}"]`);
+    if(!wrap) return;
+    const input=wrap.querySelector(".bs-input");
+    const results=wrap.querySelector(".bs-results");
+    function opts(){ return (f.dynamic?f.optionsFn(vals):f.options)||[]; }
+    function labelDoValor(val){
+      const o=opts().find(o=>String(o.value)===String(val));
+      return o?o.label:"";
+    }
+    function normaliza(s){
+      return String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+    }
+    function mostrarResultados(lista){
+      results.innerHTML = lista.length
+        ? lista.slice(0,30).map(o=>`<div class="bs-item" data-val="${esc(o.value)}">${o.html||esc(o.label)}</div>`).join("")
+        : `<div class="bs-empty">Nenhum resultado encontrado.</div>`;
+      results.style.display="block";
+    }
+    function buscar(q){
+      const nq=normaliza(q);
+      mostrarResultados(!nq ? opts() : opts().filter(o=>normaliza(o.busca||o.label).includes(nq)));
+    }
+    input.addEventListener("focus",()=>buscar(vals[f.key]?"":input.value));
+    input.addEventListener("input",()=>{
+      // ao editar o texto, a seleção anterior deixa de valer até escolher
+      // de novo um resultado da lista — evita salvar algo que não bate
+      // mais com o que está escrito no campo.
+      vals[f.key]="";
+      buscar(input.value);
+    });
+    input.addEventListener("blur",()=>{
+      // pequeno atraso: sem isso, o "blur" esconderia a lista antes do
+      // clique no resultado (mousedown) ser processado.
+      setTimeout(()=>{
+        results.style.display="none";
+        if(!vals[f.key]) input.value="";
+      },150);
+    });
+    results.addEventListener("mousedown",(e)=>{
+      const item=e.target.closest(".bs-item");
+      if(!item) return;
+      e.preventDefault();
+      const val=item.dataset.val;
+      vals[f.key]=val;
+      input.value=labelDoValor(val);
+      results.style.display="none";
+      refreshDynamic(); recomputeComputed();
+      if(cfg.onFieldChange) cfg.onFieldChange(vals, f.key, $("#f-grid"));
+    });
+  }
+  fields.forEach(f=>{ if(f.type==="buscaSelect") wireBuscaSelectField(f); });
+
   function collect(){
     $("#f-grid").querySelectorAll("[data-k]").forEach(el=>{
       if(el.disabled) return; // não sobrescreve valor de campo bloqueado
@@ -6341,6 +6449,10 @@ function openForm(cfg){
       if(fdef && fdef.type==="estimativas"){
         // vals[el.dataset.k] já é mantido em dia por wireEstimativasField() —
         // não sobrescrever aqui (o container <div> não tem .value).
+        return;
+      }
+      if(fdef && fdef.type==="buscaSelect"){
+        // idem: vals[el.dataset.k] já é mantido em dia por wireBuscaSelectField()
         return;
       }
       // campos de data vazios devem virar null, nunca "" — o Postgres rejeita
@@ -6686,8 +6798,10 @@ function formHoras(h){
       {key:"colaboradorId",label:"Colaborador",type:"select",required:true,
         options:(fixedColab?[getColab(fixedColab)]:getInternos()).filter(Boolean).map(c=>({value:c.id,label:c.nome})),
         help:fixedColab?"Apontamento vinculado ao usuário logado.":""},
-      {key:"projetoId",label:"Projeto",type:"select",required:true,
-        options:opcoesProjetosAgrupadasPorSessao()},
+      {key:"projetoId",label:"Projeto",type:"buscaSelect",required:true,
+        placeholder:"Digite o Código/Sigla ou o nome do projeto…",
+        options:opcoesProjetosBusca(),
+        help:"Busque pelo Código/Sigla (ex.: PRJ-2026-01) — o nome completo do projeto é preenchido automaticamente ao escolher."},
       {key:"atividadeSel",label:"Atividade",type:"select",required:true,dynamic:true,
         optionsFn:opcoesAtividade,
         help:"Escolha uma atividade já cadastrada no cronograma do projeto, ou \"Outros\" para digitar uma atividade nova."},
