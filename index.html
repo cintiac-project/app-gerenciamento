@@ -333,6 +333,7 @@
   .user-pick .rl{font-size:11.5px;color:var(--ink-faint);margin-top:1px}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
 </head>
 <body>
 <!-- Tela de configuração inicial: aparece quando as credenciais ainda não foram salvas -->
@@ -3779,7 +3780,10 @@ function reuniaoDetalhe(c,p,r){
   <div class="card" style="margin-bottom:18px">
     <div class="card-head" style="flex-wrap:wrap;gap:8px">
       <h3>📋 Resumo do período${r.resumoDe?` — ${fmtDate(r.resumoDe)} a ${fmtDate(r.resumoAte||r.data)}`:""}</h3>
-      <button class="btn ghost sm" id="reu-resumo-regenerar">🔄 Recalcular a partir dos dados atuais</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn ghost sm" id="reu-resumo-regenerar">🔄 Recalcular a partir dos dados atuais</button>
+        <button class="btn sm" id="reu-resumo-ppt" style="background:var(--accent)">📊 Baixar checklist (PPT)</button>
+      </div>
     </div>
     <div class="card-pad">
       <div class="form-grid two">
@@ -3984,6 +3988,11 @@ function reuniaoDetalhe(c,p,r){
     await persistirReuniao();
     toast("Resumo recalculado a partir dos dados atuais.");
     reuniaoDetalhe(c,p,r);
+  };
+  $("#reu-resumo-ppt").onclick=async()=>{
+    coletarBasico();
+    await persistirReuniao();
+    exportarChecklistPPT(p,r);
   };
   c.querySelectorAll("[data-rmtop]").forEach(b=>b.onclick=async()=>{
     coletarBasico(); r.ata.topicos.splice(+b.dataset.rmtop,1); await persistirReuniao(); reuniaoDetalhe(c,p,r);
@@ -5158,6 +5167,127 @@ function exportarRelatorioProjeto(p){
     .replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,40);
   const nome="relatorio-"+base+"-"+todayStr().replace(/-/g,"");
   modalExportar("📤 Exportar relatório do projeto", html, texto, nome);
+}
+
+/* ============================================================
+   CHECKLIST EXECUTIVO EM PPT (tema CCS — azul/verde, layout clean)
+   Gera um .pptx com: slide de capa + slides de "Atividades realizadas"
+   + slides de "Próximas atividades", prontos para colar na apresentação
+   executiva da reunião. Usa a biblioteca PptxGenJS (carregada via CDN).
+   ============================================================ */
+function exportarChecklistPPT(p,r){
+  if(typeof PptxGenJS==="undefined"){
+    toast("Não foi possível carregar o gerador de PPT. Verifique sua conexão e tente novamente.");
+    return;
+  }
+  // paleta discreta em azul e verde, alinhada ao tema do app
+  const COR={
+    navy:"10202E", navy2:"16293B", navy3:"1F3A52",
+    azul:"2563A8", azulClaro:"E4EEF8",
+    verde:"1F6F6B", verdeClaro:"2A8D88", verdeBg:"E3F1F0",
+    branco:"FFFFFF", cinzaBg:"F4F7F9", linha:"DDE3EA",
+    tinta:"1C2B39", tintaSuave:"5B6B7B", tintaFraca:"8A98A6"
+  };
+  const FONTE="Calibri";
+  const pptx=new PptxGenJS();
+  pptx.defineLayout({name:"CCS_WIDE",width:13.33,height:7.5});
+  pptx.layout="CCS_WIDE";
+  pptx.author="CCS"; pptx.company=p.nome||"";
+  pptx.title="Checklist executivo — "+(r.titulo||"Reunião");
+
+  const periodo=r.resumoDe?`${fmtDate(r.resumoDe)} — ${fmtDate(r.resumoAte||r.data)}`:fmtDate(r.data);
+  const dataGeracao=fmtDate(todayStr());
+
+  /* ---- rodapé padrão de cada slide de conteúdo ---- */
+  function rodape(slide,paginaTxt){
+    slide.addShape("rect",{x:0,y:7.14,w:13.33,h:0.02,fill:{color:COR.linha}});
+    slide.addText((p.nome||"").toUpperCase(),{
+      x:0.5,y:7.2,w:6,h:0.28,fontFace:FONTE,fontSize:8.5,color:COR.tintaFraca,
+      charSpacing:1,bold:true
+    });
+    slide.addText(paginaTxt||"",{
+      x:9.5,y:7.2,w:3.33,h:0.28,fontFace:FONTE,fontSize:8.5,color:COR.tintaFraca,
+      align:"right"
+    });
+  }
+
+  /* ---- slide de capa ---- */
+  const capa=pptx.addSlide();
+  capa.background={color:COR.navy};
+  // barra decorativa azul→verde no rodapé da capa
+  capa.addShape("rect",{x:0,y:7.36,w:13.33,h:0.14,fill:{type:"gradient",stops:[
+    {color:COR.azul,position:0},{color:COR.verde,position:100}
+  ],angle:0}});
+  capa.addText("CHECKLIST EXECUTIVO",{
+    x:0.9,y:2.15,w:11.5,h:0.4,fontFace:FONTE,fontSize:13,color:COR.verdeClaro,
+    bold:true,charSpacing:3
+  });
+  capa.addText(r.titulo||"Reunião",{
+    x:0.9,y:2.6,w:11.5,h:1.1,fontFace:FONTE,fontSize:34,color:COR.branco,bold:true
+  });
+  capa.addText(p.nome||"",{
+    x:0.9,y:3.65,w:11.5,h:0.5,fontFace:FONTE,fontSize:17,color:"AFC2D1"
+  });
+  capa.addShape("rect",{x:0.92,y:4.35,w:0.55,h:0.045,fill:{color:COR.verde}});
+  capa.addText([
+    {text:"Período do resumo:  ",options:{color:"7D909F",bold:false}},
+    {text:periodo,options:{color:COR.branco,bold:true}}
+  ],{x:0.9,y:4.55,w:11.5,h:0.4,fontFace:FONTE,fontSize:13}); 
+  capa.addText("Gerado em "+dataGeracao,{
+    x:0.9,y:6.85,w:11.5,h:0.3,fontFace:FONTE,fontSize:10,color:"5E7283"
+  });
+
+  /* ---- monta slides de checklist em blocos (paginação) ---- */
+  function slidesChecklist(itens,titulo,iconeTxt,corFaixa,corFaixaBg,marcador){
+    const ITENS_POR_SLIDE=7;
+    const blocos=[];
+    const lista=itens&&itens.length?itens:["Nenhum item encontrado para o período."];
+    for(let i=0;i<lista.length;i+=ITENS_POR_SLIDE) blocos.push(lista.slice(i,i+ITENS_POR_SLIDE));
+
+    blocos.forEach((bloco,bi)=>{
+      const slide=pptx.addSlide();
+      slide.background={color:COR.branco};
+      // faixa superior colorida
+      slide.addShape("rect",{x:0,y:0,w:13.33,h:1.15,fill:{color:corFaixa}});
+      slide.addText(iconeTxt+"  "+titulo,{
+        x:0.6,y:0.28,w:9,h:0.6,fontFace:FONTE,fontSize:22,color:COR.branco,bold:true
+      });
+      slide.addText(periodo+(blocos.length>1?`   ·   parte ${bi+1}/${blocos.length}`:""),{
+        x:0.6,y:0.75,w:12,h:0.3,fontFace:FONTE,fontSize:10.5,color:COR.branco,transparency:15
+      });
+
+      let y=1.55;
+      const rowH=0.68;
+      bloco.forEach((txt,i)=>{
+        const striped=i%2===1;
+        if(striped){
+          slide.addShape("rect",{x:0.6,y:y-0.06,w:12.1,h:rowH,fill:{color:corFaixaBg},line:{color:corFaixaBg}});
+        }
+        slide.addText(marcador,{
+          x:0.75,y:y-0.02,w:0.5,h:rowH-0.1,fontFace:FONTE,fontSize:14,color:corFaixa,bold:true,valign:"top"
+        });
+        slide.addText(String(txt),{
+          x:1.25,y:y-0.02,w:11.2,h:rowH-0.1,fontFace:FONTE,fontSize:12.5,color:COR.tinta,
+          valign:"top",lineSpacingMultiple:1.12
+        });
+        y+=rowH;
+      });
+      rodape(slide,`${p.nome||""} · ${titulo}`);
+    });
+  }
+
+  slidesChecklist(r.resumoRealizadas,"Atividades realizadas","✓",COR.verde,COR.verdeBg,"✓");
+  slidesChecklist(r.resumoProximas,"Próximas atividades","→",COR.azul,COR.azulClaro,"▢");
+
+  const base=(r.titulo||"reuniao").toLowerCase()
+    .replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,40);
+  const nomeArquivo="checklist-"+(r.data||todayStr()).replace(/-/g,"")+"-"+(base||"reuniao")+".pptx";
+  pptx.writeFile({fileName:nomeArquivo}).then(()=>{
+    toast("Checklist em PPT baixado — pronto para colar na apresentação.");
+  }).catch(err=>{
+    console.error("[PMO] erro ao gerar PPT:",err);
+    toast("Erro ao gerar o PPT: "+(err.message||err));
+  });
 }
 
 function modalExportar(titulo,htmlConteudo,textoConteudo,nomeArquivo){
