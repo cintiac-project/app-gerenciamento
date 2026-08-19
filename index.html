@@ -1215,9 +1215,18 @@ function responsaveisRaciIds(proj,atividadeId){
    sessões sem Matriz RACI, como Rotinas — preenchido automaticamente a partir do
    Apontamento de Horas e/ou editável na própria atividade), com fallback para as
    pessoas alocadas por estimativa de horas e, por fim, para quem está marcado
-   como "R" na Matriz RACI (quando a sessão tiver essa aba). */
+   como "R" na Matriz RACI (quando a sessão tiver essa aba).
+   IMPORTANTE: "responsaveisIds" só é considerado em sessões SEM RACI. Em
+   projetos com RACI, esse campo não aparece no formulário "Editar atividade"
+   (fica "invisível" para o usuário) — então se ele tiver algum valor antigo
+   gravado (ex.: atividade criada a partir de uma saída de reunião, antes desta
+   checagem existir), ele nunca poderia ser visto nem corrigido pela tela, e
+   ficava sempre "grudado" como responsável, ignorando qualquer ajuste feito em
+   "Horas previstas por colaborador" ou na própria Matriz RACI. Por isso, para
+   projetos com RACI, ignoramos esse campo aqui e vamos direto para o fallback. */
 function responsaveisIdsAtividade(a,proj){
-  if(Array.isArray(a.responsaveisIds) && a.responsaveisIds.length) return a.responsaveisIds.slice();
+  const semRaci = !!(proj && (cfgSessao(proj.sessaoId).abasOcultas||[]).includes("raci"));
+  if(semRaci && Array.isArray(a.responsaveisIds) && a.responsaveisIds.length) return a.responsaveisIds.slice();
   const alocados=pessoasAlocadasAtividade(a);
   if(alocados.length) return alocados;
   return responsaveisRaciIds(proj,a.id);
@@ -1526,7 +1535,19 @@ const SESSAO_CONFIG={
     linhaDoTempo:false,
     conversao:{statusField:"statusCaptacao", statusGatilho:"Aprovado", destino:"gestao_projetos"}
   },
-  gestao_projetos:{},
+  gestao_projetos:{
+    // depois que um projeto é convertido de "Captação" para "Gestão de
+    // Projetos" (ver conversao acima), o valor de "Órgão / Edital" já
+    // preenchido continua salvo no registro — mas antes ficava invisível
+    // aqui, pois esta sessão não tinha esse campo na sua própria
+    // configuração. Repetimos o mesmo campo aqui para que ele continue
+    // visível no quadro "Informações" e editável em "Editar projeto",
+    // já que é importante manter rastreável de onde veio o fomento mesmo
+    // depois do projeto captado.
+    camposExtras:[
+      {key:"orgaoEdital",label:"Órgão / Edital",placeholder:"Ex.: FINEP, BNDES, Prefeitura..."}
+    ]
+  },
   estruturantes:{
     camposExtras:[
       {key:"eixoEstrategico",label:"Eixo / Objetivo estratégico",full:true,
@@ -2094,7 +2115,7 @@ function viewPainel(v){
   }).join("") : `<div class="empty" style="padding:26px"><span class="ic">✓</span><p>${alertas.length?"Nenhum alerta para o filtro selecionado.":"Nenhum prazo crítico nem reunião nos próximos 7 dias."}</p></div>`;
 
   const alertasFiltroHtml=`
-    <div style="display:flex;align-items:center;gap:14px;flex-wrap:nowrap">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
       <div class="field-inline">Projeto
         <select class="select" id="painel-alerta-proj">
           <option value="">Todos</option>
@@ -2645,6 +2666,7 @@ function projResumo(c,p){
       <div class="mini-stat"><span>Status</span><span title="${esc(motivoStatusCalculado(p))}">${statusBadge(statusCalculado(p))}
         ${isGestor()?`<button class="btn-icon" id="btn-cancelar-proj" title="${statusCalculado(p)==='Cancelado'?'Reativar projeto':'Marcar como cancelado'}" style="margin-left:6px;font-size:11px">${statusCalculado(p)==='Cancelado'?'↺':'✕'}</button>`:""}</span></div>
       <div class="mini-stat" style="font-size:11px;color:var(--ink-faint)"><span></span><span>${esc(motivoStatusCalculado(p))}</span></div>
+      ${campoOcultoSessao(p,"cliente")?"":`<div class="mini-stat"><span>Cliente / Área demandante</span><span class="v">${esc(p.cliente||"—")}</span></div>`}
       ${campoOcultoResumo(p,"dataInicio")?"":`<div class="mini-stat"><span>Início</span><span class="v">${fmtDate(p.dataInicio)}</span></div>`}
       ${campoOcultoResumo(p,"dataFim")?"":`<div class="mini-stat"><span>Término previsto</span><span class="v">${fmtDate(p.dataFim)}</span></div>`}
       ${campoOcultoResumo(p,"gerente")?"":`<div class="mini-stat"><span>Gerente responsável</span><span class="v">${esc(p.gerente||"—")}</span></div>`}
@@ -3936,8 +3958,17 @@ function reuniaoDetalhe(c,p,r){
      partir de uma saída/entrega, sempre que a reunião é salva — assim, se o
      nome em "Responsável" na Ata for corrigido/preenchido depois de a
      atividade já existir no cronograma, o campo é atualizado automaticamente
-     sem precisar editar a atividade manualmente. */
+     sem precisar editar a atividade manualmente.
+     Só faz isso em projetos SEM Matriz RACI (ex.: Rotinas): é lá que o campo
+     "responsaveisIds" é o responsável oficial da atividade. Em projetos COM
+     RACI, esse campo não aparece na tela "Editar atividade" — gravá-lo aqui
+     deixava um valor "grudado" e invisível, que nunca era atualizado quando o
+     usuário trocava o responsável em "Horas previstas por colaborador" ou na
+     própria Matriz RACI. Em projetos com RACI, o responsável correto deve ser
+     ajustado na aba RACI (marcando "R" na pessoa certa). */
   async function ressincronizarResponsaveis(){
+    const semRaciProjeto = !!(cfgSessao(p.sessaoId).abasOcultas||[]).includes("raci");
+    if(!semRaciProjeto) return;
     for(const s of r.ata.saidas){
       if(!s.atividadeId) continue;
       const ativ=DB.data.atividades.find(x=>x.id===s.atividadeId);
@@ -4015,12 +4046,18 @@ function reuniaoDetalhe(c,p,r){
       progresso:0, status:"Não iniciada"
     };
     // mapeia o(s) nome(s) digitado(s) em "Responsável" (pode ter mais de uma
-    // pessoa, separadas por vírgula) para pessoas cadastradas e grava em
-    // responsaveisIds — é esse campo (não o antigo "responsavelId") que o
-    // cronograma, a RACI e a ocupação da equipe realmente usam para exibir
-    // e calcular o responsável de uma atividade.
-    const idsResp=matchPessoasPorNomes(s.responsavel,p);
-    if(idsResp.length) novaAtiv.responsaveisIds=idsResp;
+    // pessoa, separadas por vírgula) para pessoas cadastradas. Isso só é
+    // gravado em "responsaveisIds" para projetos SEM Matriz RACI (ex.:
+    // Rotinas) — é esse campo que essas sessões usam para exibir e calcular
+    // o responsável de uma atividade. Em projetos COM RACI, esse campo fica
+    // oculto na tela "Editar atividade", então gravá-lo aqui deixaria um
+    // responsável "grudado" e impossível de corrigir por lá; nesses projetos
+    // o responsável deve ser ajustado na aba RACI (marcando "R").
+    const semRaciProjeto = !!(cfgSessao(p.sessaoId).abasOcultas||[]).includes("raci");
+    if(semRaciProjeto){
+      const idsResp=matchPessoasPorNomes(s.responsavel,p);
+      if(idsResp.length) novaAtiv.responsaveisIds=idsResp;
+    }
     DB.data.atividades.push(novaAtiv);
     s.atividadeId=novaAtiv.id;
     await sbInsert("atividades", toSnake(novaAtiv));
