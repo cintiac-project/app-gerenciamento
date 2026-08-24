@@ -2300,12 +2300,27 @@ async function marcarAtividadeConcluidaRapido(atividadeId){
   const a=getAtividade(atividadeId);
   if(!a) return;
   confirmar("Marcar esta atividade como concluída?",
-    `"${a.nome}" será marcada como 100% concluída.`,
+    `"${a.nome}" será marcada como 100% concluída, com término em ${fmtDate(todayStr())}.`,
     async()=>{
       try{
-        const patch={status:"Concluída",progresso:100};
-        Object.assign(a,patch);
+        // CORREÇÃO: além do status e do progresso, registra também a data de
+        // término (hoje = data real da conclusão) — antes essa ação só
+        // marcava "Concluída"/100% e a atividade ficava sem data final no
+        // cronograma. Atualiza sempre para hoje, mesmo que já houvesse um
+        // prazo previsto no passado (é justamente o caso das atividades
+        // atrasadas que aparecem nos alertas): o que importa aqui é a data
+        // real em que a conclusão foi registrada.
+        const patch={status:"Concluída",progresso:100,dataFimPrev:todayStr()};
+        // CORREÇÃO: só aplica a mudança no objeto 'a' em memória depois que o
+        // servidor confirmar o sucesso (mesmo problema já corrigido no
+        // formulário de projeto — ver comentário em formProjeto). Antes,
+        // Object.assign(a,patch) rodava ANTES do await: se o PATCH falhasse
+        // (erro de rede, RLS etc.), a tela já mostrava a atividade como
+        // concluída mesmo sem ter sido salva de verdade, e um recarregamento
+        // trazia de volta o status antigo — dando a impressão de que a
+        // atividade nunca tinha sido marcada como concluída.
         await sbUpdate("atividades", a.id, toSnake(patch));
+        Object.assign(a,patch);
         toast("Atividade marcada como concluída.");
         render();
       }catch(e){
@@ -6693,12 +6708,35 @@ function formAtividade(projetoId,a){
       else delete v.responsaveisIds;
       if(v.status==="Concluída") v.progresso=100;
       else if(v.progresso>=100) v.status="Concluída";
+      // Quando a atividade é marcada como Concluída e o campo "Término
+      // previsto" não foi preenchido manualmente neste salvamento, usa como
+      // data final a data mais recente entre as horas já apontadas nesta
+      // atividade (e não a data de hoje) — é a data em que o trabalho de
+      // fato aconteceu. Só serve de fallback: se a pessoa digitou uma data
+      // no formulário, essa data é respeitada e não é sobrescrita.
+      if(edit && v.status==="Concluída" && !v.dataFimPrev){
+        const datasApontadas=DB.data.horas
+          .filter(h=>h.atividadeId===a.id && h.data)
+          .map(h=>h.data)
+          .sort();
+        if(datasApontadas.length) v.dataFimPrev=datasApontadas[datasApontadas.length-1];
+      }
       if(edit){
         // se o nome mudou, o "ignorar duplicata" anterior valia para o nome
         // antigo — deixa o alerta livre para reavaliar o nome novo.
         if(a.duplicataIgnorada && v.nome && normTxt(v.nome)!==normTxt(a.nome)) v.duplicataIgnorada=false;
-        Object.assign(a,v);
+        // CORREÇÃO: mesmo problema já corrigido no formulário de projeto (ver
+        // comentário em formProjeto/onSave) — aqui ainda estava faltando.
+        // Object.assign(a,v) rodava ANTES do await sbUpdate: se o PATCH
+        // falhasse (ex.: ao mudar a situação para "Cancelada" e a gravação
+        // falhar por erro de rede/RLS/validação), a tela local já mostrava a
+        // atividade cancelada mesmo sem ter sido salva no banco — e no
+        // próximo recarregamento (ou re-render por outra origem, ex.
+        // realtime) o status antigo voltava, dando a impressão de que a
+        // alteração "não salvou" ou "sumiu". Agora só aplica no objeto em
+        // memória depois que o servidor confirmar.
         await sbUpdate("atividades", a.id, toSnake(v));
+        Object.assign(a,v);
         toast("Atividade atualizada.");
       } else {
         const nova=Object.assign({id:uid(),projetoId},v);
