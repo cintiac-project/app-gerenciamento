@@ -1473,7 +1473,11 @@ const ST = {
   // da lista por padrão e só volta a aparecer quando marcada no filtro
   cronoStatusVisiveis:new Set(["Não iniciada","Em andamento","Atrasada","Cancelada"]),
   // filtro de período do cronograma físico (aplicado junto com o de status)
-  cronoFiltroData:{de:"",ate:""}
+  cronoFiltroData:{de:"",ate:""},
+  // projetos "Concluído" somem da lista do Portfólio por padrão e só voltam
+  // a aparecer quando esse botão-filtro é acionado (mesmo padrão do filtro
+  // de status do cronograma acima).
+  portfolioMostrarConcluidos:false
 };
 
 /* ============================================================
@@ -1567,7 +1571,7 @@ const SESSAO_CONFIG={
         help:"Opcional. Valor total do edital/programa de fomento, quando for diferente do valor pleiteado neste projeto."},
       {key:"prazoSubmissao",label:"Prazo de submissão",type:"date"},
       {key:"statusCaptacao",label:"Status da captação",type:"select",
-        options:["Em prospecção","Em elaboração","Submetido","Aprovado","Reprovado"].map(s=>({value:s,label:s}))}
+        options:["Em prospecção","Em elaboração","Submetido","Não submetido","Aprovado","Reprovado"].map(s=>({value:s,label:s}))}
     ],
     abasOcultas:["financeiro","raci"],
     linhaDoTempo:false,
@@ -2485,10 +2489,12 @@ function viewPortfolio(v){
   }
   ST.portfolioOrdenar=ST.portfolioOrdenar||"status";
   const q=(ST.search.portfolio||"").toLowerCase();
-  const filtered=ordenarProjetos(
-    ps.filter(p=>!q||p.nome.toLowerCase().includes(q)||(p.codigo||"").toLowerCase().includes(q)||(p.cliente||"").toLowerCase().includes(q)),
-    ST.portfolioOrdenar
-  );
+  const buscados=ps.filter(p=>!q||p.nome.toLowerCase().includes(q)||(p.codigo||"").toLowerCase().includes(q)||(p.cliente||"").toLowerCase().includes(q));
+  // projetos "Concluído" ficam escondidos por padrão; o botão-filtro no
+  // toolbar liga/desliga a exibição deles.
+  const concluidosOcultos=buscados.filter(p=>statusCalculado(p)==="Concluído").length;
+  const visiveis=ST.portfolioMostrarConcluidos?buscados:buscados.filter(p=>statusCalculado(p)!=="Concluído");
+  const filtered=ordenarProjetos(visiveis, ST.portfolioOrdenar);
 
   const rows=filtered.map(p=>{
     const prog=progressoProjeto(p.id);
@@ -2522,6 +2528,9 @@ function viewPortfolio(v){
         <option value="nome" ${ST.portfolioOrdenar==="nome"?"selected":""}>Nome (A-Z)</option>
         <option value="data" ${ST.portfolioOrdenar==="data"?"selected":""}>Data de início (mais recente)</option>
       </select></div>
+    <button class="btn${ST.portfolioMostrarConcluidos?" active":""}" id="btn-concluidos">
+      ${ST.portfolioMostrarConcluidos?"✓ ":""}Mostrar concluídos${concluidosOcultos>0&&!ST.portfolioMostrarConcluidos?" ("+concluidosOcultos+")":""}
+    </button>
     <div class="spacer"></div>
     <span class="field-inline">${filtered.length} projeto(s)</span>
   </div>
@@ -2535,6 +2544,7 @@ function viewPortfolio(v){
 
   $("#q").oninput=e=>{ ST.search.portfolio=e.target.value; viewPortfolio(v); };
   $("#ord-portfolio").onchange=e=>{ ST.portfolioOrdenar=e.target.value; viewPortfolio(v); };
+  $("#btn-concluidos").onclick=()=>{ ST.portfolioMostrarConcluidos=!ST.portfolioMostrarConcluidos; viewPortfolio(v); };
   v.querySelectorAll("[data-pid]").forEach(tr=>{
     tr.onclick=e=>{ if(e.target.closest("[data-edit],[data-del]")) return;
       ST.view="projeto"; ST.projetoId=tr.dataset.pid; ST.projTab="resumo"; render(); };
