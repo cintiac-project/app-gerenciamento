@@ -2299,38 +2299,103 @@ function abrirDetalheReceitaPortfolio(ps){
 
 /* Ação rápida do Painel Geral: marca a atividade atrasada/próxima do prazo
    como concluída (100%) direto da lista de alertas, sem precisar abrir o
-   projeto e procurar a atividade no cronograma. */
+   projeto e procurar a atividade no cronograma.
+   Quando a atividade tem "Horas previstas por colaborador" preenchidas,
+   este mesmo passo já pede para confirmar (ou corrigir) as horas realmente
+   executadas por cada pessoa — em vez de precisar abrir a atividade depois
+   só para isso: um botão "OK" preenche a horas executadas igual à prevista,
+   e quem gastou tempo diferente do previsto pode digitar o valor real. */
 async function marcarAtividadeConcluidaRapido(atividadeId){
   const a=getAtividade(atividadeId);
   if(!a) return;
-  confirmar("Marcar esta atividade como concluída?",
-    `"${a.nome}" será marcada como 100% concluída, com término em ${fmtDate(todayStr())}.`,
-    async()=>{
-      try{
-        // CORREÇÃO: além do status e do progresso, registra também a data de
-        // término (hoje = data real da conclusão) — antes essa ação só
-        // marcava "Concluída"/100% e a atividade ficava sem data final no
-        // cronograma. Atualiza sempre para hoje, mesmo que já houvesse um
-        // prazo previsto no passado (é justamente o caso das atividades
-        // atrasadas que aparecem nos alertas): o que importa aqui é a data
-        // real em que a conclusão foi registrada.
-        const patch={status:"Concluída",progresso:100,dataFimPrev:todayStr()};
-        // CORREÇÃO: só aplica a mudança no objeto 'a' em memória depois que o
-        // servidor confirmar o sucesso (mesmo problema já corrigido no
-        // formulário de projeto — ver comentário em formProjeto). Antes,
-        // Object.assign(a,patch) rodava ANTES do await: se o PATCH falhasse
-        // (erro de rede, RLS etc.), a tela já mostrava a atividade como
-        // concluída mesmo sem ter sido salva de verdade, e um recarregamento
-        // trazia de volta o status antigo — dando a impressão de que a
-        // atividade nunca tinha sido marcada como concluída.
-        await sbUpdate("atividades", a.id, toSnake(patch));
-        Object.assign(a,patch);
-        toast("Atividade marcada como concluída.");
-        render();
-      }catch(e){
-        toast("Erro ao atualizar a atividade: "+(e.message||e));
-      }
+  const pessoas=(Array.isArray(a.estimativasPessoas)?a.estimativasPessoas:[]).filter(x=>x.colaboradorId);
+  if(!pessoas.length){
+    // sem horas previstas por colaborador cadastradas: mantém o fluxo simples
+    // de sempre (só confirma a conclusão).
+    confirmar("Marcar esta atividade como concluída?",
+      `"${a.nome}" será marcada como 100% concluída, com término em ${fmtDate(todayStr())}.`,
+      ()=>salvarConclusaoAtividade(a,null));
+    return;
+  }
+  const rowHtml=(item,idx)=>{
+    const colab=getColab(item.colaboradorId);
+    const nome=colab?colab.nome:"(colaborador removido)";
+    const exec=(item.horasExecutadas!=null&&item.horasExecutadas!=="")?item.horasExecutadas:"";
+    return `<div class="estim-row" data-idx="${idx}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <span style="flex:1;min-width:130px;font-size:13px">${esc(nome)}</span>
+      <span style="font-size:12px;color:var(--ink-faint);white-space:nowrap">Previstas: ${fmtH(+item.horas||0)}</span>
+      <button type="button" class="btn ghost sm" data-erole="ok" data-idx="${idx}"
+        title="Confirmar que foram executadas as horas previstas">✓ OK</button>
+      <input type="number" min="0" step="0.5" data-erole="horasExec" data-idx="${idx}"
+        placeholder="Executadas" value="${esc(exec)}" style="width:100px;flex-shrink:0"
+        title="Horas realmente executadas por esta pessoa">
+    </div>`;
+  };
+  $("#modal-root").innerHTML=`
+  <div class="overlay"><div class="modal" style="max-width:540px">
+    <div class="modal-head"><h3>Marcar atividade como concluída?</h3></div>
+    <div class="modal-body">
+      <p style="color:var(--ink-soft);font-size:13px">"${esc(a.nome)}" será marcada como 100% concluída,
+        com término em ${fmtDate(todayStr())}.</p>
+      <div style="margin-top:14px">
+        <label style="display:block;margin-bottom:7px;font-size:12.5px;font-weight:600;color:var(--ink-soft)">
+          Horas executadas por colaborador</label>
+        <div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px">
+          ${pessoas.map(rowHtml).join("")}
+        </div>
+        <span class="help" style="display:block;margin-top:6px">Clique em "OK" para confirmar que a pessoa
+          cumpriu exatamente as horas previstas, ou informe manualmente as horas executadas caso o tempo
+          gasto tenha sido diferente do previsto.</span>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="c-no">Cancelar</button>
+      <button class="btn" id="c-yes">Confirmar conclusão</button>
+    </div></div></div>`;
+  $("#c-no").onclick=closeModal;
+  $("#modal-root").querySelectorAll('[data-erole="ok"]').forEach(btn=>{
+    btn.onclick=()=>{
+      const idx=+btn.dataset.idx;
+      const inp=$("#modal-root").querySelector(`[data-erole="horasExec"][data-idx="${idx}"]`);
+      if(inp) inp.value=(+pessoas[idx].horas||0);
+    };
+  });
+  $("#c-yes").onclick=()=>{
+    const novasEstimativas=pessoas.map((item,idx)=>{
+      const inp=$("#modal-root").querySelector(`[data-erole="horasExec"][data-idx="${idx}"]`);
+      const val=inp?inp.value:"";
+      return Object.assign({},item,{horasExecutadas:(val===""?null:parseFloat(val))});
     });
+    closeModal();
+    salvarConclusaoAtividade(a,novasEstimativas);
+  };
+}
+async function salvarConclusaoAtividade(a,novasEstimativas){
+  try{
+    // CORREÇÃO: além do status e do progresso, registra também a data de
+    // término (hoje = data real da conclusão) — antes essa ação só
+    // marcava "Concluída"/100% e a atividade ficava sem data final no
+    // cronograma. Atualiza sempre para hoje, mesmo que já houvesse um
+    // prazo previsto no passado (é justamente o caso das atividades
+    // atrasadas que aparecem nos alertas): o que importa aqui é a data
+    // real em que a conclusão foi registrada.
+    const patch={status:"Concluída",progresso:100,dataFimPrev:todayStr()};
+    if(novasEstimativas) patch.estimativasPessoas=novasEstimativas;
+    // CORREÇÃO: só aplica a mudança no objeto 'a' em memória depois que o
+    // servidor confirmar o sucesso (mesmo problema já corrigido no
+    // formulário de projeto — ver comentário em formProjeto). Antes,
+    // Object.assign(a,patch) rodava ANTES do await: se o PATCH falhasse
+    // (erro de rede, RLS etc.), a tela já mostrava a atividade como
+    // concluída mesmo sem ter sido salva de verdade, e um recarregamento
+    // trazia de volta o status antigo — dando a impressão de que a
+    // atividade nunca tinha sido marcada como concluída.
+    await sbUpdate("atividades", a.id, toSnake(patch));
+    Object.assign(a,patch);
+    toast("Atividade marcada como concluída.");
+    render();
+  }catch(e){
+    toast("Erro ao atualizar a atividade: "+(e.message||e));
+  }
 }
 
 /* Ação rápida do Painel Geral: marca uma atividade como "não é duplicata",
@@ -6302,6 +6367,14 @@ function openForm(cfg){
       // O container leva data-k mas as linhas internas são geridas por wireEstimativasField(),
       // fora do fluxo genérico de collect()/refreshDynamic().
       input=`<div data-k="${f.key}" style="border:1px solid var(--line);border-radius:8px;padding:10px 12px">
+        <div class="estim-head" style="display:flex;gap:8px;font-size:11px;color:var(--ink-faint);
+          font-weight:600;text-transform:uppercase;letter-spacing:.03em;padding:0 0 6px;flex-wrap:wrap">
+          <span style="flex:1;min-width:150px">Colaborador</span>
+          <span style="width:90px;flex-shrink:0">Prevista</span>
+          <span style="width:76px;flex-shrink:0"></span>
+          <span style="width:100px;flex-shrink:0">Executada</span>
+          <span style="width:30px;flex-shrink:0"></span>
+        </div>
         <div class="estim-rows"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
           <button type="button" class="btn ghost sm estim-add">+ Adicionar pessoa</button>
@@ -6356,12 +6429,16 @@ function openForm(cfg){
     vals[f.key]=Array.isArray(vals[f.key])?vals[f.key].map(x=>Object.assign({},x)):[];
     function rowHtml(item,idx){
       const opts=(f.dynamic?f.optionsFn(vals):f.options)||[];
-      return `<div class="estim-row" data-idx="${idx}" style="display:flex;gap:8px;align-items:center;margin-bottom:7px">
-        <select data-erole="colab" style="flex:1">
+      const horasExec=item.horasExecutadas!=null&&item.horasExecutadas!==""?item.horasExecutadas:"";
+      return `<div class="estim-row" data-idx="${idx}" style="display:flex;gap:8px;align-items:center;margin-bottom:7px;flex-wrap:wrap">
+        <select data-erole="colab" style="flex:1;min-width:150px">
           <option value="">Selecione o colaborador…</option>
           ${opts.map(o=>`<option value="${esc(o.value)}" ${String(item.colaboradorId||"")===String(o.value)?"selected":""}>${esc(o.label)}</option>`).join("")}
         </select>
-        <input type="number" min="0" step="0.5" data-erole="horas" placeholder="Horas" value="${item.horas!=null&&item.horas!==""?item.horas:""}" style="width:110px;flex-shrink:0">
+        <input type="number" min="0" step="0.5" data-erole="horas" placeholder="Horas" value="${item.horas!=null&&item.horas!==""?item.horas:""}" style="width:90px;flex-shrink:0" title="Horas previstas">
+        <button type="button" class="btn ghost sm" data-erole="ok" style="width:76px;flex-shrink:0;justify-content:center"
+          title="Confirmar que foram executadas as horas previstas">✓ OK</button>
+        <input type="number" min="0" step="0.5" data-erole="horasExec" placeholder="Executadas" value="${horasExec}" style="width:100px;flex-shrink:0" title="Horas realmente executadas">
         <button type="button" class="btn-icon del" data-erole="rm" title="Remover">✕</button>
       </div>`;
     }
@@ -6371,9 +6448,20 @@ function openForm(cfg){
         const idx=+row.dataset.idx;
         const selColab=row.querySelector('[data-erole="colab"]');
         const inpHoras=row.querySelector('[data-erole="horas"]');
+        const inpExec=row.querySelector('[data-erole="horasExec"]');
+        const btnOk=row.querySelector('[data-erole="ok"]');
         const btnRm=row.querySelector('[data-erole="rm"]');
         selColab.onchange=()=>{ vals[f.key][idx].colaboradorId=selColab.value; };
         inpHoras.oninput=()=>{ vals[f.key][idx].horas=inpHoras.value; };
+        inpExec.oninput=()=>{ vals[f.key][idx].horasExecutadas=inpExec.value; };
+        // "OK": entende que a pessoa cumpriu exatamente as horas previstas —
+        // copia o valor de "Horas" (previstas) para "Executada". Se depois o
+        // tempo realmente gasto for diferente, basta editar o campo
+        // "Executada" manualmente (o OK só preenche, não trava o campo).
+        btnOk.onclick=()=>{
+          vals[f.key][idx].horasExecutadas=inpHoras.value;
+          inpExec.value=inpHoras.value;
+        };
         btnRm.onclick=()=>{ vals[f.key].splice(idx,1); renderRows(); };
       });
     }
@@ -6387,14 +6475,14 @@ function openForm(cfg){
     }
     const el=container();
     if(el){
-      el.querySelector(".estim-add").onclick=()=>{ vals[f.key].push({colaboradorId:"",horas:""}); renderRows(); };
+      el.querySelector(".estim-add").onclick=()=>{ vals[f.key].push({colaboradorId:"",horas:"",horasExecutadas:""}); renderRows(); };
       const btnPrefill=el.querySelector(".estim-prefill");
       if(btnPrefill && f.prefillButton){
         btnPrefill.onclick=()=>{
           const idsExistentes=new Set(vals[f.key].map(x=>x.colaboradorId).filter(Boolean));
           const novosIds=(f.prefillButton.getIds(vals)||[]).filter(id=>id && !idsExistentes.has(id));
           if(!novosIds.length){ toast(f.prefillButton.msgVazio||"Nada novo para adicionar."); return; }
-          novosIds.forEach(id=>vals[f.key].push({colaboradorId:id, horas:""}));
+          novosIds.forEach(id=>vals[f.key].push({colaboradorId:id, horas:"", horasExecutadas:""}));
           renderRows();
           toast(`${novosIds.length} pessoa(s) adicionada(s). Falta só informar as horas de cada uma.`);
         };
@@ -6690,7 +6778,7 @@ function formAtividade(projetoId,a){
         type:"estimativas",full:true,dynamic:true,
         optionsFn:()=>[...getInternos(),...getParceirosDoProjeto(getProjeto(projetoId))]
           .map(co=>({value:co.id,label:co.nome+(co.tipo==="parceiro"?" (parceiro)":"")})),
-        help:"Escolha cada colaborador (interno ou parceiro vinculado a este projeto) e a quantidade de horas previstas para ele nesta atividade. Usado para calcular a ocupação da equipe no calendário, distribuída ao longo dos dias úteis entre início e término previstos.",
+        help:"Escolha cada colaborador (interno ou parceiro vinculado a este projeto) e a quantidade de horas previstas para ele nesta atividade. Usado para calcular a ocupação da equipe no calendário, distribuída ao longo dos dias úteis entre início e término previstos. Clique em \"OK\" para confirmar que a pessoa cumpriu exatamente as horas previstas (preenche \"Executada\" com o mesmo valor), ou informe manualmente as horas executadas se o tempo gasto tiver sido diferente do previsto.",
         prefillButton: a ? {
           label:"↺ Puxar quem está em \"R\" na RACI",
           msgVazio:"Ninguém novo marcado como \"R\" na RACI desta atividade (ou já foram todos adicionados aqui).",
@@ -6713,7 +6801,13 @@ function formAtividade(projetoId,a){
       // filtra linhas incompletas e normaliza os números
       v.estimativasPessoas=(Array.isArray(v.estimativasPessoas)?v.estimativasPessoas:[])
         .filter(x=>x.colaboradorId && parseFloat(x.horas)>0)
-        .map(x=>({colaboradorId:x.colaboradorId, horas:parseFloat(x.horas)}));
+        .map(x=>({
+          colaboradorId:x.colaboradorId, horas:parseFloat(x.horas),
+          // horas realmente executadas por esta pessoa (preenchidas pelo botão
+          // "OK" — igual à prevista — ou digitadas manualmente quando o tempo
+          // gasto foi diferente do previsto). Fica null enquanto não informado.
+          horasExecutadas:(x.horasExecutadas===""||x.horasExecutadas==null)?null:parseFloat(x.horasExecutadas)
+        }));
       if(semRaci) v.responsaveisIds=Array.isArray(v.responsaveisIds)?v.responsaveisIds:[];
       else delete v.responsaveisIds;
       if(v.status==="Concluída") v.progresso=100;
