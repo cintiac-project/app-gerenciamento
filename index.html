@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestão de Portfólio de Projetos</title>
+<title>Gestão de Portfólio</title>
 <style>
   :root{
     --navy:#10202e; --navy-2:#16293b; --navy-3:#1f3a52;
@@ -109,6 +109,7 @@
   .card-head .hint{font-size:12px;color:var(--ink-faint);font-weight:500}
 
   .grid{display:grid;gap:18px}
+  .grid>*{min-width:0}
   .g2{grid-template-columns:repeat(2,1fr)}
   .g3{grid-template-columns:repeat(3,1fr)}
   .g4{grid-template-columns:repeat(4,1fr)}
@@ -119,9 +120,9 @@
   /* KPI */
   .kpi{padding:18px 20px}
   .kpi .lbl{font-size:11.5px;color:var(--ink-faint);text-transform:uppercase;
-    letter-spacing:.06em;font-weight:600;display:flex;align-items:center;gap:7px}
-  .kpi .val{font-size:27px;font-weight:700;letter-spacing:-.02em;margin-top:7px}
-  .kpi .sub{font-size:12px;color:var(--ink-soft);margin-top:3px}
+    letter-spacing:.06em;font-weight:600;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .kpi .val{font-size:27px;font-weight:700;letter-spacing:-.02em;margin-top:7px;overflow-wrap:anywhere}
+  .kpi .sub{font-size:12px;color:var(--ink-soft);margin-top:3px;overflow-wrap:anywhere}
   .kpi .dot{width:8px;height:8px;border-radius:50%}
 
   /* TABLE */
@@ -362,8 +363,8 @@
       <div class="mark" style="width:42px;height:42px;border-radius:10px;margin:0 auto 14px;
         background:linear-gradient(135deg,var(--accent-2),var(--accent));display:flex;align-items:center;
         justify-content:center;font-size:19px;color:#fff">◧</div>
-      <h2 style="font-size:18px">Portfólio PMO</h2>
-      <p style="font-size:12.5px;color:var(--ink-faint);margin-top:4px">Gestão de tempo, portfólio e projetos</p>
+      <h2 style="font-size:18px">Gestão de Portfólio</h2>
+      <p style="font-size:12.5px;color:var(--ink-faint);margin-top:4px">Gerenciamento de Projetos Estratégicos</p>
     </div>
     <div class="card-pad" style="padding-top:18px">
       <div id="auth-tabs" style="display:flex;gap:6px;margin-bottom:16px;background:var(--bg);padding:4px;border-radius:9px">
@@ -380,8 +381,8 @@
 <div id="app" style="display:none">
   <aside>
     <div class="brand">
-      <div class="logo"><span class="mark">◧</span><span>Portfólio PMO</span></div>
-      <div class="sub">Gestão de Projetos</div>
+      <div class="logo"><span class="mark">◧</span><span>Gestão de Portfólio</span></div>
+      <div class="sub">Gerenciamento de Projetos Estratégicos</div>
     </div>
     <nav id="nav"></nav>
     <div class="nav-foot">Dados sincronizados em nuvem.<br>Tempo real com toda a equipe.</div>
@@ -903,27 +904,22 @@ function legendaCategoriasHtml(){
 
 function getRubrica(id){ return DB.data.rubricas.find(r=>r.id===id); }
 function getAtividade(id){ return DB.data.atividades.find(a=>a.id===id); }
-/* exclui uma atividade (com confirmação e opção de excluir também os
-   apontamentos de horas vinculados) — usado tanto no Cronograma quanto no
-   botão de excluir dos Alertas de prazo no Painel Geral, para não duplicar
-   a lógica de exclusão nos dois lugares. */
+/* exclui uma atividade (com confirmação simples) — usado tanto no
+   Cronograma quanto no botão de excluir dos Alertas de prazo no Painel
+   Geral, para não duplicar a lógica de exclusão nos dois lugares.
+   Eventuais apontamentos de horas históricos ligados a esta atividade
+   (de antes do recurso de Apontamento de Horas ser retirado do app) nunca
+   são apagados por aqui — só perdem o vínculo com a atividade excluída,
+   preservando o histórico no banco. */
 function excluirAtividadeComConfirmacao(a,onDone){
-  const nHoras=DB.data.horas.filter(h=>h.atividadeId===a.id).length;
-  confirmarComOpcao(
+  confirmar(
     `Excluir atividade "${a.nome}"?`,
-    nHoras?`Há ${nHoras} apontamento(s) de horas vinculado(s) a esta atividade.`:"Esta atividade não tem apontamentos de horas vinculados.",
-    "Excluir também os apontamentos de horas vinculados (em vez de só desvincular) — libera espaço no banco",
-    async(excluirHoras)=>{
+    "Esta ação não pode ser desfeita.",
+    async()=>{
       DB.data.atividades=DB.data.atividades.filter(x=>x.id!==a.id);
-      if(excluirHoras){
-        const idsHoras=DB.data.horas.filter(h=>h.atividadeId===a.id).map(h=>h.id);
-        DB.data.horas=DB.data.horas.filter(h=>h.atividadeId!==a.id);
-        if(idsHoras.length) await sbDeleteWhere("horas", "id=in.("+idsHoras.join(",")+")");
-      } else {
-        DB.data.horas.forEach(h=>{ if(h.atividadeId===a.id) h.atividadeId=null; });
-      }
+      DB.data.horas.forEach(h=>{ if(h.atividadeId===a.id) h.atividadeId=null; });
       await sbDelete("atividades", a.id); // on delete set null cuida das horas restantes
-      toast(excluirHoras?`Atividade e ${nHoras} apontamento(s) excluídos definitivamente.`:"Atividade excluída.");
+      toast("Atividade excluída.");
       if(onDone) onDone(); else render();
     }
   );
@@ -2012,7 +2008,13 @@ function viewPainel(v){
   // conversao da sessão (ver SESSAO_CONFIG.captacao) o move para "Gestão
   // de Projetos", então tudo que ainda está classificado como "captacao"
   // aqui é, por definição, previsto/pleiteado — ainda não é receita real.
-  const projetosCaptacao=ps.filter(p=>p.sessaoId==="captacao");
+  // Propostas "Não submetido" ou "Reprovado" ficam de fora do previsto: não
+  // há mais chance real de virarem receita, então não entram na soma nem
+  // no raio-x de Captação (continuam existindo/editáveis normalmente,
+  // só não contam para o total previsto do Painel Geral).
+  const STATUS_CAPTACAO_FORA_PREVISTO=["Não submetido","Reprovado"];
+  const projetosCaptacao=ps.filter(p=>p.sessaoId==="captacao"
+    && !STATUS_CAPTACAO_FORA_PREVISTO.includes(p.statusCaptacao));
   const projetosNaoCaptacao=ps.filter(p=>p.sessaoId!=="captacao");
   const captacaoPrevista=projetosCaptacao.reduce((s,p)=>s+(+p.receita||0),0);
   const receitaCaptada=projetosNaoCaptacao.reduce((s,p)=>s+(+p.receita||0),0);
@@ -2069,9 +2071,9 @@ function viewPainel(v){
     <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--accent)"></span>Projetos ativos</div>
       <div class="val">${ativos.length}</div><div class="sub">${ps.length} no portfólio</div></div>
     <div class="card kpi" id="kpi-captacao" style="cursor:pointer" title="Ver detalhamento por projeto"><div class="lbl"><span class="dot" style="background:var(--warn)"></span>Captação (previsto)</div>
-      <div class="val" style="font-size:22px">${fmtBRL(captacaoPrevista)}</div><div class="sub">Valor pleiteado em propostas/editais · clique para detalhar</div></div>
+      <div class="val" style="font-size:19px">${fmtBRL(captacaoPrevista)}</div><div class="sub">Valor pleiteado em propostas/editais · clique para detalhar</div></div>
     <div class="card kpi" id="kpi-receita" style="cursor:pointer" title="Ver detalhamento por projeto"><div class="lbl"><span class="dot" style="background:var(--info)"></span>Receita já captada</div>
-      <div class="val" style="font-size:22px">${fmtBRL(receitaCaptada)}</div><div class="sub">Valor contratado do portfólio · clique para detalhar</div></div>
+      <div class="val" style="font-size:19px">${fmtBRL(receitaCaptada)}</div><div class="sub">Valor contratado do portfólio · clique para detalhar</div></div>
     <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--gold)"></span>Margem média</div>
       <div class="val">${margemMedia==null?"—":fmtNum(margemMedia,1)+"%"}</div>
       <div class="sub">Despesas: ${fmtBRL(despesaTotal)}</div></div>
@@ -2249,7 +2251,7 @@ function viewPainel(v){
   });
   $("#kpi-captacao").onclick=()=>abrirDetalheReceitaPortfolio(projetosCaptacao,
     "◈ Captação (previsto) — por projeto",
-    "Projetos da sessão \"Captação\" (propostas/editais ainda em prospecção, elaboração, submetidos etc.), ordenados do maior para o menor valor pleiteado. Assim que um projeto é aprovado, ele é convertido para \"Gestão de Projetos\" e passa a contar em \"Receita já captada\". Clique num projeto para abri-lo e conferir/corrigir o campo \"Receita / Valor do projeto\".");
+    "Projetos da sessão \"Captação\" ainda com chance real de virar receita (em prospecção, elaboração, submetidos ou aprovados aguardando conversão), ordenados do maior para o menor valor pleiteado. Propostas \"Não submetido\" ou \"Reprovado\" não entram nesse total. Assim que um projeto é aprovado, ele é convertido para \"Gestão de Projetos\" e passa a contar em \"Receita já captada\". Clique num projeto para abri-lo e conferir/corrigir o campo \"Receita / Valor do projeto\".");
   $("#kpi-receita").onclick=()=>abrirDetalheReceitaPortfolio(projetosNaoCaptacao,
     "💰 Receita já captada — por projeto",
     "Todos os projetos do portfólio, exceto os que ainda estão em Captação, ordenados do maior para o menor valor contratado. Clique num projeto para abri-lo e conferir/corrigir o campo \"Receita / Valor do projeto\".");
@@ -4717,20 +4719,6 @@ function viewConfig(v){
   </div>
   <div style="height:18px"></div>
   <div class="card">
-    <div class="card-head"><h3>Sincronizar com Apontamento de Horas</h3></div>
-    <div class="card-pad">
-      <div class="help-banner" style="margin-bottom:16px"><span>↻</span><span>
-        Usa os apontamentos de horas já registrados para completar automaticamente o
-        cronograma (início previsto, situação) e adicionar como stakeholders
-        as pessoas que trabalharam em cada projeto. <b>Não sobrescreve</b> campos já
-        preenchidos manualmente — só completa o que estiver vazio.
-        <b>Importante:</b> o campo "Responsável" da atividade agora é derivado da Matriz RACI,
-        portanto esta sincronização não o preenche mais.</span></div>
-      <button class="btn" id="btn-sync-horas">↻ Sincronizar agora</button>
-    </div>
-  </div>
-  <div style="height:18px"></div>
-  <div class="card">
     <div class="card-head"><h3>🧹 Manutenção do banco de dados</h3></div>
     <div class="card-pad">
       <div class="help-banner" style="margin-bottom:16px"><span>💡</span><span>
@@ -4792,112 +4780,8 @@ function viewConfig(v){
   $("#imp").onclick=()=>$("#imp-file").click();
   $("#imp-file").onchange=importarBackup;
   $("#btn-manutencao").onclick=abrirModalManutencao;
-  $("#btn-sync-horas").onclick=()=>{
-    confirmar(
-      "Sincronizar dados do Apontamento de Horas?",
-      "Isso vai completar campos vazios do cronograma (início previsto, situação) e adicionar stakeholders com base nas horas já registradas. Campos já preenchidos não serão alterados. Em sessões com Matriz RACI, o Responsável continua vindo de lá. Em sessões sem RACI (ex.: Rotinas), o campo Responsável(is) da atividade será completado com quem já apontou horas nela.",
-      async()=>{
-        const btn=$("#btn-sync-horas");
-        btn.disabled=true; btn.textContent="Sincronizando...";
-        try{
-          await sincronizarApontamentoHoras();
-        }catch(e){
-          console.error(e);
-          toast("Erro ao sincronizar: "+(e.message||e));
-        }
-        if(btn){ btn.disabled=false; btn.textContent="↻ Sincronizar agora"; }
-      }
-    );
-  };
 }
 
-/* ---- SINCRONIZAÇÃO: extrai dados do Apontamento de Horas para o
-   cronograma (atividades) e para os stakeholders de cada projeto.
-   Só completa campos vazios/incompletos — nunca sobrescreve o que já foi
-   preenchido manualmente.
-   Em sessões COM Matriz RACI, o responsável continua vindo de lá (o campo
-   responsaveisIds não é tocado). Em sessões SEM RACI (ex.: Rotinas), o
-   responsável é o campo direto "responsaveisIds" — aqui ele é completado
-   retroativamente com todo mundo que já apontou horas em cada atividade
-   (útil para atividades que já tinham apontamentos antes desse recurso
-   existir; apontamentos novos já preenchem isso na hora, sem precisar
-   rodar esta sincronização). ---- */
-async function sincronizarApontamentoHoras(){
-  let atividadesAtualizadas=0;
-  let stakeholdersAdicionados=0;
-  let responsaveisPreenchidos=0;
-
-  // 1) Backfill de atividades a partir das horas já apontadas
-  for(const a of DB.data.atividades){
-    const horasDaAtividade=DB.data.horas.filter(h=>h.atividadeId===a.id);
-    if(!horasDaAtividade.length) continue;
-
-    const patch={};
-    const datas=horasDaAtividade.map(h=>h.data).filter(Boolean).sort();
-
-    // início previsto = data mais antiga apontada, se ainda não definido
-    if(!a.dataInicioPrev && datas.length) patch.dataInicioPrev=datas[0];
-
-    // término previsto = data mais recente apontada, só quando a atividade já
-    // está marcada como concluída e ainda não tem data de término definida
-    if(!a.dataFimPrev && a.status==="Concluída" && datas.length) patch.dataFimPrev=datas[datas.length-1];
-
-    // situação: se ainda "Não iniciada" mas já tem horas apontadas, passa para "Em andamento"
-    if(a.status==="Não iniciada") patch.status="Em andamento";
-
-    // responsáveis: só em sessões sem Matriz RACI (ex.: Rotinas) — junta todo
-    // mundo que já apontou horas nesta atividade à lista de responsáveis,
-    // sem remover quem já estava lá.
-    const proj=getProjeto(a.projetoId);
-    const semRaci=!!(proj && (cfgSessao(proj.sessaoId).abasOcultas||[]).includes("raci"));
-    if(semRaci){
-      const respAtual=Array.isArray(a.responsaveisIds)?a.responsaveisIds:[];
-      const colabsQueApontaram=[...new Set(horasDaAtividade.map(h=>h.colaboradorId).filter(Boolean))];
-      const novos=colabsQueApontaram.filter(id=>!respAtual.includes(id));
-      if(novos.length){
-        patch.responsaveisIds=[...respAtual,...novos];
-        responsaveisPreenchidos++;
-      }
-    }
-
-    if(Object.keys(patch).length){
-      Object.assign(a,patch);
-      await sbUpdate("atividades", a.id, toSnake(patch));
-      atividadesAtualizadas++;
-    }
-  }
-
-  // 2) Adiciona como stakeholders os colaboradores que apontaram horas em cada projeto
-  for(const p of DB.data.projetos){
-    p.stakeholders=p.stakeholders||[];
-    const colabIdsDoProjeto=new Set(
-      DB.data.horas.filter(h=>h.projetoId===p.id).map(h=>h.colaboradorId)
-    );
-    for(const colabId of colabIdsDoProjeto){
-      const colab=getColab(colabId);
-      if(!colab) continue;
-      const jaExiste=p.stakeholders.some(s=>
-        (s.nome||"").trim().toLowerCase()===(colab.nome||"").trim().toLowerCase()
-      );
-      if(jaExiste) continue;
-      const novoStakeholder={
-        id:uid(), projetoId:p.id, nome:colab.nome,
-        papel:"Equipe interna (apontamento de horas)",
-        organizacao:colab.organizacao||"",
-        influencia:"Média",
-        contato:colab.email||"",
-        classificacao:"Secundário"
-      };
-      p.stakeholders.push(novoStakeholder);
-      await sbInsert("stakeholders", toSnake(novoStakeholder));
-      stakeholdersAdicionados++;
-    }
-  }
-
-  await DB.load();
-  render();
-  toast(`Sincronização concluída: ${atividadesAtualizadas} atividade(s) atualizada(s) (${responsaveisPreenchidos} com responsável preenchido), ${stakeholdersAdicionados} stakeholder(s) adicionado(s).`);
-}
 /* ============================================================
    EXPORTAÇÃO DE ATA E RELATÓRIO DO PROJETO
    ============================================================ */
