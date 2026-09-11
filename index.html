@@ -112,8 +112,9 @@
   .g2{grid-template-columns:repeat(2,1fr)}
   .g3{grid-template-columns:repeat(3,1fr)}
   .g4{grid-template-columns:repeat(4,1fr)}
-  @media(max-width:1080px){.g3,.g4{grid-template-columns:repeat(2,1fr)}}
-  @media(max-width:720px){.g2,.g3,.g4{grid-template-columns:1fr}}
+  .g5{grid-template-columns:repeat(5,1fr)}
+  @media(max-width:1080px){.g3,.g4,.g5{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:720px){.g2,.g3,.g4,.g5{grid-template-columns:1fr}}
 
   /* KPI */
   .kpi{padding:18px 20px}
@@ -900,21 +901,6 @@ function legendaCategoriasHtml(){
   }).join("");
 }
 
-function abrirLegendaCategorias(){
-  $("#modal-root").innerHTML=`
-  <div class="overlay"><div class="modal wide">
-    <div class="modal-head"><h3>📋 Legenda das categorias de atividade</h3>
-      <button class="btn-icon" id="leg-x">✕</button></div>
-    <div class="modal-body">
-      <div class="help-banner" style="margin-bottom:14px"><span>ℹ️</span><span>
-        Referência do que cada categoria representa, para apontar horas com consistência.</span></div>
-      <div style="max-height:60vh;overflow-y:auto">${legendaCategoriasHtml()}</div>
-    </div>
-    <div class="modal-foot"><button class="btn" id="leg-fechar">Fechar</button></div>
-  </div></div>`;
-  $("#leg-x").onclick=closeModal;
-  $("#leg-fechar").onclick=closeModal;
-}
 function getRubrica(id){ return DB.data.rubricas.find(r=>r.id===id); }
 function getAtividade(id){ return DB.data.atividades.find(a=>a.id===id); }
 /* exclui uma atividade (com confirmação e opção de excluir também os
@@ -1670,8 +1656,6 @@ const NAV=[
   {id:"painel",label:"Painel Geral",ic:"▦"},
   {portfolioSection:true},
   {sec:"Operação"},
-  {id:"horas",label:"Apontamento de Horas",ic:"◷"},
-  {id:"ocupacao",label:"Ocupação da Equipe",ic:"▥"},
   {id:"financeiro",label:"Financeiro",ic:"₿"},
   {id:"equipe",label:"Equipe",ic:"◍"},
   {sec:"Sistema"},
@@ -1759,10 +1743,9 @@ function render(){
   renderNav();
   renderUserWidget();
   const titles={painel:"Painel Geral",
-    horas:"Apontamento de Horas",ocupacao:"Ocupação da Equipe",financeiro:"Controle Financeiro",
+    financeiro:"Controle Financeiro",
     equipe:"Equipe",config:"Configurações"};
-  const crumbs={painel:"Visão geral",horas:"Operação",
-    ocupacao:"Operação",financeiro:"Operação",equipe:"Operação",config:"Sistema"};
+  const crumbs={painel:"Visão geral",financeiro:"Operação",equipe:"Operação",config:"Sistema"};
   let title=titles[ST.view]||"Painel", crumb=crumbs[ST.view]||"";
   if(ST.view==="portfolio"){
     title=nomeSessao(ST.sessaoAtiva); crumb="Portfólio";
@@ -1784,8 +1767,6 @@ function render(){
   if(ST.view==="painel") viewPainel(v);
   else if(ST.view==="portfolio") viewPortfolio(v);
   else if(ST.view==="projeto") viewProjeto(v);
-  else if(ST.view==="horas") viewHoras(v);
-  else if(ST.view==="ocupacao") viewOcupacaoEquipe(v);
   else if(ST.view==="financeiro") viewFinanceiro(v);
   else if(ST.view==="equipe") viewEquipe(v);
   else if(ST.view==="config") viewConfig(v);
@@ -2026,7 +2007,15 @@ function wirePainelMciMds(v){
 function viewPainel(v){
   const ps=DB.data.projetos;
   const ativos=ps.filter(p=>{ const s=statusCalculado(p); return s==="Em andamento"||s==="Em risco"||s==="Planejado"; });
-  const receitaTotal=ps.reduce((s,p)=>s+(+p.receita||0),0);
+  // "Captação" é a sessão de propostas/editais em andamento (ainda não
+  // ganhos) — assim que um projeto é aprovado, a própria regra de
+  // conversao da sessão (ver SESSAO_CONFIG.captacao) o move para "Gestão
+  // de Projetos", então tudo que ainda está classificado como "captacao"
+  // aqui é, por definição, previsto/pleiteado — ainda não é receita real.
+  const projetosCaptacao=ps.filter(p=>p.sessaoId==="captacao");
+  const projetosNaoCaptacao=ps.filter(p=>p.sessaoId!=="captacao");
+  const captacaoPrevista=projetosCaptacao.reduce((s,p)=>s+(+p.receita||0),0);
+  const receitaCaptada=projetosNaoCaptacao.reduce((s,p)=>s+(+p.receita||0),0);
   const despesaTotal=ps.reduce((s,p)=>s+despesasProjeto(p.id),0);
   const margens=ps.map(margemProjeto).filter(m=>m!=null);
   const margemMedia=margens.length? margens.reduce((a,b)=>a+b,0)/margens.length : null;
@@ -2076,11 +2065,13 @@ function viewPainel(v){
   }
 
   const kpis=`
-  <div class="grid g4">
+  <div class="grid g5">
     <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--accent)"></span>Projetos ativos</div>
       <div class="val">${ativos.length}</div><div class="sub">${ps.length} no portfólio</div></div>
-    <div class="card kpi" id="kpi-receita" style="cursor:pointer" title="Ver detalhamento por projeto"><div class="lbl"><span class="dot" style="background:var(--info)"></span>Receita do portfólio</div>
-      <div class="val" style="font-size:22px">${fmtBRL(receitaTotal)}</div><div class="sub">Valor contratado total · clique para detalhar</div></div>
+    <div class="card kpi" id="kpi-captacao" style="cursor:pointer" title="Ver detalhamento por projeto"><div class="lbl"><span class="dot" style="background:var(--warn)"></span>Captação (previsto)</div>
+      <div class="val" style="font-size:22px">${fmtBRL(captacaoPrevista)}</div><div class="sub">Valor pleiteado em propostas/editais · clique para detalhar</div></div>
+    <div class="card kpi" id="kpi-receita" style="cursor:pointer" title="Ver detalhamento por projeto"><div class="lbl"><span class="dot" style="background:var(--info)"></span>Receita já captada</div>
+      <div class="val" style="font-size:22px">${fmtBRL(receitaCaptada)}</div><div class="sub">Valor contratado do portfólio · clique para detalhar</div></div>
     <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--gold)"></span>Margem média</div>
       <div class="val">${margemMedia==null?"—":fmtNum(margemMedia,1)+"%"}</div>
       <div class="sub">Despesas: ${fmtBRL(despesaTotal)}</div></div>
@@ -2256,14 +2247,22 @@ function viewPainel(v){
   v.querySelectorAll("[data-alerta-ok-reuniao]").forEach(b=>{
     b.onclick=()=>marcarReuniaoOkRapido(b.dataset.alertaOkReuniao, b.dataset.proj);
   });
-  $("#kpi-receita").onclick=()=>abrirDetalheReceitaPortfolio(ps);
+  $("#kpi-captacao").onclick=()=>abrirDetalheReceitaPortfolio(projetosCaptacao,
+    "◈ Captação (previsto) — por projeto",
+    "Projetos da sessão \"Captação\" (propostas/editais ainda em prospecção, elaboração, submetidos etc.), ordenados do maior para o menor valor pleiteado. Assim que um projeto é aprovado, ele é convertido para \"Gestão de Projetos\" e passa a contar em \"Receita já captada\". Clique num projeto para abri-lo e conferir/corrigir o campo \"Receita / Valor do projeto\".");
+  $("#kpi-receita").onclick=()=>abrirDetalheReceitaPortfolio(projetosNaoCaptacao,
+    "💰 Receita já captada — por projeto",
+    "Todos os projetos do portfólio, exceto os que ainda estão em Captação, ordenados do maior para o menor valor contratado. Clique num projeto para abri-lo e conferir/corrigir o campo \"Receita / Valor do projeto\".");
 }
 
-// Raio-x de "Receita do portfólio": lista TODOS os projetos (de todas as
-// sessões) ordenados do maior valor contratado para o menor, para achar
-// rapidamente algum projeto com valor errado/esquecido sem precisar abrir
-// sessão por sessão.
-function abrirDetalheReceitaPortfolio(ps){
+// Raio-x de "Captação (previsto)" / "Receita já captada": lista os projetos
+// do grupo clicado (ver viewPainel), ordenados do maior valor para o menor,
+// para achar rapidamente algum projeto com valor errado/esquecido sem
+// precisar abrir sessão por sessão. titulo/descricao customizam o texto do
+// modal conforme o cartão de origem (Captação × Receita já captada).
+function abrirDetalheReceitaPortfolio(ps,titulo,descricao){
+  titulo=titulo||"💰 Receita do portfólio — por projeto";
+  descricao=descricao||'Todos os projetos, de todas as sessões, ordenados do maior para o menor valor contratado. Clique num projeto para abri-lo e conferir/corrigir o campo "Receita / Valor do projeto".';
   const ordenado=ps.slice().sort((a,b)=>(+b.receita||0)-(+a.receita||0));
   const total=ordenado.reduce((s,p)=>s+(+p.receita||0),0);
   const linhas=ordenado.map(p=>`
@@ -2273,11 +2272,11 @@ function abrirDetalheReceitaPortfolio(ps){
     </tr>`).join("");
   $("#modal-root").innerHTML=`
   <div class="overlay"><div class="modal wide">
-    <div class="modal-head"><h3>💰 Receita do portfólio — por projeto</h3>
+    <div class="modal-head"><h3>${titulo}</h3>
       <button class="btn-icon" id="drp-x">✕</button></div>
     <div class="modal-body">
       <div class="help-banner" style="margin-bottom:14px"><span>ℹ️</span><span>
-        Todos os projetos, de todas as sessões, ordenados do maior para o menor valor contratado. Clique num projeto para abri-lo e conferir/corrigir o campo "Receita / Valor do projeto".</span></div>
+        ${descricao}</span></div>
       <div style="max-height:55vh;overflow-y:auto" class="table-wrap">
         <table><thead><tr><th>Projeto</th><th class="num">Receita</th></tr></thead>
         <tbody>${linhas||`<tr><td colspan="2" style="text-align:center;color:var(--ink-faint);padding:20px">Nenhum projeto.</td></tr>`}</tbody></table>
@@ -4337,420 +4336,6 @@ ${t||"(cole a transcrição da reunião no campo acima)"}
 }
 
 /* ============================================================
-   VIEW: APONTAMENTO DE HORAS
-   ============================================================ */
-function viewHoras(v){
-  $("#topbar-actions").innerHTML=`
-    <button class="btn ghost sm" id="btn-legenda-cat" title="Ver o que cada categoria significa">ℹ️ Legenda das categorias</button>
-    <button class="btn ghost sm" id="csv-modelo" style="margin-left:6px" title="Baixar modelo de planilha CSV">📋 Modelo CSV</button>
-    <button class="btn ghost sm" id="csv-import" style="margin-left:6px" title="Importar apontamentos de planilha CSV">📥 Importar CSV</button>
-    <input type="file" id="csv-file" accept=".csv,.txt" style="display:none">
-    ${isGestor()?'<button class="btn ghost sm" id="csv-export" style="margin-left:6px" title="Baixar em .CSV os apontamentos filtrados abaixo, para backup">⬇ Exportar CSV</button>':""}
-    <button class="btn" id="add-horas" style="margin-left:6px">+ Apontar horas</button>`;
-  $("#btn-legenda-cat").onclick=abrirLegendaCategorias;
-  $("#add-horas").onclick=()=>formHoras();
-  $("#csv-modelo").onclick=()=>baixarModeloCSV();
-  $("#csv-import").onclick=()=>$("#csv-file").click();
-  $("#csv-file").onchange=(e)=>importarCSVHoras(e);
-  
-  if(!getInternos().length||!DB.data.projetos.length){
-    v.innerHTML=`<div class="card"><div class="empty"><span class="ic">◷</span>
-      <h3>Pré-requisitos</h3><p>Para apontar horas, cadastre primeiro a <b>equipe interna</b> e ao menos um <b>projeto</b>.</p></div></div>`;
-    return;
-  }
-  
-  ST.search.horas = ST.search.horas || {mes:"", colab:"", proj:"", de:"", ate:"", selecionados: []};
-  const f = ST.search.horas;
-  const myId = currentColabId();
-  let lista = DB.data.horas.slice();
-  if(myId) lista = lista.filter(h=>h.colaboradorId===myId);
-  if(f.mes) lista = lista.filter(h=>monthKey(h.data)===f.mes);
-  if(f.colab && !myId) lista = lista.filter(h=>h.colaboradorId===f.colab);
-  if(f.proj) lista = lista.filter(h=>h.projetoId===f.proj);
-  if(f.de) lista = lista.filter(h=>h.data && h.data>=f.de);
-  if(f.ate) lista = lista.filter(h=>h.data && h.data<=f.ate);
-  lista.sort((a,b)=>(b.data||"").localeCompare(a.data||""));
-
-  const totalH = lista.reduce((s,h)=>s+(+h.horas||0),0);
-  const meses = [...new Set(DB.data.horas.map(h=>monthKey(h.data)).filter(Boolean))].sort().reverse();
-
-  // Função para verificar se todos os itens visíveis estão selecionados
-  const todosSelecionados = lista.length > 0 && lista.every(h => f.selecionados.includes(h.id));
-  const temSelecionados = f.selecionados.length > 0;
-
-  const rows = lista.map(h => {
-    const checked = f.selecionados.includes(h.id) ? 'checked' : '';
-    return `<tr>
-      <td style="width:36px;text-align:center">
-        <input type="checkbox" class="hora-checkbox" data-id="${h.id}" ${checked}>
-      </td>
-      <td style="font-size:12px">${fmtDate(h.data)}</td>
-      <td style="font-weight:600">${esc(nomeColab(h.colaboradorId))}</td>
-      <td>${esc(nomeProjeto(h.projetoId))}</td>
-      <td>${h.atividadeId?esc(nomeAtividade(h.atividadeId)):'<span style="color:var(--ink-faint)">—</span>'}</td>
-      <td><span class="tag" style="background:${corCategoria(h.categoriaId)}22;color:${corCategoria(h.categoriaId)}">${esc(nomeCategoria(h.categoriaId))}</span></td>
-      <td class="num" style="font-weight:600">${fmtH(h.horas)}</td>
-      <td class="actions">
-        <button class="btn-icon" data-edh="${h.id}">✎</button>
-        <button class="btn-icon del" data-dlh="${h.id}">🗑</button>
-      </td></tr>`;
-  }).join("");
-
-  v.innerHTML=`
-  ${myId?`<div class="help-banner" style="background:var(--accent-soft);border-color:#bcdcd9;color:#1f6f6b"><span>👤</span><span>Você está vendo apenas <b>seus próprios apontamentos</b>.</span></div>`:""}
-  <div class="toolbar">
-    <div class="field-inline">Mês
-      <select class="select" id="f-mes"><option value="">Todos</option>
-        ${meses.map(m=>`<option value="${m}" ${f.mes===m?"selected":""}>${mesLabel(m)}</option>`).join("")}</select></div>
-    ${myId?"":`<div class="field-inline">Colaborador
-      <select class="select" id="f-colab"><option value="">Todos</option>
-        ${getInternos().map(c=>`<option value="${c.id}" ${f.colab===c.id?"selected":""}>${esc(c.nome)}</option>`).join("")}</select></div>`}
-    <div class="field-inline">Projeto
-      <select class="select" id="f-proj"><option value="">Todos</option>
-        ${DB.data.projetos.map(p=>`<option value="${p.id}" ${f.proj===p.id?"selected":""}>${esc(p.nome)}</option>`).join("")}</select></div>
-    <div class="field-inline">De
-      <input type="date" class="select" id="f-de" value="${esc(f.de||"")}"></div>
-    <div class="field-inline">Até
-      <input type="date" class="select" id="f-ate" value="${esc(f.ate||"")}"></div>
-    ${(f.de||f.ate)?'<button class="btn ghost sm" id="f-clr-data">Limpar datas</button>':""}
-    <div class="spacer"></div>
-    <span class="field-inline">Total filtrado: <b style="color:var(--ink)">${fmtH(totalH)}</b></span>
-  </div>
-  
-  <div class="toolbar" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line-soft)">
-    <div class="field-inline">
-      <input type="checkbox" id="select-all-horas" ${todosSelecionados ? 'checked' : ''}>
-      <label for="select-all-horas" style="cursor:pointer;font-weight:500">Selecionar todos</label>
-    </div>
-    <div class="field-inline" style="color:var(--ink-soft)">
-      ${temSelecionados ? `${f.selecionados.length} selecionado(s)` : 'Nenhum selecionado'}
-    </div>
-    <div class="spacer"></div>
-    ${temSelecionados ? `<button class="btn danger" id="delete-selected">🗑 Excluir selecionados (${f.selecionados.length})</button>` : ''}
-    ${temSelecionados ? `<button class="btn ghost sm" id="clear-selection">✕ Limpar seleção</button>` : ''}
-  </div>
-  
-  ${lista.length?`<div class="card table-wrap"><table><thead><tr>
-    <th style="width:36px">#</th>
-    <th>Data</th><th>Colaborador</th><th>Projeto</th><th>Atividade</th><th>Categoria</th>
-    <th class="num">Horas</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
-   :`<div class="card"><div class="empty"><span class="ic">◷</span><h3>Nenhum apontamento</h3>
-     <p>Registre as horas executadas pela equipe nas atividades dos projetos.</p>
-     <button class="btn" id="ah2">+ Apontar horas</button></div></div>`}`;
-
-  // --- EVENTOS ---
-  
-  // Filtros
-  $("#f-mes").onchange=e=>{ f.mes=e.target.value; f.selecionados=[]; viewHoras(v); };
-  if($("#f-colab")) $("#f-colab").onchange=e=>{ f.colab=e.target.value; f.selecionados=[]; viewHoras(v); };
-  $("#f-proj").onchange=e=>{ f.proj=e.target.value; f.selecionados=[]; viewHoras(v); };
-  $("#f-de").onchange=e=>{ f.de=e.target.value; f.selecionados=[]; viewHoras(v); };
-  $("#f-ate").onchange=e=>{ f.ate=e.target.value; f.selecionados=[]; viewHoras(v); };
-  if($("#f-clr-data")) $("#f-clr-data").onclick=()=>{ f.de=""; f.ate=""; f.selecionados=[]; viewHoras(v); };
-  
-  // Checkbox individual
-  v.querySelectorAll(".hora-checkbox").forEach(cb => {
-    cb.onchange = function() {
-      const id = this.dataset.id;
-      if (this.checked) {
-        if (!f.selecionados.includes(id)) f.selecionados.push(id);
-      } else {
-        f.selecionados = f.selecionados.filter(x => x !== id);
-      }
-      viewHoras(v); // Re-renderiza para atualizar contadores
-    };
-  });
-  
-  // Selecionar todos
-  const selectAll = document.getElementById('select-all-horas');
-  if (selectAll) {
-    selectAll.onchange = function() {
-      if (this.checked) {
-        f.selecionados = lista.map(h => h.id);
-      } else {
-        f.selecionados = [];
-      }
-      viewHoras(v);
-    };
-  }
-  
-  // Limpar seleção
-  const clearBtn = document.getElementById('clear-selection');
-  if (clearBtn) {
-    clearBtn.onclick = function() {
-      f.selecionados = [];
-      viewHoras(v);
-    };
-  }
-  
-  // Excluir selecionados
-  const deleteBtn = document.getElementById('delete-selected');
-  if (deleteBtn) {
-    deleteBtn.onclick = function() {
-      if (f.selecionados.length === 0) return;
-      const count = f.selecionados.length;
-      confirmar(
-        `Excluir ${count} apontamento(s) de horas?`,
-        `Esta ação é irreversível. ${count} registro(s) serão removidos definitivamente do banco de dados.`,
-        async () => {
-          try {
-            // Pega os IDs selecionados
-            const idsParaExcluir = [...f.selecionados];
-            
-            // Remove do banco de dados um por um (ou em lote)
-            for (const id of idsParaExcluir) {
-              await sbDelete("horas", id);
-            }
-            
-            // Remove da memória
-            DB.data.horas = DB.data.horas.filter(h => !idsParaExcluir.includes(h.id));
-            
-            // Limpa a seleção
-            f.selecionados = [];
-            
-            toast(`${idsParaExcluir.length} apontamento(s) excluído(s) com sucesso.`);
-            render(); // Recarrega a página
-          } catch (error) {
-            console.error("Erro ao excluir em lote:", error);
-            toast("Erro ao excluir: " + (error.message || error));
-            
-          }
-        }
-      );
-    };
-  }
-  
-  // Exportar CSV
-  if($("#csv-export")) $("#csv-export").onclick=()=>exportarHorasCSV(lista);
-  
-  // Botão "Apontar horas" (dentro do empty state)
-  if($("#ah2")) $("#ah2").onclick=()=>formHoras();
-  
-  // Botões de edição/exclusão individual
-  v.querySelectorAll("[data-edh]").forEach(b=>b.onclick=()=>{
-    const x=DB.data.horas.find(y=>y.id===b.dataset.edh);
-    if(myId && x.colaboradorId!==myId){ toast("Você só pode editar seus próprios apontamentos."); return; }
-    formHoras(x);
-  });
-  v.querySelectorAll("[data-dlh]").forEach(b=>b.onclick=()=>{
-    const x=DB.data.horas.find(y=>y.id===b.dataset.dlh);
-    if(myId && x.colaboradorId!==myId){ toast("Você só pode excluir seus próprios apontamentos."); return; }
-    confirmar("Excluir este apontamento de horas?","",async()=>{
-      const hid=b.dataset.dlh;
-      DB.data.horas=DB.data.horas.filter(x=>x.id!==hid);
-      await sbDelete("horas", hid);
-      toast("Apontamento excluído.");
-      // Remove da seleção se estiver lá
-      f.selecionados = f.selecionados.filter(id => id !== hid);
-      render();
-    });
-  });
-}
-function mesLabel(mk){ if(!mk) return ""; const p=mk.split("-"); return MONTHS[(+p[1])-1]+"/"+p[0]; }
-
-/* ============================================================
-   VIEW: OCUPAÇÃO DA EQUIPE (GLOBAL, por colaborador)
-   Cruza TODAS as atividades com horas previstas de TODOS os projetos do
-   portfólio e mostra, por colaborador: quantas horas por dia estão
-   dedicadas a cada projeto, e quantas horas ainda estão livres na agenda.
-   Um colaborador só enxerga a própria ocupação; o gestor pode escolher
-   qualquer pessoa da equipe.
-   ============================================================ */
-function viewOcupacaoEquipe(v){
-  const myId = currentColabId();
-  // Esta visão global (Operação > Ocupação da Equipe) mostra somente colaboradores
-  // INTERNOS — parceiros externos só aparecem na ocupação de cada projeto
-  // individualmente (aba "Ocupação da Equipe" do projeto), onde fica claro que
-  // eles são parceiros vinculados àquele projeto.
-  const pessoas = myId
-    ? [getColab(myId)].filter(Boolean)
-    : getInternos().slice().sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"}));
-
-  if(!pessoas.length){
-    v.innerHTML=`<div class="card"><div class="empty"><span class="ic">▥</span>
-      <h3>Nenhum colaborador identificado</h3>
-      <p>${myId?"Seu cadastro de colaborador não foi encontrado.":"Cadastre a equipe interna em Operação → Equipe para ver a ocupação."}</p></div></div>`;
-    return;
-  }
-  if(!DB.data.atividades.some(a=>totalHorasPrevistasAtividade(a)>0)){
-    v.innerHTML=`<div class="help-banner"><span>ℹ️</span><span>
-      A ocupação é calculada a partir das <b>horas previstas por colaborador</b> das atividades de cada
-      projeto (campo preenchido no Cronograma Físico). Cada pessoa recebe exatamente a quantidade de horas
-      atribuída a ela, distribuída ao longo dos dias úteis entre início e término previstos.</span></div>
-      <div class="card"><div class="empty"><span class="ic">🕐</span>
-      <h3>Ainda não há horas previstas lançadas</h3>
-      <p>Preencha "Horas previstas por colaborador" nas atividades dos projetos do portfólio para que este
-      painel seja calculado automaticamente.</p></div></div>`;
-    return;
-  }
-
-  ST.ocupEqPessoaId = myId || ((ST.ocupEqPessoaId && pessoas.some(p=>p.id===ST.ocupEqPessoaId)) ? ST.ocupEqPessoaId : pessoas[0].id);
-  ST.ocupEqMes = ST.ocupEqMes || todayStr().slice(0,7);
-
-  const pessoa = getColab(ST.ocupEqPessoaId);
-  const mapa = construirMapaOcupacaoGlobal();
-  const resumo = resumoOcupacaoPessoaMes(pessoa.id, ST.ocupEqMes, mapa);
-  const pctOcupado = resumo.capacidadeTotalMes>0 ? Math.round((resumo.horasTotalMes/resumo.capacidadeTotalMes)*100) : 0;
-
-  // horas realmente apontadas no mês selecionado, por projeto — para comparar
-  // "previsto x executado" no card "Horas por projeto no mês"
-  const execPorProjetoMes={};
-  DB.data.horas.forEach(h=>{
-    if(h.colaboradorId!==pessoa.id) return;
-    if(!h.data || h.data.slice(0,7)!==ST.ocupEqMes) return;
-    const pid=h.projetoId||"sem-projeto";
-    execPorProjetoMes[pid]=(execPorProjetoMes[pid]||0)+(+h.horas||0);
-  });
-  const idsProjMes=new Set([...Object.keys(resumo.porProjeto), ...Object.keys(execPorProjetoMes)]);
-  const projCompData=[...idsProjMes].map((pid,i)=>({
-    pid,
-    label: resumo.porProjeto[pid]?.nome || (pid==="sem-projeto"?"Sem projeto vinculado":nomeProjeto(pid)),
-    previsto: resumo.porProjeto[pid]?.horas||0,
-    executado: execPorProjetoMes[pid]||0,
-    color: PALETTE[i%PALETTE.length]
-  })).sort((a,b)=>Math.max(b.previsto,b.executado)-Math.max(a.previsto,a.executado));
-  const totalPrevistoMes=projCompData.reduce((s,d)=>s+d.previsto,0);
-  const totalExecutadoMes=projCompData.reduce((s,d)=>s+d.executado,0);
-
-  const hojeStr = todayStr();
-  const hojeDow = new Date(hojeStr+"T00:00:00").getDay();
-  const detalheHoje = (hojeDow!==0 && hojeDow!==6) ? detalheOcupacaoDia(pessoa.id, hojeStr) : [];
-  const totalHoje = detalheHoje.reduce((s,d)=>s+d.horas,0);
-  const livreHoje = Math.max(0, CAPACIDADE_DIARIA_PADRAO-totalHoje);
-
-  // horas realmente apontadas hoje por esta pessoa, agrupadas por atividade
-  // (chave "sem-atividade" para apontamentos sem atividade vinculada)
-  const apontadasHojeMap={};
-  DB.data.horas.forEach(h=>{
-    if(h.colaboradorId!==pessoa.id || h.data!==hojeStr) return;
-    const key=h.atividadeId||("sem-atividade:"+(h.projetoId||""));
-    apontadasHojeMap[key]=(apontadasHojeMap[key]||0)+(+h.horas||0);
-  });
-  // combina previsto (detalheHoje) com executado — mantém atividades previstas
-  // mesmo sem apontamento (executado=0), e acrescenta apontamentos avulsos que
-  // não tinham previsão para hoje (previsto=0)
-  const usadosMap=new Set();
-  const linhasHoje = detalheHoje.map(d=>{
-    usadosMap.add(d.atividadeId);
-    return {projetoNome:d.projetoNome, atividadeNome:d.atividadeNome, previstas:d.horas, executadas:apontadasHojeMap[d.atividadeId]||0};
-  });
-  Object.keys(apontadasHojeMap).forEach(key=>{
-    if(usadosMap.has(key)) return;
-    if(key.startsWith("sem-atividade:")){
-      const pid=key.split(":")[1];
-      linhasHoje.push({projetoNome:pid?nomeProjeto(pid):"—", atividadeNome:"Apontamento sem atividade vinculada", previstas:0, executadas:apontadasHojeMap[key]});
-    } else {
-      const a=getAtividade(key);
-      linhasHoje.push({projetoNome:a?nomeProjeto(a.projetoId):"—", atividadeNome:a?a.nome:"—", previstas:0, executadas:apontadasHojeMap[key]});
-    }
-  });
-  const totalExecutadoHoje = linhasHoje.reduce((s,d)=>s+d.executadas,0);
-
-  const hojeHtml = (hojeDow===0||hojeDow===6)
-    ? `<p style="color:var(--ink-faint);font-size:12.5px">Hoje é fim de semana — sem apontamento previsto.</p>`
-    : (linhasHoje.length
-        ? `<div style="display:flex;font-size:11px;color:var(--ink-faint);font-weight:600;padding:0 0 6px;border-bottom:1px solid var(--line-soft)">
-            <div style="flex:1">Projeto / Atividade</div>
-            <div style="width:70px;text-align:right">Previsto</div>
-            <div style="width:70px;text-align:right">Executado</div></div>`
-          +linhasHoje.map(d=>{
-            const bateu = d.previstas>0 && d.executadas>=d.previstas;
-            const col = d.previstas<=0 ? "var(--ink)" : (bateu ? "var(--ok)" : (d.executadas>0 ? "var(--warn)" : "var(--ink-faint)"));
-            return `<div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid var(--line-soft);font-size:12.5px">
-              <div style="flex:1"><div style="font-weight:600">${esc(d.projetoNome)}</div><div style="color:var(--ink-faint)">${esc(d.atividadeNome)}</div></div>
-              <div style="width:70px;text-align:right;font-weight:700">${d.previstas>0?fmtH(d.previstas):"—"}</div>
-              <div style="width:70px;text-align:right;font-weight:700;color:${col}">${fmtH(d.executadas)}</div></div>`;
-          }).join("")
-        : `<p style="color:var(--ink-faint);font-size:12.5px">Nenhuma alocação prevista para hoje.</p>`)
-      +`<div style="display:flex;justify-content:space-between;padding:8px 0 0;font-size:12.5px">
-          <div style="font-weight:700;color:${livreHoje>0?"var(--ok)":"var(--ink-faint)"}">Horas livres hoje</div>
-          <div style="font-weight:700;color:${livreHoje>0?"var(--ok)":"var(--ink-faint)"}">${fmtH(livreHoje)}</div></div>
-      ${!(hojeDow===0||hojeDow===6)?`<div style="display:flex;justify-content:space-between;padding:4px 0 0;font-size:12.5px">
-          <div style="font-weight:700;color:var(--ink-faint)">Total apontado hoje</div>
-          <div style="font-weight:700">${fmtH(totalExecutadoHoje)}</div></div>`:""}`;
-
-  const projBreakdownHtml = projCompData.length
-    ? `<div style="display:flex;gap:16px;font-size:12.5px;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--line-soft)">
-        <div style="display:flex;align-items:center;gap:6px"><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--accent)"></span>
-          Previsto: <b>${fmtH(totalPrevistoMes)}</b></div>
-        <div style="display:flex;align-items:center;gap:6px"><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--ok)"></span>
-          Executado: <b>${fmtH(totalExecutadoMes)}</b></div>
-      </div>
-      <div>${projCompData.map(d=>{
-        const pctPrev = resumo.capacidadeTotalMes>0 ? Math.min(100,Math.round((d.previsto/resumo.capacidadeTotalMes)*100)) : 0;
-        const pctExec = resumo.capacidadeTotalMes>0 ? Math.min(100,Math.round((d.executado/resumo.capacidadeTotalMes)*100)) : 0;
-        const bateu = d.previsto>0 && d.executado>=d.previsto;
-        return `<div style="margin-bottom:14px">
-          <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px">
-            <span style="font-weight:600">${esc(d.label)}</span>
-            <span style="color:${bateu?"var(--ok)":"var(--ink-faint)"}">Previsto ${fmtH(d.previsto)} · Executado ${fmtH(d.executado)}</span></div>
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
-            <span style="font-size:10px;color:var(--ink-faint);width:56px">Previsto</span>
-            <div style="flex:1;background:var(--line-soft);border-radius:5px;height:6px;overflow:hidden">
-              <div style="background:var(--accent);width:${pctPrev}%;height:100%"></div></div>
-          </div>
-          <div style="display:flex;align-items:center;gap:6px">
-            <span style="font-size:10px;color:var(--ink-faint);width:56px">Executado</span>
-            <div style="flex:1;background:var(--line-soft);border-radius:5px;height:6px;overflow:hidden">
-              <div style="background:${bateu?"var(--ok)":"var(--warn)"};width:${pctExec}%;height:100%"></div></div>
-          </div>
-        </div>`;
-      }).join("")}</div>`
-    : `<div class="empty" style="padding:20px"><span class="ic">▱</span><p>Sem horas alocadas em nenhum projeto neste mês.</p></div>`;
-
-  const calendarHtml = calendarioOcupacaoHtml(pessoa, ST.ocupEqMes, mapa);
-
-  v.innerHTML=`
-  <div class="help-banner"><span>ℹ️</span><span>
-    Visão consolidada de <b>todos os projetos do portfólio</b> em que ${myId?"você está":"a pessoa está"} alocada
-    (somente equipe interna — parceiros externos aparecem na ocupação de cada projeto individualmente).
-    As horas vêm das <b>horas previstas por colaborador</b> das atividades (Cronograma Físico de cada projeto):
-    cada pessoa recebe exatamente a quantidade de horas atribuída a ela, distribuída pelos dias úteis entre
-    início e término previstos. Capacidade considerada: <b>${CAPACIDADE_DIARIA_PADRAO}h/dia</b>.</span></div>
-
-  <div class="toolbar">
-    ${myId?"":`<div class="field-inline">Colaborador
-      <select class="select" id="ocupeq-pessoa">${pessoas.map(pe=>`<option value="${pe.id}" ${pessoa.id===pe.id?"selected":""}>${esc(pe.nome)}</option>`).join("")}</select></div>`}
-    <div class="spacer"></div>
-    <div class="field-inline">Mês
-      <select class="select" id="ocupeq-mes">${mesesOcupacaoDisponiveis().map(mk=>`<option value="${mk}" ${ST.ocupEqMes===mk?"selected":""}>${esc(mesLabel(mk))}</option>`).join("")}</select></div>
-  </div>
-
-  <div class="grid g4" style="margin-bottom:20px">
-    <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--accent)"></span>Horas previstas no mês</div>
-      <div class="val">${fmtH(resumo.horasTotalMes)}</div><div class="sub">${pctOcupado}% da capacidade do mês</div></div>
-    <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--ok)"></span>Horas livres no mês</div>
-      <div class="val">${fmtH(resumo.horasLivres)}</div><div class="sub">ainda não alocadas no calendário</div></div>
-    <div class="card kpi"><div class="lbl"><span class="dot" style="background:${resumo.horasExcedentes>0?"var(--danger)":"var(--ink-faint)"}"></span>Horas excedentes</div>
-      <div class="val">${fmtH(resumo.horasExcedentes)}</div><div class="sub">acima de ${CAPACIDADE_DIARIA_PADRAO}h/dia em algum dia</div></div>
-    <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--info)"></span>Capacidade do mês</div>
-      <div class="val">${fmtH(resumo.capacidadeTotalMes)}</div><div class="sub">${resumo.diasUteisMes} dia(s) útil(eis)</div></div>
-  </div>
-
-  <div class="grid" style="grid-template-columns:1.4fr 1fr;gap:18px;align-items:start;margin-bottom:20px">
-    <div class="card">
-      <div class="card-head"><h3>Horas por projeto no mês</h3><span class="hint">Previsto × Executado</span></div>
-      <div class="card-pad">${projBreakdownHtml}</div>
-    </div>
-    <div class="card">
-      <div class="card-head"><h3>Hoje · ${fmtDate(hojeStr)}</h3></div>
-      <div class="card-pad">${hojeHtml}</div>
-    </div>
-  </div>
-
-  <div class="section-title">Calendário de ocupação</div>
-  <div class="card"><div class="card-pad">${calendarHtml}</div></div>`;
-
-  if($("#ocupeq-pessoa")) $("#ocupeq-pessoa").onchange=e=>{ ST.ocupEqPessoaId=e.target.value; render(); };
-  if($("#ocupeq-mes")) $("#ocupeq-mes").onchange=e=>{ ST.ocupEqMes=e.target.value; render(); };
-  if($("#ocal-prev")) $("#ocal-prev").onclick=()=>{ ST.ocupEqMes=mesShift(ST.ocupEqMes,-1); render(); };
-  if($("#ocal-next")) $("#ocal-next").onclick=()=>{ ST.ocupEqMes=mesShift(ST.ocupEqMes,1); render(); };
-  v.querySelectorAll("[data-ocup-day]").forEach(el=>{
-    el.onclick=()=>mostrarDetalheOcupacaoDia(pessoa,el.dataset.ocupDay);
-  });
-}
-
-/* ============================================================
    VIEW: FINANCEIRO (GLOBAL)
    ============================================================ */
 function viewFinanceiro(v){
@@ -5838,63 +5423,6 @@ function gerarTextoRelatorioProjeto(p){
   return out;
 }
 
-/* ============================================================
-   IMPORTAÇÃO / EXPORTAÇÃO CSV DE APONTAMENTO DE HORAS
-   ============================================================ */
-/* Exporta em CSV os apontamentos de horas atualmente filtrados na tela —
-   serve como backup e usa o MESMO formato do modelo de importação, então
-   dá pra reimportar depois se precisar. Só é oferecido ao gestor (o botão
-   nem aparece para colaborador). */
-function csvCampo(v){
-  v=String(v==null?"":v);
-  if(v.includes(";")||v.includes('"')||v.includes("\n")){
-    return '"'+v.replace(/"/g,'""')+'"';
-  }
-  return v;
-}
-function exportarHorasCSV(lista){
-  if(!lista.length){ toast("Não há apontamentos para exportar com os filtros atuais."); return; }
-  const linhas=["Data;Colaborador;Projeto;Atividade;Categoria;Horas;Observação"];
-  lista.slice().sort((a,b)=>(a.data||"").localeCompare(b.data||"")).forEach(h=>{
-    linhas.push([
-      h.data?fmtDate(h.data):"",
-      nomeColab(h.colaboradorId),
-      nomeProjeto(h.projetoId),
-      h.atividadeId?nomeAtividade(h.atividadeId):"",
-      nomeCategoria(h.categoriaId),
-      String(h.horas||0).replace(".",","),
-      h.descricao||""
-    ].map(csvCampo).join(";"));
-  });
-  const conteudo="\uFEFF"+linhas.join("\r\n");
-  const blob=new Blob([conteudo],{type:"text/csv;charset=utf-8"});
-  const a=document.createElement("a");
-  a.href=URL.createObjectURL(blob);
-  a.download="backup_apontamento_horas_"+todayStr()+".csv";
-  a.click(); URL.revokeObjectURL(a.href);
-  toast(`Backup exportado: ${lista.length} apontamento(s).`);
-}
-
-function baixarModeloCSV(){
-  const projsExemplo=DB.data.projetos.slice(0,1).map(p=>p.nome).join("") || "Nome do projeto";
-  const catExemplo=DB.data.categorias.slice(0,1).map(c=>c.nome).join("") || "Nome da categoria";
-  const colabExemplo=getInternos().slice(0,1).map(c=>c.nome).join("") || "Nome do colaborador";
-  const hoje=todayStr();
-  const linhas=[
-    "Data;Colaborador;Projeto;Atividade;Categoria;Horas;Observação",
-    `${hoje};${colabExemplo};${projsExemplo};Exemplo de atividade;${catExemplo};4;Exemplo de observação`,
-    `${hoje};${colabExemplo};${projsExemplo};Outra atividade;${catExemplo};2,5;`
-  ];
-  // BOM para o Excel reconhecer UTF-8 corretamente
-  const conteudo="\uFEFF"+linhas.join("\r\n");
-  const blob=new Blob([conteudo],{type:"text/csv;charset=utf-8"});
-  const a=document.createElement("a");
-  a.href=URL.createObjectURL(blob);
-  a.download="modelo_apontamento_horas.csv";
-  a.click(); URL.revokeObjectURL(a.href);
-  toast("Modelo CSV baixado. Abra no Excel para preencher.");
-}
-
 function decodeCsvBuffer(buffer){
   // O Excel, no Brasil, ao salvar como "CSV (separado por vírgulas)" comum
   // (em vez de "CSV UTF-8"), grava o arquivo em Windows-1252/ANSI, não em
@@ -5910,159 +5438,6 @@ function decodeCsvBuffer(buffer){
     const decoderAnsi=new TextDecoder("windows-1252");
     return { texto: decoderAnsi.decode(buffer), encoding:"windows-1252" };
   }
-}
-
-function importarCSVHoras(event){
-  const file=event.target.files[0];
-  if(!file) return;
-  const reader=new FileReader();
-  reader.onload=async(e)=>{
-    try{
-      const { texto:textoDecodificado, encoding } = decodeCsvBuffer(e.target.result);
-      console.log("[PMO] CSV decodificado como", encoding);
-      const texto=textoDecodificado.replace(/^\uFEFF/,""); // remove BOM se houver
-      const linhas=texto.split(/\r?\n/).filter(l=>l.trim());
-      if(linhas.length<2){
-        alert("CSV vazio ou sem dados. O arquivo deve ter cabeçalho + linhas com apontamentos."); return;
-      }
-      // detecta separador (; ou ,)
-      const sep=linhas[0].includes(";")?";":",";
-      const cabecalho=parseCSVLine(linhas[0],sep).map(s=>s.trim().toLowerCase());
-      // mapeia colunas
-      const cols={
-        data: cabecalho.findIndex(c=>c==="data"||c==="date"),
-        colab: cabecalho.findIndex(c=>c==="colaborador"||c==="colaboradora"||c==="usuário"||c==="usuario"),
-        projeto: cabecalho.findIndex(c=>c==="projeto"),
-        atividade: cabecalho.findIndex(c=>c==="atividade"),
-        categoria: cabecalho.findIndex(c=>c==="categoria"),
-        horas: cabecalho.findIndex(c=>c==="horas"||c==="h realizada"||c==="h"),
-        obs: cabecalho.findIndex(c=>c==="observação"||c==="observacao"||c==="obs"||c==="descrição"||c==="descricao")
-      };
-      const obrigatorias=["data","projeto","atividade","categoria","horas"];
-      const faltando=obrigatorias.filter(k=>cols[k]<0);
-      if(faltando.length){
-        alert("CSV inválido. Faltando coluna(s): "+faltando.join(", ")+".\n\nO cabeçalho deve ter: Data; Colaborador; Projeto; Atividade; Categoria; Horas; Observação."); return;
-      }
-      const myId=currentColabId();
-      const resultado={ok:0, erro:0, novasAtividades:0, mensagens:[]};
-      const novasAtividadesParaInserir=[];
-      const novasHorasParaInserir=[];
-      const linhasParaProcessar=linhas.slice(1);
-      // usa for..of (em vez de forEach) porque o corpo precisa de "await" para
-      // salvar o RACI da atividade nova; forEach nunca aguarda callbacks async,
-      // e o "await" dentro de uma arrow function não-async é um erro de sintaxe
-      // que impedia o navegador de sequer carregar o script inteiro.
-      for(let idx=0; idx<linhasParaProcessar.length; idx++){
-        const linha=linhasParaProcessar[idx];
-        const lnNum=idx+2;
-        if(!linha.trim()) continue;
-        const c=parseCSVLine(linha,sep);
-        const dataRaw=(c[cols.data]||"").trim();
-        const colabRaw=(cols.colab>=0?(c[cols.colab]||""):"").trim();
-        const projRaw=(c[cols.projeto]||"").trim();
-        const ativRaw=(c[cols.atividade]||"").trim();
-        const catRaw=(c[cols.categoria]||"").trim();
-        const horasRaw=(c[cols.horas]||"").trim();
-        const obsRaw=(cols.obs>=0?(c[cols.obs]||""):"").trim();
-
-        // data: aceita DD/MM/YYYY ou YYYY-MM-DD
-        let data="";
-        const m1=dataRaw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-        const m2=dataRaw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-        if(m1) data=`${m1[3]}-${m1[2]}-${m1[1]}`;
-        else if(m2) data=dataRaw;
-        else { resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: data inválida "${dataRaw}"`); continue; }
-        // valida que é uma data real (não 99/99/2026 etc.)
-        const dt=new Date(data+"T00:00:00");
-        if(isNaN(dt.getTime()) || data.slice(0,7)!==dt.toISOString().slice(0,7)){
-          resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: data inválida "${dataRaw}"`); continue;
-        }
-
-        // colaborador: prioridade ao logado (se for colaborador), senão usa coluna do CSV
-        let colab=null;
-        if(myId) colab=getColab(myId);
-        else if(colabRaw){
-          colab=getInternos().find(x=>(x.nome||"").trim().toLowerCase()===colabRaw.toLowerCase());
-        }
-        if(!colab){
-          resultado.erro++;
-          resultado.mensagens.push(`Linha ${lnNum}: colaborador "${colabRaw}" não encontrado.`);
-          continue;
-        }
-
-        // projeto
-        const proj=DB.data.projetos.find(p=>(p.nome||"").trim().toLowerCase()===projRaw.toLowerCase());
-        if(!proj){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: projeto "${projRaw}" não cadastrado.`); continue; }
-
-        // categoria
-        const cat=DB.data.categorias.find(x=>(x.nome||"").trim().toLowerCase()===catRaw.toLowerCase());
-        if(!cat){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: categoria "${catRaw}" não cadastrada.`); continue; }
-
-        // horas: aceita vírgula ou ponto decimal
-        const horas=parseFloat(horasRaw.replace(",","."))||0;
-        if(horas<=0){ resultado.erro++; resultado.mensagens.push(`Linha ${lnNum}: horas inválidas "${horasRaw}".`); continue; }
-
-        // atividade: existente ou cria nova
-        let atividadeId=null;
-        if(ativRaw){
-          const existente=DB.data.atividades.find(a=>a.projetoId===proj.id &&
-            (a.nome||"").trim().toLowerCase()===ativRaw.toLowerCase());
-          if(existente) atividadeId=existente.id;
-          else {
-            const nova={id:uid(), projetoId:proj.id, nome:ativRaw, categoriaId:cat.id,
-              progresso:0, status:"Em andamento",
-              dataInicioPrev:data, dataFimPrev:null};
-            DB.data.atividades.push(nova);
-            atividadeId=nova.id;
-            novasAtividadesParaInserir.push(nova);
-            resultado.novasAtividades++;
-            // também criar RACI para este colaborador
-            await DB.salvarRaciCelula(proj.id, nova.id, colab.id, "R");
-          }
-        }
-
-        // proteção contra reimportação: se já existe um apontamento idêntico
-        // (mesma data+colaborador+atividade+horas) — seja já salvo no banco,
-        // seja já incluído nesta própria importação — pula a linha em vez de
-        // duplicar. Evita multiplicar registros quando a mesma planilha (ou
-        // uma planilha sobreposta) é importada mais de uma vez.
-        const duplicada = (h)=> h.data===data && h.colaboradorId===colab.id &&
-          h.atividadeId===atividadeId && Math.abs((+h.horas||0)-horas)<0.001;
-        if(DB.data.horas.some(duplicada) || novasHorasParaInserir.some(duplicada)){
-          resultado.mensagens.push(`Linha ${lnNum}: ignorada (apontamento idêntico já existe).`);
-          continue;
-        }
-
-        const novaHora={
-          id:uid(), data, colaboradorId:colab.id, projetoId:proj.id,
-          atividadeId, categoriaId:cat.id, horas,
-          descricao:obsRaw
-        };
-        DB.data.horas.push(novaHora);
-        novasHorasParaInserir.push(novaHora);
-        resultado.ok++;
-      }
-
-      if(novasAtividadesParaInserir.length)
-        await sbInsert("atividades", novasAtividadesParaInserir.map(toSnake));
-      if(novasHorasParaInserir.length)
-        await sbInsert("horas", novasHorasParaInserir.map(toSnake));
-      event.target.value=""; // permite reimportar o mesmo arquivo
-
-      // exibe relatório
-      const detalhes=resultado.mensagens.length
-        ? `\n\nProblemas (${resultado.mensagens.length}):\n${resultado.mensagens.slice(0,15).join("\n")}${resultado.mensagens.length>15?"\n…":""}`
-        : "";
-      alert(`Importação concluída.\n\n` +
-        `✓ ${resultado.ok} apontamento(s) importado(s).\n` +
-        (resultado.novasAtividades?`✓ ${resultado.novasAtividades} atividade(s) criada(s) automaticamente no cronograma.\n`:"") +
-        (resultado.erro?`✗ ${resultado.erro} linha(s) com erro (não importadas).`:"") + detalhes);
-      render();
-    } catch(err){
-      alert("Erro ao ler o CSV: "+err.message);
-    }
-  };
-  reader.readAsArrayBuffer(file);
 }
 
 function parseCSVLine(linha, sep){
@@ -6851,331 +6226,9 @@ function formAtividade(projetoId,a){
       render();
     }
   });
-}
-
-/* Ao apontar horas numa atividade de uma sessão sem Matriz RACI (ex.: Rotinas),
-   aproveita o próprio apontamento para manter a atividade sempre com responsável
-   e data de início já preenchidos, sem depender de sincronização manual:
-   - adiciona quem apontou à lista de responsáveis da atividade (se ainda não
-     estiver lá) — o usuário continua podendo ajustar/adicionar mais gente
-     depois, editando a atividade na sessão Rotinas;
-   - preenche a data de início prevista com a data do apontamento, apenas se a
-     atividade ainda não tiver nenhuma data de início definida. */
-async function sincronizarAtividadeAoApontar(atividadeId,colaboradorId,dataApontamento){
-  if(!atividadeId) return;
-  const ativ=getAtividade(atividadeId);
-  if(!ativ) return;
-  const proj=getProjeto(ativ.projetoId);
-  const semRaci=!!(proj && (cfgSessao(proj.sessaoId).abasOcultas||[]).includes("raci"));
-  if(!semRaci) return;
-  const patch={};
-  const respAtual=Array.isArray(ativ.responsaveisIds)?ativ.responsaveisIds:[];
-  if(colaboradorId && !respAtual.includes(colaboradorId)){
-    patch.responsaveisIds=[...respAtual,colaboradorId];
-  }
-  if(!ativ.dataInicioPrev && dataApontamento){
-    patch.dataInicioPrev=dataApontamento;
-  }
-  if(Object.keys(patch).length){
-    Object.assign(ativ,patch);
-    try{ await sbUpdate("atividades", ativ.id, toSnake(patch)); }
-    catch(_e){ /* apontamento já foi salvo; se este ajuste falhar, o usuário
-                  ainda pode preencher manualmente editando a atividade */ }
-  }
-}
-
-/* ---- FORM: HORAS ---- */
-const ATIV_OUTROS="__outros__"; // valor sentinela do select de atividade para "digitar manualmente"
-function formHoras(h){
-  const edit=!!h;
-  const fixedColab=currentColabId(); // colaborador logado (não-gestor): campo travado
-  const meuId=USER.current?USER.current.colabId:null; // usado para pré-selecionar mesmo quando gestor
-  const initial=h||{data:todayStr()};
-  // preenchida logo abaixo (só ao criar, nunca ao editar) com o estado da
-  // seção "repetir esta atividade em vários dias"; lida dentro de onSave.
-  let repeticaoUI=null;
-  // se editando, pré-seleciona a atividade do cronograma vinculada; se a
-  // atividade não existir mais (ou o registro nunca teve uma), cai em
-  // "Outros" com o nome antigo preenchido no campo manual.
-  if(edit){
-    if(h.atividadeId && getAtividade(h.atividadeId)){
-      initial.atividadeSel=h.atividadeId;
-    } else {
-      initial.atividadeSel=ATIV_OUTROS;
-      const a=h.atividadeId?getAtividade(h.atividadeId):null;
-      initial.atividadeManual=a?a.nome:(h.atividade||"");
-    }
-  }
-  // pré-seleciona o próprio usuário logado ao criar um novo apontamento —
-  // para colaborador o campo fica travado nele mesmo; para gestor vem
-  // pré-preenchido com o próprio nome, mas continua editável (ele pode
-  // trocar para apontar horas em nome de outra pessoa da equipe).
-  if(!edit) initial.colaboradorId=fixedColab||meuId||"";
-
-  // opções de atividade: as já cadastradas no cronograma do projeto
-  // selecionado + "Outros" (para digitar manualmente uma atividade nova)
-  function opcoesAtividade(vals){
-    const ats=DB.data.atividades.filter(a=>a.projetoId===vals.projetoId && a.status!=="Cancelada")
-      .sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"}));
-    const opts=ats.map(a=>({value:a.id, label:a.nome}));
-    opts.push({value:ATIV_OUTROS, label:"➕ Outros (digitar manualmente)"});
-    return opts;
-  }
-  // mostra/esconde o campo de texto livre conforme a seleção de atividade
-  function syncCampoManual(grid){
-    grid=grid||$("#f-grid");
-    const sel=$('[data-k="atividadeSel"]',grid);
-    const fldManual=$('[data-k="atividadeManual"]',grid);
-    if(!sel||!fldManual) return;
-    fldManual.closest(".fld").style.display=(sel.value===ATIV_OUTROS)?"":"none";
-  }
-
-  openForm({
-    title:edit?"Editar apontamento":"Apontar horas",
-    wide:true,
-    values:initial,
-    fields:[
-      {key:"data",label:"Data",type:"date",required:true,
-        help:"Também é a data inicial, se \"repetir em vários dias\" estiver marcado."},
-      {key:"colaboradorId",label:"Colaborador",type:"select",required:true,
-        options:(fixedColab?[getColab(fixedColab)]:getInternos()).filter(Boolean).map(c=>({value:c.id,label:c.nome})),
-        help:fixedColab?"Apontamento vinculado ao usuário logado.":""},
-      {key:"projetoId",label:"Projeto",type:"buscaSelect",required:true,
-        placeholder:"Digite o Código/Sigla ou o nome do projeto…",
-        options:opcoesProjetosBusca(),
-        help:"Busque pelo Código/Sigla (ex.: PRJ-2026-01) — o nome completo do projeto é preenchido automaticamente ao escolher."},
-      {key:"atividadeSel",label:"Atividade",type:"select",required:true,dynamic:true,
-        optionsFn:opcoesAtividade,
-        help:"Escolha uma atividade já cadastrada no cronograma do projeto, ou \"Outros\" para digitar uma atividade nova."},
-      {key:"atividadeManual",label:"Nome da atividade (Outros)",full:true,
-        placeholder:"Digite o nome da atividade",
-        help:"Será criada automaticamente no cronograma do projeto."},
-      {key:"categoriaId",label:"Categoria da atividade",type:"select",required:true,
-        options:DB.data.categorias.slice().sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"})).map(c=>({value:c.id,label:c.nome}))},
-      {key:"horas",label:"Horas executadas",type:"number",required:true,min:0,step:"0.25",
-        placeholder:"Ex.: 4,5"},
-      {key:"descricao",label:"Observação",type:"textarea",full:true,
-        placeholder:"Opcional"}
-    ],
-    onFieldChange:(vals,key,grid)=>{
-      syncCampoManual(grid);
-      // ao escolher uma atividade já cadastrada, pré-preenche a categoria
-      // dela (usuário ainda pode trocar manualmente depois)
-      if(key==="atividadeSel" && vals.atividadeSel && vals.atividadeSel!==ATIV_OUTROS){
-        const a=getAtividade(vals.atividadeSel);
-        if(a && a.categoriaId){
-          vals.categoriaId=a.categoriaId;
-          const catSel=$('[data-k="categoriaId"]',grid);
-          if(catSel) catSel.value=a.categoriaId;
-        }
-      }
-    },
-    onSave:async(v)=>{
-      v.horas=parseFloat(v.horas)||0;
-      let atividadeId=null;
-      if(v.atividadeSel && v.atividadeSel!==ATIV_OUTROS){
-        // atividade já existente no cronograma: usa o id diretamente
-        atividadeId=v.atividadeSel;
-      } else {
-        // "Outros": resolve/cria a atividade pelo nome digitado, via RPC
-        // (funciona mesmo para colaborador comum, que não tem permissão
-        // direta de INSERT na tabela de atividades)
-        const nomeAtiv=(v.atividadeManual||"").trim();
-        if(!nomeAtiv) throw new Error('Digite o nome da atividade em "Outros" ou selecione uma atividade do cronograma.');
-        if(v.projetoId){
-          // Recarrega as atividades do projeto direto do servidor antes de
-          // comparar o nome digitado: usar só o cache local (DB.data) aqui
-          // é uma condição de corrida — se o cronograma foi editado (nome
-          // alterado) em outra aba/pessoa enquanto este formulário estava
-          // aberto, o cache local fica desatualizado, o texto digitado deixa
-          // de "bater" com a atividade já existente, e o RPC abaixo cria uma
-          // atividade NOVA duplicada (mesmo trabalho, dois registros —
-          // é uma das causas do apontamento de horas aparecer duplicado).
-          let atividadesAtuais;
-          try{
-            atividadesAtuais = toCamel(await sbFetch(
-              "atividades?select=id,nome&projeto_id=eq."+encodeURIComponent(v.projetoId)
-            ));
-          }catch(_e){ atividadesAtuais = DB.data.atividades.filter(a=>a.projetoId===v.projetoId); }
-          const existente=atividadesAtuais.find(a=>
-            (a.nome||"").trim().toLowerCase()===nomeAtiv.toLowerCase());
-          if(existente){ atividadeId=existente.id; }
-          else{
-            const { data:novoId } = await sb.rpc("resolver_atividade", {
-              p_projeto_id: v.projetoId, p_nome_atividade: nomeAtiv, p_categoria_id: v.categoriaId
-            });
-            atividadeId=novoId;
-          }
-        }
-      }
-      delete v.atividadeSel; delete v.atividadeManual; // não são colunas da tabela 'horas'
-
-      // Rotinas (e outras sessões sem RACI): já aproveita este apontamento para
-      // manter a atividade com responsável e data de início preenchidos.
-      await sincronizarAtividadeAoApontar(atividadeId, v.colaboradorId, v.data);
-
-      if(edit){
-        v.atividadeId=atividadeId;
-        Object.assign(h,v);
-        await sbUpdate("horas", h.id, toSnake(v));
-        toast("Apontamento atualizado.");
-        await DB.load();
-      } else if(repeticaoUI && repeticaoUI.lerEstado().repetir){
-        // ---- REPETIR EM VÁRIOS DIAS: cria um apontamento igual para cada
-        // data do intervalo que cair nos dias da semana selecionados ----
-        const estado=repeticaoUI.lerEstado();
-        if(!estado.dataFinal) throw new Error('Informe a "data final" da repetição.');
-        if(estado.dataFinal<v.data) throw new Error('A data final da repetição não pode ser anterior à data inicial.');
-        if(!estado.dias.size) throw new Error("Selecione ao menos um dia da semana para repetir.");
-        const datas=gerarDatasRepeticao(v.data, estado.dataFinal, estado.dias);
-        if(!datas.length) throw new Error("Nenhuma data do intervalo cai nos dias da semana selecionados.");
-
-        // verifica no servidor quais dessas datas já têm um apontamento
-        // idêntico (mesma pessoa+atividade+horas) para não duplicar o que
-        // já foi registrado antes
-        let jaExistentes=new Set();
-        try{
-          const rows = await sbFetch(
-            "horas?select=data&colaborador_id=eq."+encodeURIComponent(v.colaboradorId)+
-            (atividadeId?("&atividade_id=eq."+encodeURIComponent(atividadeId)):"&atividade_id=is.null")+
-            "&horas=eq."+encodeURIComponent(v.horas)+
-            "&data=in.("+datas.join(",")+")"
-          );
-          (rows||[]).forEach(r=>jaExistentes.add(r.data));
-        }catch(_e){ /* se a checagem falhar, segue e tenta inserir todas as datas */ }
-
-        const datasParaInserir=datas.filter(d=>!jaExistentes.has(d));
-        if(!datasParaInserir.length){
-          throw new Error("Todas as datas desse intervalo já têm este apontamento registrado (mesma pessoa, atividade e horas).");
-        }
-        await sbInsert("horas", datasParaInserir.map(d=>toSnake({
-          id:uid(), data:d, colaboradorId:v.colaboradorId, projetoId:v.projetoId,
-          atividadeId, categoriaId:v.categoriaId, horas:v.horas, descricao:v.descricao||""
-        })));
-        toast(`${datasParaInserir.length} apontamento(s) registrado(s) (${fmtDate(datasParaInserir[0])} a ${fmtDate(datasParaInserir[datasParaInserir.length-1])})`+
-          (jaExistentes.size?`, ${jaExistentes.size} data(s) já existiam e foram ignoradas.`:"."));
-      } else {
-        // Proteção contra duplicata: busca no SERVIDOR (não só no cache
-        // local, que pode estar desatualizado) se já existe um apontamento
-        // idêntico (mesma pessoa+data+atividade+horas). Isso pega justamente
-        // o caso de "salvei, deu timeout na tela, cliquei salvar de novo" —
-        // quando a tentativa anterior na verdade já tinha sido gravada.
-        try{
-          const possiveisDuplicatas = await sbFetch(
-            "horas?select=id&colaborador_id=eq."+encodeURIComponent(v.colaboradorId)+
-            "&data=eq."+encodeURIComponent(v.data)+
-            (atividadeId?("&atividade_id=eq."+encodeURIComponent(atividadeId)):"&atividade_id=is.null")+
-            "&horas=eq."+encodeURIComponent(v.horas)
-          );
-          if(possiveisDuplicatas && possiveisDuplicatas.length){
-            const seguir = await new Promise(res=>{
-              $("#modal-root").innerHTML=`
-              <div class="overlay"><div class="modal" style="max-width:440px">
-                <div class="modal-head"><h3>Apontamento igual já existe</h3></div>
-                <div class="modal-body"><p style="color:var(--ink-soft);font-size:13px">
-                  Já existe um apontamento de ${esc(String(v.horas))}h nesta mesma data e atividade
-                  para este colaborador. Isso pode ser a mesma ação que você já salvou antes (ex.:
-                  após um erro de conexão). Deseja registrar mesmo assim, criando outro apontamento
-                  igual?</p></div>
-                <div class="modal-foot">
-                  <button class="btn ghost" id="dup-no">Cancelar</button>
-                  <button class="btn danger" id="dup-yes">Registrar mesmo assim</button>
-                </div></div></div>`;
-              $("#dup-no").onclick=()=>{ closeModal(); res(false); };
-              $("#dup-yes").onclick=()=>{ closeModal(); res(true); };
-            });
-            if(!seguir){
-              return; // usuário cancelou: não insere nada (o modal já foi fechado)
-            }
-          }
-        }catch(_e){ /* se a verificação falhar, segue com o salvamento normal */ }
-
-        // criação: insere diretamente, sempre vinculado ao colaborador
-        // SELECIONADO NO FORMULÁRIO (v.colaboradorId) — não ao usuário
-        // autenticado. Isso corrige o caso em que o gestor aponta horas em
-        // nome de outra pessoa da equipe.
-        await sbInsert("horas", toSnake({
-          id:uid(), data:v.data, colaboradorId:v.colaboradorId, projetoId:v.projetoId,
-          atividadeId, categoriaId:v.categoriaId, horas:v.horas, descricao:v.descricao||""
-        }));
-        toast("Horas registradas.");
-      }
-      await DB.load(); render();
-    }
-  });
-  syncCampoManual(); // aplica a visibilidade inicial do campo manual
-
-  // ---- "Repetir esta atividade em vários dias" (só ao criar um novo
-  // apontamento; editar continua sendo sempre um registro único) ----
-  if(!edit){
-    const dataFld=document.querySelector('#f-grid [data-k="data"]');
-    const wrapDataFld=dataFld?dataFld.closest(".fld"):null;
-    if(wrapDataFld){
-      const DIAS_SEMANA=[ // convenção Date.getDay(): 0=domingo ... 6=sábado
-        {value:1,label:"Seg",padrao:true},{value:2,label:"Ter",padrao:true},
-        {value:3,label:"Qua",padrao:true},{value:4,label:"Qui",padrao:true},
-        {value:5,label:"Sex",padrao:true},{value:6,label:"Sáb",padrao:false},
-        {value:0,label:"Dom",padrao:false}
-      ];
-      const bloco=document.createElement("div");
-      bloco.className="fld full";
-      bloco.innerHTML=`
-        <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;color:var(--ink)">
-          <input type="checkbox" id="repetir-chk" style="width:auto;margin:0">
-          🔁 Repetir esta atividade em vários dias
-        </label>
-        <div id="repetir-painel" style="display:none;margin-top:10px;padding:12px 14px;
-            border:1px solid var(--line);border-radius:8px;background:#fafbfc">
-          <div class="fld" style="margin-bottom:10px;max-width:220px">
-            <label>Repetir até (data final)<span class="req"> *</span></label>
-            <input type="date" id="repetir-ate">
-          </div>
-          <div class="fld">
-            <label>Nos dias da semana</label>
-            <div style="display:flex;flex-wrap:wrap;gap:12px">
-              ${DIAS_SEMANA.map(d=>`<label style="display:flex;align-items:center;gap:5px;
-                  font-weight:400;font-size:12.5px;cursor:pointer">
-                  <input type="checkbox" class="repetir-dia" value="${d.value}" ${d.padrao?"checked":""}
-                    style="width:auto;margin:0">${d.label}</label>`).join("")}
-            </div>
-          </div>
-          <div id="repetir-preview" style="margin-top:10px;font-size:12.5px;color:var(--ink-soft)"></div>
-        </div>`;
-      wrapDataFld.insertAdjacentElement("afterend",bloco);
-
-      const chk=bloco.querySelector("#repetir-chk");
-      const painel=bloco.querySelector("#repetir-painel");
-      const ateInput=bloco.querySelector("#repetir-ate");
-      const preview=bloco.querySelector("#repetir-preview");
-      function diasSelecionados(){
-        return new Set([...bloco.querySelectorAll(".repetir-dia:checked")].map(el=>+el.value));
-      }
-      function atualizarPreview(){
-        if(!chk.checked){ preview.innerHTML=""; return; }
-        const dataIni=document.querySelector('#f-grid [data-k="data"]')?.value||"";
-        const dataFim=ateInput.value||"";
-        if(!dataIni||!dataFim){ preview.innerHTML=""; return; }
-        const datas=gerarDatasRepeticao(dataIni,dataFim,diasSelecionados());
-        if(!datas.length){
-          preview.innerHTML=`<span style="color:var(--danger)">Nenhuma data do intervalo cai nos dias da semana selecionados.</span>`;
-        }else{
-          preview.innerHTML=`Serão criados <b>${datas.length}</b> apontamento(s), de ${fmtDate(datas[0])} até ${fmtDate(datas[datas.length-1])}.`;
-        }
-      }
-      chk.onchange=()=>{ painel.style.display=chk.checked?"":"none"; atualizarPreview(); };
-      ateInput.onchange=atualizarPreview;
-      bloco.querySelectorAll(".repetir-dia").forEach(el=>el.onchange=atualizarPreview);
-      document.querySelector('#f-grid [data-k="data"]')?.addEventListener("change",atualizarPreview);
-
-      repeticaoUI={
-        lerEstado(){
-          return { repetir:chk.checked, dataFinal:ateInput.value||"", dias:diasSelecionados() };
-        }
-      };
-    }
-  }
-
   // atalho para consultar a legenda das categorias sem fechar o formulário
+  // (mesmo recurso que existia no antigo Apontamento de Horas, agora vinculado
+  // ao campo "Categoria" do registro de atividade no cronograma do projeto)
   const catSelect=document.querySelector('#f-grid [data-k="categoriaId"]');
   if(catSelect){
     const fld=catSelect.closest(".fld");
@@ -7195,6 +6248,7 @@ function formHoras(h){
     }
   }
 }
+
 
 /* ---- FORM: FINANCEIRO ---- */
 function formFinanceiro(projetoId,f){
