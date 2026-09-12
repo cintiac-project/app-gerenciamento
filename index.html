@@ -824,6 +824,17 @@ function matchPessoasPorNomes(texto,p){
   return ids;
 }
 function fmtBRL(n){ n=Number(n)||0; return "R$ "+n.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}); }
+// Versão compacta do valor em R$ para cartões estreitos (ex.: KPIs do Painel
+// Geral): "R$ 38,9 mi" / "R$ 850 mil" em vez do valor cheio com centavos,
+// que em telas com muitas colunas lado a lado acaba quebrando linha de um
+// jeito feio (ex.: "R$" sozinho numa linha e o número embaixo).
+function fmtBRLResumo(n){
+  n=Number(n)||0;
+  const abs=Math.abs(n);
+  if(abs>=1000000) return "R$ "+(n/1000000).toLocaleString("pt-BR",{minimumFractionDigits:1,maximumFractionDigits:1})+" mi";
+  if(abs>=1000) return "R$ "+Math.round(n/1000).toLocaleString("pt-BR")+" mil";
+  return fmtBRL(n);
+}
 function fmtNum(n,d){ return (Number(n)||0).toLocaleString("pt-BR",{minimumFractionDigits:d||0,maximumFractionDigits:d||0}); }
 function fmtH(n){ return fmtNum(n,1)+" h"; }
 function todayStr(){ const d=new Date(); return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); }
@@ -2071,9 +2082,9 @@ function viewPainel(v){
     <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--accent)"></span>Projetos ativos</div>
       <div class="val">${ativos.length}</div><div class="sub">${ps.length} no portfólio</div></div>
     <div class="card kpi" id="kpi-captacao" style="cursor:pointer" title="Ver detalhamento por projeto"><div class="lbl"><span class="dot" style="background:var(--warn)"></span>Captação (previsto)</div>
-      <div class="val" style="font-size:19px">${fmtBRL(captacaoPrevista)}</div><div class="sub">Valor pleiteado em propostas/editais · clique para detalhar</div></div>
+      <div class="val" title="${fmtBRL(captacaoPrevista)}">${fmtBRLResumo(captacaoPrevista)}</div><div class="sub">Valor pleiteado em propostas/editais · clique para detalhar</div></div>
     <div class="card kpi" id="kpi-receita" style="cursor:pointer" title="Ver detalhamento por projeto"><div class="lbl"><span class="dot" style="background:var(--info)"></span>Receita já captada</div>
-      <div class="val" style="font-size:19px">${fmtBRL(receitaCaptada)}</div><div class="sub">Valor contratado do portfólio · clique para detalhar</div></div>
+      <div class="val" title="${fmtBRL(receitaCaptada)}">${fmtBRLResumo(receitaCaptada)}</div><div class="sub">Valor contratado do portfólio · clique para detalhar</div></div>
     <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--gold)"></span>Margem média</div>
       <div class="val">${margemMedia==null?"—":fmtNum(margemMedia,1)+"%"}</div>
       <div class="sub">Despesas: ${fmtBRL(despesaTotal)}</div></div>
@@ -4584,7 +4595,6 @@ function contarUsoBanco(){
   return {
     "Projetos": DB.data.projetos.length,
     "Atividades": DB.data.atividades.length,
-    "Apontamentos de horas": DB.data.horas.length,
     "Lançamentos financeiros": DB.data.financeiro.length,
     "Stakeholders": DB.data.projetos.reduce((s,p)=>s+(p.stakeholders||[]).length,0),
     "Riscos": DB.data.projetos.reduce((s,p)=>s+(p.riscos||[]).length,0),
