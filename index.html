@@ -148,6 +148,7 @@
   .b-ok{background:var(--ok-bg);color:var(--ok)}
   .b-warn{background:var(--warn-bg);color:var(--warn)}
   .b-danger{background:var(--danger-bg);color:var(--danger)}
+  .b-marco{background:#f7ecd8;color:var(--gold);border:1px solid var(--gold)}
   .b-info{background:var(--info-bg);color:var(--info)}
   .b-mute{background:var(--line-soft);color:var(--ink-soft)}
   .tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;
@@ -282,6 +283,8 @@
   .gantt-bar{position:absolute;top:9px;height:20px;border-radius:5px;background:var(--accent-soft);
     border:1px solid var(--accent);overflow:hidden}
   .gantt-bar > div{height:100%;background:var(--accent)}
+  .gantt-bar.marco{background:#f7ecd8;border-color:var(--gold)}
+  .gantt-bar.marco > div{background:var(--gold)}
   .gantt-today{position:absolute;top:0;bottom:0;width:2px;background:var(--danger);z-index:3}
 
   /* raci grid */
@@ -844,6 +847,14 @@ function daysBetween(a,b){ // b - a em dias (strings YYYY-MM-DD)
   const da=new Date(a+"T00:00:00"), db=new Date(b+"T00:00:00");
   return Math.round((db-da)/86400000);
 }
+// soma (ou subtrai, se n for negativo) n dias corridos a uma data "YYYY-MM-DD",
+// devolvendo também uma string "YYYY-MM-DD" — usado no recálculo em cascata
+// do cronograma (ver avaliarRecalculoCronograma).
+function addDays(s,n){
+  const d=new Date(s+"T00:00:00");
+  d.setDate(d.getDate()+n);
+  return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate());
+}
 function monthKey(s){ return s? s.slice(0,7):""; }
 function yearOf(s){ return s? s.slice(0,4):""; }
 // Gera a lista de datas (YYYY-MM-DD) entre dataIni e dataFim (inclusive),
@@ -936,12 +947,94 @@ function excluirAtividadeComConfirmacao(a,onDone){
   );
 }
 
-/* ============================================================
-   MCI / MCS — Meta Crucialmente Importante / Medidas de Direção
-   Semanal (Painel Geral). Registros globais do portfólio (não
-   por projeto). "Ativo" = ainda não concluído; ao concluir, o
-   registro não é apagado — vira histórico (concluido=true).
-   ============================================================ */
+/* ------------------------------------------------------------------
+   RECÁLCULO EM CASCATA DO CRONOGRAMA (sessões com linha do tempo/Gantt)
+   ------------------------------------------------------------------
+   Quando o "Início real" registrado numa atividade for posterior ao
+   "Início previsto" (ou seja, ela começou atrasada), oferece propagar
+   esse atraso para as atividades seguintes do mesmo cronograma que
+   ainda não começaram de fato — deslocando "Início previsto" e
+   "Término previsto" de cada uma pelo mesmo número de dias.
+   Antes de aplicar, mostra um resumo com o novo período de cada
+   atividade afetada e destaca em alerta os marcos de entrega cujo
+   prazo seria empurrado (com um aviso ainda mais forte se isso
+   ultrapassar a data de término prevista do próprio projeto). */
+function avaliarRecalculoCronograma(proj, atividadeBase, atrasoDias){
+  if(!proj || !atrasoDias || atrasoDias<=0) return;
+  // "próximas atividades": mesmo projeto, ainda sem Início real registrado
+  // (ou seja, ainda não começaram de fato) e previstas para começar a
+  // partir do início previsto da atividade que disparou o atraso.
+  const afetadas=DB.data.atividades.filter(x=>
+    x.projetoId===proj.id && x.id!==atividadeBase.id &&
+    x.status!=="Concluída" && x.status!=="Cancelada" &&
+    !x.dataInicioReal && x.dataInicioPrev &&
+    x.dataInicioPrev>=atividadeBase.dataInicioPrev
+  ).sort((a,b)=>a.dataInicioPrev.localeCompare(b.dataInicioPrev));
+  if(!afetadas.length) return;
+
+  const propostas=afetadas.map(x=>({
+    ativ:x,
+    novoInicio:addDays(x.dataInicioPrev,atrasoDias),
+    novoFim:x.dataFimPrev?addDays(x.dataFimPrev,atrasoDias):null
+  }));
+  const marcosAfetados=propostas.filter(p=>p.ativ.marco);
+  const marcosCriticos=marcosAfetados.filter(p=>proj.dataFim && p.novoFim && p.novoFim>proj.dataFim);
+
+  const linhaHtml=(p)=>`<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;
+      padding:7px 0;border-bottom:1px solid var(--line-soft);font-size:12.5px">
+    <span>${p.ativ.marco?"🚩 ":""}${esc(p.ativ.nome)}</span>
+    <span style="color:var(--ink-soft);text-align:right;white-space:nowrap">
+      ${fmtDate(p.ativ.dataInicioPrev)} → ${p.ativ.dataFimPrev?fmtDate(p.ativ.dataFimPrev):"—"}
+      <b style="color:var(--ink)"> ➜ ${fmtDate(p.novoInicio)} → ${p.novoFim?fmtDate(p.novoFim):"—"}</b>
+    </span></div>`;
+
+  const alertaMarcos=marcosAfetados.length?`
+    <div style="margin-top:14px;padding:10px 12px;border-radius:8px;background:${marcosCriticos.length?"var(--danger-bg)":"var(--warn-bg)"};
+        color:${marcosCriticos.length?"var(--danger)":"var(--warn)"};font-size:12.5px;line-height:1.5">
+      <b>⚠ ${marcosAfetados.length} marco(s) de entrega ${marcosAfetados.length>1?"terão":"terá"} o prazo empurrado:</b>
+      <ul style="margin:6px 0 0 18px">${marcosAfetados.map(p=>`<li>${esc(p.ativ.nome)}: término previsto passaria de
+        ${fmtDate(p.ativ.dataFimPrev)} para ${fmtDate(p.novoFim)}${proj.dataFim && p.novoFim && p.novoFim>proj.dataFim?
+          " — <b>ultrapassa o término previsto do projeto ("+fmtDate(proj.dataFim)+")</b>":""}</li>`).join("")}</ul>
+    </div>`:"";
+
+  $("#modal-root").innerHTML=`
+  <div class="overlay"><div class="modal wide">
+    <div class="modal-head"><h3>Recalcular cronograma?</h3></div>
+    <div class="modal-body">
+      <p style="color:var(--ink-soft);font-size:13px">"${esc(atividadeBase.nome)}" começou <b>${atrasoDias}
+        dia(s)</b> depois do previsto. Deseja aplicar esse mesmo atraso às ${afetadas.length} atividade(s)
+        seguintes deste cronograma que ainda não começaram de fato?</p>
+      <div style="margin-top:12px;max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:4px 12px">
+        ${propostas.map(linhaHtml).join("")}
+      </div>
+      ${alertaMarcos}
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="c-no">Não recalcular</button>
+      <button class="btn" id="c-yes">Recalcular ${afetadas.length} atividade(s)</button>
+    </div></div></div>`;
+  $("#c-no").onclick=closeModal;
+  $("#c-yes").onclick=async()=>{
+    const btn=$("#c-yes"); btn.disabled=true; btn.textContent="Recalculando...";
+    try{
+      for(const p of propostas){
+        const patch={dataInicioPrev:p.novoInicio, dataFimPrev:p.novoFim};
+        await sbUpdate("atividades", p.ativ.id, toSnake(patch));
+        Object.assign(p.ativ, patch);
+      }
+      closeModal();
+      toast(`Cronograma recalculado: ${afetadas.length} atividade(s) atualizada(s)`+
+        (marcosAfetados.length?` — atenção aos ${marcosAfetados.length} marco(s) de entrega impactado(s).`:"."));
+      render();
+    }catch(e){
+      console.error(e);
+      toast("Erro ao recalcular o cronograma: "+(e.message||e));
+      btn.disabled=false; btn.textContent=`Recalcular ${afetadas.length} atividade(s)`;
+    }
+  };
+}
+
+
 function mciAtiva(){
   const lista=(DB.data.mci||[]).filter(m=>!m.concluido)
     .sort((a,b)=>(a.criadoEm||"").localeCompare(b.criadoEm||""));
@@ -2994,12 +3087,17 @@ function projCronograma(c,p){
     const horasAtiv=DB.data.horas.filter(h=>h.atividadeId===a.id).reduce((s,h)=>s+(+h.horas||0),0);
     const dIni=a.dataInicioPrev?fmtDate(a.dataInicioPrev):"Indeterminada";
     const dFim=a.dataFimPrev?fmtDate(a.dataFimPrev):"Indeterminada";
+    const temReal=a.dataInicioReal||a.dataFimReal;
+    const dIniReal=a.dataInicioReal?fmtDate(a.dataInicioReal):"—";
+    const dFimReal=a.dataFimReal?fmtDate(a.dataFimReal):"—";
     const responsaveis = nomesResponsaveisAtividade(a,p);
     const ocultarPct=cfgSessao(p.sessaoId).ocultarPercentualAtividades;
-    return `<tr>
-      <td><div style="font-weight:600">${esc(a.nome)}</div>
+    // marcos (entregas/pontos críticos) recebem uma borda lateral e um selo
+    // "🚩 Marco" para se destacarem visualmente na lista de atividades.
+    return `<tr${a.marco?' style="box-shadow:inset 3px 0 0 var(--gold)"':""}>
+      <td><div style="font-weight:600;display:flex;align-items:center;gap:6px">${esc(a.nome)}${a.marco?`<span class="badge b-marco" title="Marco de entrega deste projeto">🚩 Marco</span>`:""}</div>
         <div style="font-size:11px;color:var(--ink-faint)">${esc(nomeCategoria(a.categoriaId))} · Resp.: ${responsaveis.join(", ")||"—"}${horasAtiv?` · ${horasAtiv}h apontadas`:""}${totalHorasPrevistasAtividade(a)>0?` · ${fmtNum(totalHorasPrevistasAtividade(a),1)}h previstas (${pessoasAlocadasAtividade(a).length} pessoa(s))`:""}</div></td>
-      <td style="font-size:12px">${dIni} → ${dFim}</td>
+      <td style="font-size:12px">${dIni} → ${dFim}${temReal?`<div style="color:var(--ink-faint);margin-top:2px">Real: ${dIniReal} → ${dFimReal}</div>`:""}</td>
       <td>${atrasada?`<span class="badge b-danger">Atrasada</span>`:statusBadge(a.status||"Não iniciada")}</td>
       <td><div style="display:flex;align-items:center;gap:8px">
         <div class="pbar ${pcls}" style="flex:1"><div style="width:${prog}%"></div></div>
@@ -3024,11 +3122,15 @@ function projCronograma(c,p){
   ${ats.length?`
   ${cfgSessao(p.sessaoId).linhaDoTempo===false?"":`
   <div class="card" style="margin-bottom:18px">
+    <div class="card-head"><h3>Curva S — avanço físico</h3><span class="hint">Previsto x realizado, acumulado</span></div>
+    <div class="card-pad">${curvaSHtml(p,todasAts)}</div>
+  </div>
+  <div class="card" style="margin-bottom:18px">
     <div class="card-head"><h3>Linha do tempo</h3><span class="hint">Linha vermelha = hoje</span></div>
     <div class="card-pad" style="overflow-x:auto">${ganttHtml(p,ats)}</div>
   </div>`}
   <div class="card table-wrap">
-    <table><thead><tr><th>Atividade</th><th>Prazo previsto</th><th>Situação</th>
+    <table><thead><tr><th>Atividade</th><th>Prazo previsto / real</th><th>Situação</th>
       <th style="min-width:150px">Progresso</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table>
   </div>`:todasAts.length?`<div class="card"><div class="empty"><span class="ic">◷</span>
@@ -3086,11 +3188,13 @@ function ganttHtml(p,ats){
       const left=Math.max(0,(daysBetween(min,a.dataInicioPrev)/span)*100);
       let w=(daysBetween(a.dataInicioPrev,a.dataFimPrev)/span)*100;
       w=Math.max(1.5,w);
-      const tituloBar=`${a.nome} · ${fmtDate(a.dataInicioPrev)} a ${fmtDate(a.dataFimPrev)}`;
-      bar=`<div class="gantt-bar" style="left:${left}%;width:${w}%" title="${esc(tituloBar)}">
+      const tituloBar=`${a.nome} · ${fmtDate(a.dataInicioPrev)} a ${fmtDate(a.dataFimPrev)}${a.marco?" · Marco de entrega":""}`;
+      // marcos ganham cor dourada (mesma do selo "🚩 Marco" na tabela) para
+      // se destacarem na linha do tempo como pontos críticos do projeto.
+      bar=`<div class="gantt-bar${a.marco?" marco":""}" style="left:${left}%;width:${w}%" title="${esc(tituloBar)}">
         <div style="width:${+a.progresso||0}%"></div></div>`;
     }
-    rows+=`<div class="gantt-row"><div class="gantt-name" title="${esc(a.nome)}">${esc(a.nome)}</div>
+    rows+=`<div class="gantt-row"><div class="gantt-name" title="${esc(a.nome)}">${a.marco?"🚩 ":""}${esc(a.nome)}</div>
       <div class="gantt-track">${bar}</div></div>`;
   });
   // cabeçalho com os meses cobertos pela linha do tempo, cada um posicionado
@@ -3143,6 +3247,127 @@ function ajustarMesesGantt(container){
       ultimoDireita=rect.right;
     });
   });
+}
+
+/* ------------------------------------------------------------------
+   CURVA S — acompanhamento do avanço físico previsto x realizado
+   ------------------------------------------------------------------
+   Cada atividade entra na curva com um "peso" (as horas previstas
+   somadas de todos os colaboradores nela — ver totalHorasPrevistasAtividade;
+   atividades sem nenhuma hora estimada entram com peso 1, só para não
+   ficarem de fora do cálculo). O peso de cada atividade é distribuído
+   igualmente pelos dias úteis do seu período — previsto (Início/Término
+   previstos) para a curva de baseline, e real (Início/Término reais,
+   com fallback para o previsto/hoje quando faltar alguma data) para a
+   curva de realizado, ponderada pelo "% Concluído" already lançado.
+   A curva de realizado nunca é projetada além de hoje. */
+function pesoAtividade(a){
+  const h=totalHorasPrevistasAtividade(a);
+  return h>0?h:1;
+}
+function curvaSDados(p,ats){
+  let min=p.dataInicio, max=p.dataFim;
+  ats.forEach(a=>{
+    if(a.dataInicioPrev&&(!min||a.dataInicioPrev<min)) min=a.dataInicioPrev;
+    if(a.dataFimPrev&&(!max||a.dataFimPrev>max)) max=a.dataFimPrev;
+    if(a.dataFimReal&&(!max||a.dataFimReal>max)) max=a.dataFimReal;
+  });
+  if(!min||!max) return null;
+  const totalPeso=ats.reduce((s,a)=>s+pesoAtividade(a),0);
+  if(!totalPeso) return null;
+  const hoje=todayStr();
+  if(hoje>max) max=hoje; // garante que "hoje" sempre cabe na linha do tempo
+  const span=Math.max(1,daysBetween(min,max));
+  const incPrev=new Array(span+1).fill(0), incReal=new Array(span+1).fill(0);
+  ats.forEach(a=>{
+    const peso=pesoAtividade(a);
+    // ---- baseline (previsto) ----
+    if(a.dataInicioPrev&&a.dataFimPrev){
+      const dias=diasUteisEntre(a.dataInicioPrev,a.dataFimPrev);
+      if(dias.length){
+        const inc=peso/dias.length;
+        dias.forEach(d=>{ const idx=daysBetween(min,d); if(idx>=0&&idx<=span) incPrev[idx]+=inc; });
+      }else{
+        const idx=daysBetween(min,a.dataFimPrev);
+        if(idx>=0&&idx<=span) incPrev[idx]+=peso;
+      }
+    }
+    // ---- realizado (ponderado pelo % concluído) ----
+    const realizado=peso*(Math.min(100,Math.max(0,+a.progresso||0))/100);
+    if(realizado>0){
+      const iniReal=a.dataInicioReal||a.dataInicioPrev;
+      const fimReal=a.dataFimReal||(a.status==="Concluída"?(a.dataFimPrev||hoje):hoje);
+      if(iniReal&&fimReal&&fimReal>=iniReal){
+        const diasR=diasUteisEntre(iniReal,fimReal);
+        if(diasR.length){
+          const incR=realizado/diasR.length;
+          diasR.forEach(d=>{ const idx=daysBetween(min,d); if(idx>=0&&idx<=span) incReal[idx]+=incR; });
+        }else{
+          const idx=daysBetween(min,fimReal);
+          if(idx>=0&&idx<=span) incReal[idx]+=realizado;
+        }
+      }
+    }
+  });
+  const idxHoje=Math.max(0,Math.min(span,daysBetween(min,hoje)));
+  let accP=0, accR=0;
+  const curvaPrev=[], curvaReal=[];
+  for(let i=0;i<=span;i++){
+    accP+=incPrev[i]; curvaPrev.push(accP/totalPeso*100);
+    accR+=incReal[i];
+    curvaReal.push(i<=idxHoje?accR/totalPeso*100:null); // não projeta o realizado no futuro
+  }
+  return {min,max,span,curvaPrev,curvaReal,idxHoje};
+}
+function curvaSHtml(p,ats){
+  const d=curvaSDados(p,ats);
+  if(!d) return `<div style="color:var(--ink-faint);font-size:12.5px;padding:10px">
+    Defina datas nas atividades (Início/Término previstos) para calcular a Curva S.</div>`;
+  const W=760,H=210,padL=36,padR=12,padT=10,padB=22;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const x=i=>padL+(i/d.span)*plotW;
+  const y=v=>padT+plotH-(Math.max(0,Math.min(100,v))/100)*plotH;
+  function pathFrom(arr){
+    let s="",aberto=false;
+    arr.forEach((v,i)=>{
+      if(v==null){ aberto=false; return; }
+      s+=(aberto?" L ":"M ")+x(i).toFixed(1)+" "+y(v).toFixed(1);
+      aberto=true;
+    });
+    return s;
+  }
+  const pathPrev=pathFrom(d.curvaPrev), pathReal=pathFrom(d.curvaReal);
+  const hojeX=x(d.idxHoje);
+  const grid=[0,25,50,75,100].map(v=>`<line x1="${padL}" x2="${W-padR}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line-soft)" stroke-width="1"/>
+    <text x="${padL-6}" y="${y(v)+3}" font-size="10" text-anchor="end" fill="var(--ink-faint)">${v}%</text>`).join("");
+  // rótulos de mês no eixo X (mesmo critério de espaçamento mínimo do Gantt,
+  // mas calculado direto em coordenadas do SVG, sem precisar medir o DOM)
+  const meses=[]; let cursor=monthKey(d.min)+"-01"; const fimChave=monthKey(d.max);
+  while(monthKey(cursor)<=fimChave){
+    const [y2,m2]=monthKey(cursor).split("-").map(n=>+n);
+    const idx=Math.max(0,daysBetween(d.min,y2+"-"+pad(m2)+"-01"));
+    meses.push({label:MONTHS[m2-1]+"/"+String(y2).slice(2),px:x(Math.min(d.span,idx))});
+    const prox=new Date(y2,m2,1);
+    cursor=prox.getFullYear()+"-"+pad(prox.getMonth()+1)+"-01";
+  }
+  const mesesFiltrados=[]; let ultimoPx=-999;
+  meses.forEach(mm=>{ if(mm.px-ultimoPx>=34){ mesesFiltrados.push(mm); ultimoPx=mm.px; } });
+  const mesesHtml=mesesFiltrados.map(mm=>`<text x="${mm.px}" y="${H-6}" font-size="10" fill="var(--ink-faint)">${mm.label}</text>`).join("");
+  const pctPrevHoje=d.curvaPrev[d.idxHoje]||0;
+  const pctRealHoje=d.curvaReal[d.idxHoje]!=null?d.curvaReal[d.idxHoje]:0;
+  const gap=pctPrevHoje-pctRealHoje; // >0 = atraso físico; <0 = adiantado
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">
+      ${grid}${mesesHtml}
+      <line x1="${hojeX.toFixed(1)}" x2="${hojeX.toFixed(1)}" y1="${padT}" y2="${H-padB}" stroke="var(--danger)" stroke-width="1.5" stroke-dasharray="3,3"/>
+      <path d="${pathPrev}" fill="none" stroke="var(--accent)" stroke-width="2.4"/>
+      ${pathReal?`<path d="${pathReal}" fill="none" stroke="var(--gold)" stroke-width="2.4"/>`:""}
+    </svg>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:12px;color:var(--ink-soft)">
+      <span><span style="display:inline-block;width:10px;height:10px;background:var(--accent);border-radius:2px;margin-right:5px;vertical-align:-1px"></span>Previsto (baseline)</span>
+      <span><span style="display:inline-block;width:10px;height:10px;background:var(--gold);border-radius:2px;margin-right:5px;vertical-align:-1px"></span>Realizado</span>
+      <span style="margin-left:auto">Hoje: <b>${fmtNum(pctPrevHoje,0)}%</b> previsto vs <b>${fmtNum(pctRealHoje,0)}%</b> realizado
+        ${Math.abs(gap)>=1?`<b style="color:${gap>0?"var(--danger)":"var(--ok)"}">(${gap>0?"atraso":"adiantamento"} físico de ${fmtNum(Math.abs(gap),0)} p.p.)</b>`:"<b style=\"color:var(--ok)\">(em linha com o previsto)</b>"}</span>
+    </div>`;
 }
 
 /* ---- OCUPAÇÃO DA EQUIPE (calendário de alocação, gestor) ---- */
@@ -5670,6 +5895,23 @@ function openForm(cfg){
         <label style="display:flex;align-items:center;gap:6px;margin-top:7px;font-size:12px;color:var(--ink-soft);font-weight:400;cursor:pointer">
           <input type="checkbox" data-k-indet="${f.key}" ${indet?"checked":""} style="width:auto;margin:0"> Data indeterminada
         </label>`;
+    }else if(f.type==="dateSameAs"){
+      // data "real" que pode replicar automaticamente a data "prevista"
+      // correspondente (f.sameAsKey) enquanto a caixa "mesmo do previsto"
+      // (guardada em vals[f.flagKey]) estiver marcada. Ver wireDateSameAsField().
+      const mesmo=!!vals[f.flagKey];
+      const val=mesmo?(vals[f.sameAsKey]||""):(v||"");
+      input=`<input type="date" data-k="${f.key}" ${mesmo?"disabled":""} value="${esc(val)}">
+        <label style="display:flex;align-items:center;gap:6px;margin-top:7px;font-size:12px;color:var(--ink-soft);font-weight:400;cursor:pointer">
+          <input type="checkbox" data-k-sameas="${f.key}" data-sameas-src="${f.sameAsKey}" data-sameas-flag="${f.flagKey}"
+            ${mesmo?"checked":""} style="width:auto;margin:0"> ${esc(f.sameAsLabel||"Mesmo do previsto")}
+        </label>`;
+    }else if(f.type==="checkbox"){
+      // campo booleano simples (ex.: marcar uma atividade como marco/entrega).
+      input=`<label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;padding:5px 0">
+          <input type="checkbox" data-k="${f.key}" ${dis} ${v?"checked":""} style="width:auto;margin:0">
+          ${esc(f.checkboxLabel||"")}
+        </label>`;
     }else{
       const t=f.type||"text";
       const extra=t==="number"?`step="${f.step||"any"}" min="${f.min!=null?f.min:""}"`:"";
@@ -5837,9 +6079,13 @@ function openForm(cfg){
         // idem: vals[el.dataset.k] já é mantido em dia por wireBuscaSelectField()
         return;
       }
+      if(fdef && fdef.type==="checkbox"){
+        vals[el.dataset.k]=el.checked;
+        return;
+      }
       // campos de data vazios devem virar null, nunca "" — o Postgres rejeita
       // string vazia em coluna do tipo date com o erro 22007.
-      if(fdef && fdef.type==="date" && el.value===""){
+      if(fdef && (fdef.type==="date"||fdef.type==="dateSameAs") && el.value===""){
         vals[el.dataset.k]=null;
       } else {
         vals[el.dataset.k]=el.value;
@@ -5872,9 +6118,21 @@ function openForm(cfg){
       el.value=(val==null||isNaN(val))?"":val;
     });
   }
+  // campos "dateSameAs" (ex.: Início/Término real com "mesmo do previsto"):
+  // sempre que a caixa estiver marcada, o valor acompanha automaticamente o
+  // campo previsto correspondente — inclusive se o previsto for alterado
+  // depois de a caixa já estar marcada.
+  function syncDateSameAsFields(){
+    fields.forEach(f=>{
+      if(f.type!=="dateSameAs" || !vals[f.flagKey]) return;
+      vals[f.key]=vals[f.sameAsKey]||null;
+      const el=$("#f-grid").querySelector(`input[type="date"][data-k="${f.key}"]`);
+      if(el) el.value=vals[f.key]||"";
+    });
+  }
   $("#f-grid").addEventListener("input",()=>{ collect(); recomputeComputed(); });
   $("#f-grid").addEventListener("change",(e)=>{
-    collect(); refreshDynamic(); recomputeComputed();
+    collect(); refreshDynamic(); recomputeComputed(); syncDateSameAsFields();
     const key=e.target && e.target.dataset ? e.target.dataset.k : null;
     if(key && cfg.onFieldChange) cfg.onFieldChange(vals, key, $("#f-grid"));
   });
@@ -5884,6 +6142,19 @@ function openForm(cfg){
       const dateInput=$("#f-grid").querySelector(`input[type="date"][data-k="${key}"]`);
       if(chk.checked){
         dateInput.value=""; dateInput.disabled=true; vals[key]=null;
+      }else{
+        dateInput.disabled=false; vals[key]=dateInput.value||null;
+      }
+    };
+  });
+  $("#f-grid").querySelectorAll("[data-k-sameas]").forEach(chk=>{
+    chk.onchange=()=>{
+      const key=chk.dataset.kSameas, srcKey=chk.dataset.sameasSrc, flagKey=chk.dataset.sameasFlag;
+      const dateInput=$("#f-grid").querySelector(`input[type="date"][data-k="${key}"]`);
+      vals[flagKey]=chk.checked;
+      if(chk.checked){
+        vals[key]=vals[srcKey]||null;
+        dateInput.value=vals[key]||""; dateInput.disabled=true;
       }else{
         dateInput.disabled=false; vals[key]=dateInput.value||null;
       }
@@ -6027,7 +6298,7 @@ function formAtividade(projetoId,a){
   openForm({
     title:edit?"Editar atividade":"Nova atividade",
     wide:true,
-    values:a||{projetoId,status:"Não iniciada",progresso:0,dataInicioPrev:todayStr()},
+    values:a||{projetoId,status:"Não iniciada",progresso:0,dataInicioPrev:todayStr(),marco:false},
     fields:[
       {key:"nome",label:"Nome da atividade",required:true,full:true,placeholder:"Ex.: Levantamento de requisitos"},
       {key:"categoriaId",label:"Categoria",type:"select",required:true,
@@ -6035,6 +6306,15 @@ function formAtividade(projetoId,a){
       ...(semRaci?[campoResponsaveis]:[]),
       {key:"dataInicioPrev",label:"Início previsto",type:"date",allowIndeterminate:true},
       {key:"dataFimPrev",label:"Término previsto",type:"date",allowIndeterminate:true},
+      {key:"dataInicioReal",label:"Início real",type:"dateSameAs",
+        sameAsKey:"dataInicioPrev",flagKey:"inicioRealMesmo",sameAsLabel:"Mesmo do previsto",
+        help:"Data em que a atividade de fato começou. Marque \"Mesmo do previsto\" para replicar automaticamente o Início previsto."},
+      {key:"dataFimReal",label:"Término real",type:"dateSameAs",
+        sameAsKey:"dataFimPrev",flagKey:"fimRealMesmo",sameAsLabel:"Mesmo do previsto",
+        help:"Data em que a atividade de fato terminou. Marque \"Mesmo do previsto\" para replicar automaticamente o Término previsto."},
+      {key:"marco",label:"Marco de entrega",type:"checkbox",full:true,
+        checkboxLabel:"Esta atividade é um marco (deliverable) do projeto",
+        help:"Marcos aparecem destacados no cronograma e na linha do tempo, para dar visão rápida dos pontos críticos do projeto."},
       {key:"status",label:"Situação",type:"select",
         options:STATUS_ATIV.map(s=>({value:s,label:s})),
         help:"Marcar como \"Concluída\" preenche automaticamente 100% em % Concluído."},
@@ -6066,6 +6346,15 @@ function formAtividade(projetoId,a){
       }
     },
     onSave:async(v)=>{
+      v.marco=!!v.marco;
+      v.inicioRealMesmo=!!v.inicioRealMesmo;
+      v.fimRealMesmo=!!v.fimRealMesmo;
+      if(v.inicioRealMesmo) v.dataInicioReal=v.dataInicioPrev||null;
+      if(v.fimRealMesmo) v.dataFimReal=v.dataFimPrev||null;
+      // guarda o Início real ANTES desta edição, para depois decidir se o
+      // recálculo em cascata do cronograma deve ser oferecido (só quando o
+      // valor é novo/mudou nesta gravação — não a cada simples reabertura).
+      const inicioRealAntes=edit?(a.dataInicioReal||null):null;
       v.progresso=Math.max(0,Math.min(100,parseFloat(v.progresso)||0));
       // filtra linhas incompletas e normaliza os números
       v.estimativasPessoas=(Array.isArray(v.estimativasPessoas)?v.estimativasPessoas:[])
@@ -6118,6 +6407,18 @@ function formAtividade(projetoId,a){
         toast("Atividade criada.");
       }
       render();
+      // Recálculo em cascata do cronograma: só faz sentido em sessões com
+      // linha do tempo (Gantt) habilitada, ao editar (não ao criar) e quando
+      // o Início real informado é novo/mudou nesta gravação e ficou atrasado
+      // em relação ao Início previsto. O modal é aberto com um pequeno atraso
+      // (setTimeout) para não ser fechado junto pelo closeModal() deste form.
+      if(edit && v.dataInicioReal && v.dataInicioReal!==inicioRealAntes && v.dataInicioPrev){
+        const atrasoDias=daysBetween(v.dataInicioPrev,v.dataInicioReal);
+        const temGantt=cfgSessao(proj.sessaoId).linhaDoTempo!==false;
+        if(temGantt && atrasoDias>0){
+          setTimeout(()=>avaliarRecalculoCronograma(getProjeto(projetoId), a, atrasoDias), 80);
+        }
+      }
     }
   });
   // atalho para consultar a legenda das categorias sem fechar o formulário
