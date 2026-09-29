@@ -149,6 +149,8 @@
   .b-warn{background:var(--warn-bg);color:var(--warn)}
   .b-danger{background:var(--danger-bg);color:var(--danger)}
   .b-marco{background:#f7ecd8;color:var(--gold);border:1px solid var(--gold)}
+  .b-dep{background:#e8f0fb;color:#2a5fa8;border:1px solid #b9cfee;font-weight:500}
+  .b-dep-no{background:var(--bg);color:var(--ink-faint);border:1px solid var(--line);font-weight:500}
   .b-info{background:var(--info-bg);color:var(--info)}
   .b-mute{background:var(--line-soft);color:var(--ink-soft)}
   .tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;
@@ -959,77 +961,149 @@ function excluirAtividadeComConfirmacao(a,onDone){
    atividade afetada e destaca em alerta os marcos de entrega cujo
    prazo seria empurrado (com um aviso ainda mais forte se isso
    ultrapassar a data de término prevista do próprio projeto). */
+/* DEPENDÊNCIAS ENTRE ATIVIDADES: cada atividade guarda em "predecessorasIds"
+   (coluna predecessoras_ids, jsonb) os ids das atividades que precisam
+   terminar antes dela. "Sucessoras" é o caminho inverso, calculado. */
+function predecessorasDe(a){ return Array.isArray(a.predecessorasIds)?a.predecessorasIds:[]; }
+function sucessorasDiretas(id, projetoId){
+  return DB.data.atividades.filter(x=>x.projetoId===projetoId && predecessorasDe(x).includes(id));
+}
+// todas as que dependem (direta ou indiretamente) da atividade `id`
+function sucessorasTransitivas(id, projetoId){
+  const vistos=new Set(), fila=[id];
+  while(fila.length){
+    const atual=fila.shift();
+    sucessorasDiretas(atual, projetoId).forEach(x=>{
+      if(!vistos.has(x.id)){ vistos.add(x.id); fila.push(x.id); }
+    });
+  }
+  return vistos;
+}
+function selosDependenciaHtml(a){
+  const pre=predecessorasDe(a).map(getAtividade).filter(Boolean);
+  const suc=sucessorasDiretas(a.id,a.projetoId);
+  let h="";
+  if(pre.length) h+=`<span class="badge b-dep" title="Depende de: ${esc(pre.map(x=>x.nome).join(" | "))}">🔗 Depende de ${pre.length}</span>`;
+  if(suc.length) h+=`<span class="badge b-dep" title="Libera: ${esc(suc.map(x=>x.nome).join(" | "))}">➡ Libera ${suc.length}</span>`;
+  return h;
+}
+
 function avaliarRecalculoCronograma(proj, atividadeBase, atrasoDias){
   if(!proj || !atrasoDias || atrasoDias<=0) return;
-  // "próximas atividades": mesmo projeto, ainda sem Início real registrado
-  // (ou seja, ainda não começaram de fato) e previstas para começar a
-  // partir do início previsto da atividade que disparou o atraso.
-  const afetadas=DB.data.atividades.filter(x=>
-    x.projetoId===proj.id && x.id!==atividadeBase.id &&
-    x.status!=="Concluída" && x.status!=="Cancelada" &&
-    !x.dataInicioReal && x.dataInicioPrev &&
-    x.dataInicioPrev>=atividadeBase.dataInicioPrev
-  ).sort((a,b)=>a.dataInicioPrev.localeCompare(b.dataInicioPrev));
+  const dependentes=sucessorasTransitivas(atividadeBase.id, proj.id);
+  const elegivel=x=>x.projetoId===proj.id && x.id!==atividadeBase.id &&
+    x.status!=="Concluída" && x.status!=="Cancelada" && !x.dataInicioReal;
+  // afetadas = quem vem depois pela data OU depende da atividade base
+  const afetadas=DB.data.atividades.filter(x=>elegivel(x) && (
+    dependentes.has(x.id) ||
+    (x.dataInicioPrev && atividadeBase.dataInicioPrev && x.dataInicioPrev>=atividadeBase.dataInicioPrev)
+  )).sort((a,b)=>(a.dataInicioPrev||"9999").localeCompare(b.dataInicioPrev||"9999"));
   if(!afetadas.length) return;
 
+  const temDependentes=afetadas.some(x=>dependentes.has(x.id));
   const propostas=afetadas.map(x=>({
     ativ:x,
-    novoInicio:addDays(x.dataInicioPrev,atrasoDias),
+    dependente:dependentes.has(x.id),
+    // padrão: se há dependentes, marca só eles; senão, marca todas (comportamento antigo)
+    marcada:temDependentes?dependentes.has(x.id):true,
+    novoInicio:x.dataInicioPrev?addDays(x.dataInicioPrev,atrasoDias):null,
     novoFim:x.dataFimPrev?addDays(x.dataFimPrev,atrasoDias):null
   }));
-  const marcosAfetados=propostas.filter(p=>p.ativ.marco);
-  const marcosCriticos=marcosAfetados.filter(p=>proj.dataFim && p.novoFim && p.novoFim>proj.dataFim);
 
-  const linhaHtml=(p)=>`<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;
-      padding:7px 0;border-bottom:1px solid var(--line-soft);font-size:12.5px">
-    <span>${p.ativ.marco?"🚩 ":""}${esc(p.ativ.nome)}</span>
-    <span style="color:var(--ink-soft);text-align:right;white-space:nowrap">
-      ${fmtDate(p.ativ.dataInicioPrev)} → ${p.ativ.dataFimPrev?fmtDate(p.ativ.dataFimPrev):"—"}
-      <b style="color:var(--ink)"> ➜ ${fmtDate(p.novoInicio)} → ${p.novoFim?fmtDate(p.novoFim):"—"}</b>
-    </span></div>`;
-
-  const alertaMarcos=marcosAfetados.length?`
-    <div style="margin-top:14px;padding:10px 12px;border-radius:8px;background:${marcosCriticos.length?"var(--danger-bg)":"var(--warn-bg)"};
-        color:${marcosCriticos.length?"var(--danger)":"var(--warn)"};font-size:12.5px;line-height:1.5">
-      <b>⚠ ${marcosAfetados.length} marco(s) de entrega ${marcosAfetados.length>1?"terão":"terá"} o prazo empurrado:</b>
-      <ul style="margin:6px 0 0 18px">${marcosAfetados.map(p=>`<li>${esc(p.ativ.nome)}: término previsto passaria de
-        ${fmtDate(p.ativ.dataFimPrev)} para ${fmtDate(p.novoFim)}${proj.dataFim && p.novoFim && p.novoFim>proj.dataFim?
-          " — <b>ultrapassa o término previsto do projeto ("+fmtDate(proj.dataFim)+")</b>":""}</li>`).join("")}</ul>
-    </div>`:"";
+  const linhaHtml=(p,idx)=>{
+    const preds=predecessorasDe(p.ativ).map(getAtividade).filter(Boolean);
+    const selo=p.dependente
+      ? `<span class="badge b-dep" title="Depende direta ou indiretamente de “${esc(atividadeBase.nome)}”">🔗 Dependente</span>`
+      : `<span class="badge b-dep-no" title="Sem vínculo de dependência — entrou só por ter data posterior">Sem dependência</span>`;
+    return `<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line-soft);
+        font-size:12.5px;cursor:pointer;font-weight:400">
+      <input type="checkbox" class="rc-chk" data-i="${idx}" ${p.marcada?"checked":""} style="width:auto;margin:3px 0 0">
+      <span style="flex:1">
+        <span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${p.ativ.marco?"🚩 ":""}${esc(p.ativ.nome)} ${selo}</span>
+        ${preds.length?`<span style="display:block;font-size:11px;color:var(--ink-faint);margin-top:2px">Predecessora(s): ${esc(preds.map(x=>x.nome).join(" · "))}</span>`:""}
+      </span>
+      <span style="color:var(--ink-soft);text-align:right;white-space:nowrap">
+        ${p.ativ.dataInicioPrev?fmtDate(p.ativ.dataInicioPrev):"—"} → ${p.ativ.dataFimPrev?fmtDate(p.ativ.dataFimPrev):"—"}
+        <b style="color:var(--ink)"> ➜ ${p.novoInicio?fmtDate(p.novoInicio):"—"} → ${p.novoFim?fmtDate(p.novoFim):"—"}</b>
+      </span></label>`;
+  };
 
   $("#modal-root").innerHTML=`
   <div class="overlay"><div class="modal wide">
     <div class="modal-head"><h3>Recalcular cronograma?</h3></div>
     <div class="modal-body">
       <p style="color:var(--ink-soft);font-size:13px">"${esc(atividadeBase.nome)}" começou <b>${atrasoDias}
-        dia(s)</b> depois do previsto. Deseja aplicar esse mesmo atraso às ${afetadas.length} atividade(s)
-        seguintes deste cronograma que ainda não começaram de fato?</p>
-      <div style="margin-top:12px;max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:4px 12px">
+        dia(s)</b> depois do previsto. Escolha quais das ${afetadas.length} atividade(s) seguintes
+        (que ainda não começaram) devem receber esse mesmo atraso.${temDependentes?
+        " As que dependem desta atividade já vêm marcadas.":""}</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
+        <button type="button" class="btn ghost sm" id="rc-todas">Marcar todas</button>
+        <button type="button" class="btn ghost sm" id="rc-nenhuma">Desmarcar todas</button>
+        ${temDependentes?`<button type="button" class="btn ghost sm" id="rc-dep">Só as dependentes</button>`:""}
+        <span id="rc-cont" style="margin-left:auto;font-size:12px;color:var(--ink-soft)"></span>
+      </div>
+      <div style="margin-top:10px;max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:0 12px">
         ${propostas.map(linhaHtml).join("")}
       </div>
-      ${alertaMarcos}
+      <div id="rc-alerta"></div>
     </div>
     <div class="modal-foot">
       <button class="btn ghost" id="c-no">Não recalcular</button>
-      <button class="btn" id="c-yes">Recalcular ${afetadas.length} atividade(s)</button>
+      <button class="btn" id="c-yes"></button>
     </div></div></div>`;
+
+  const chks=()=>[...document.querySelectorAll("#modal-root .rc-chk")];
+  const escolhidas=()=>chks().filter(c=>c.checked).map(c=>propostas[+c.dataset.i]);
+  function atualizar(){
+    const esc_=escolhidas();
+    $("#rc-cont").textContent=`${esc_.length} de ${propostas.length} selecionada(s)`;
+    const btn=$("#c-yes");
+    btn.textContent=esc_.length?`Recalcular ${esc_.length} atividade(s)`:"Nenhuma selecionada";
+    btn.disabled=!esc_.length;
+    const marcos=esc_.filter(p=>p.ativ.marco);
+    const criticos=marcos.filter(p=>proj.dataFim && p.novoFim && p.novoFim>proj.dataFim);
+    // avisa se uma sucessora foi marcada mas alguma predecessora dela (também afetada) ficou de fora
+    const idsMarc=new Set(esc_.map(p=>p.ativ.id));
+    const inconsist=esc_.filter(p=>predecessorasDe(p.ativ).some(pid=>
+      propostas.some(q=>q.ativ.id===pid) && !idsMarc.has(pid)));
+    let h="";
+    if(marcos.length) h+=`<div style="margin-top:14px;padding:10px 12px;border-radius:8px;background:${criticos.length?"var(--danger-bg)":"var(--warn-bg)"};
+        color:${criticos.length?"var(--danger)":"var(--warn)"};font-size:12.5px;line-height:1.5">
+      <b>⚠ ${marcos.length} marco(s) de entrega ${marcos.length>1?"terão":"terá"} o prazo empurrado:</b>
+      <ul style="margin:6px 0 0 18px">${marcos.map(p=>`<li>${esc(p.ativ.nome)}: término previsto passaria de
+        ${fmtDate(p.ativ.dataFimPrev)} para ${fmtDate(p.novoFim)}${proj.dataFim && p.novoFim && p.novoFim>proj.dataFim?
+        " — <b>ultrapassa o término previsto do projeto ("+fmtDate(proj.dataFim)+")</b>":""}</li>`).join("")}</ul></div>`;
+    if(inconsist.length) h+=`<div style="margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--warn-bg);color:var(--warn);font-size:12.5px;line-height:1.5">
+      <b>ℹ Dependência não acompanhada:</b> ${inconsist.map(p=>esc(p.ativ.nome)).join("; ")} será/serão deslocada(s), mas
+      uma predecessora dela(s) ficou desmarcada.</div>`;
+    $("#rc-alerta").innerHTML=h;
+  }
+  chks().forEach(c=>c.onchange=atualizar);
+  $("#rc-todas").onclick=()=>{ chks().forEach(c=>c.checked=true); atualizar(); };
+  $("#rc-nenhuma").onclick=()=>{ chks().forEach(c=>c.checked=false); atualizar(); };
+  if(temDependentes) $("#rc-dep").onclick=()=>{ chks().forEach(c=>c.checked=propostas[+c.dataset.i].dependente); atualizar(); };
+  atualizar();
+
   $("#c-no").onclick=closeModal;
   $("#c-yes").onclick=async()=>{
+    const alvo=escolhidas();
+    if(!alvo.length) return;
     const btn=$("#c-yes"); btn.disabled=true; btn.textContent="Recalculando...";
     try{
-      for(const p of propostas){
+      for(const p of alvo){
         const patch={dataInicioPrev:p.novoInicio, dataFimPrev:p.novoFim};
         await sbUpdate("atividades", p.ativ.id, toSnake(patch));
         Object.assign(p.ativ, patch);
       }
+      const nMarcos=alvo.filter(p=>p.ativ.marco).length;
       closeModal();
-      toast(`Cronograma recalculado: ${afetadas.length} atividade(s) atualizada(s)`+
-        (marcosAfetados.length?` — atenção aos ${marcosAfetados.length} marco(s) de entrega impactado(s).`:"."));
+      toast(`Cronograma recalculado: ${alvo.length} atividade(s) atualizada(s)`+
+        (nMarcos?` — atenção aos ${nMarcos} marco(s) de entrega impactado(s).`:"."));
       render();
     }catch(e){
       console.error(e);
       toast("Erro ao recalcular o cronograma: "+(e.message||e));
-      btn.disabled=false; btn.textContent=`Recalcular ${afetadas.length} atividade(s)`;
+      atualizar();
     }
   };
 }
@@ -3095,7 +3169,7 @@ function projCronograma(c,p){
     // marcos (entregas/pontos críticos) recebem uma borda lateral e um selo
     // "🚩 Marco" para se destacarem visualmente na lista de atividades.
     return `<tr${a.marco?' style="box-shadow:inset 3px 0 0 var(--gold)"':""}>
-      <td><div style="font-weight:600;display:flex;align-items:center;gap:6px">${esc(a.nome)}${a.marco?`<span class="badge b-marco" title="Marco de entrega deste projeto">🚩 Marco</span>`:""}</div>
+      <td><div style="font-weight:600;display:flex;align-items:center;gap:6px">${esc(a.nome)}${a.marco?`<span class="badge b-marco" title="Marco de entrega deste projeto">🚩 Marco</span>`:""}${selosDependenciaHtml(a)}</div>
         <div style="font-size:11px;color:var(--ink-faint)">${esc(nomeCategoria(a.categoriaId))} · Resp.: ${responsaveis.join(", ")||"—"}${horasAtiv?` · ${horasAtiv}h apontadas`:""}${totalHorasPrevistasAtividade(a)>0?` · ${fmtNum(totalHorasPrevistasAtividade(a),1)}h previstas (${pessoasAlocadasAtividade(a).length} pessoa(s))`:""}</div></td>
       <td style="font-size:12px">${dIni} → ${dFim}${temReal?`<div style="color:var(--ink-faint);margin-top:2px">Real: ${dIniReal} → ${dFimReal}</div>`:""}</td>
       <td>${atrasada?`<span class="badge b-danger">Atrasada</span>`:statusBadge(a.status||"Não iniciada")}</td>
@@ -6304,6 +6378,16 @@ function formAtividade(projetoId,a){
       {key:"categoriaId",label:"Categoria",type:"select",required:true,
         options:DB.data.categorias.map(c=>({value:c.id,label:c.nome}))},
       ...(semRaci?[campoResponsaveis]:[]),
+      {key:"predecessorasIds",label:"Depende de (atividades predecessoras)",type:"checklist",full:true,dynamic:true,
+        optionsFn:()=>{
+          // exclui a própria atividade e quem já depende dela (evita dependência circular)
+          const bloqueadas=edit?sucessorasTransitivas(a.id,projetoId):new Set();
+          return DB.data.atividades
+            .filter(x=>x.projetoId===projetoId && (!edit || (x.id!==a.id && !bloqueadas.has(x.id))))
+            .sort((p,q)=>(p.dataInicioPrev||"9999").localeCompare(q.dataInicioPrev||"9999"))
+            .map(x=>({value:x.id,label:x.nome}));
+        },
+        help:"Marque as atividades que precisam terminar/começar antes desta. Quando uma predecessora atrasar, o app sugere deslocar automaticamente as que dependem dela."},
       {key:"dataInicioPrev",label:"Início previsto",type:"date",allowIndeterminate:true},
       {key:"dataFimPrev",label:"Término previsto",type:"date",allowIndeterminate:true},
       {key:"dataInicioReal",label:"Início real",type:"dateSameAs",
@@ -6368,6 +6452,7 @@ function formAtividade(projetoId,a){
         }));
       if(semRaci) v.responsaveisIds=Array.isArray(v.responsaveisIds)?v.responsaveisIds:[];
       else delete v.responsaveisIds;
+      v.predecessorasIds=Array.isArray(v.predecessorasIds)?v.predecessorasIds:[];
       if(v.status==="Concluída") v.progresso=100;
       else if(v.progresso>=100) v.status="Concluída";
       // Quando a atividade é marcada como Concluída e o campo "Término
