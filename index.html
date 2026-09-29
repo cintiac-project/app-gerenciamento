@@ -4,12 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Gestão de Portfólio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
   :root{
-    --navy:#10202e; --navy-2:#16293b; --navy-3:#1f3a52;
-    --bg:#eef1f4; --surface:#ffffff; --line:#dde3ea; --line-soft:#eaeef2;
-    --ink:#1c2b39; --ink-soft:#5b6b7b; --ink-faint:#8a98a6;
-    --accent:#1f6f6b; --accent-2:#2a8d88; --accent-soft:#e3f1f0;
+    --navy:#0b2a26; --navy-2:#0f3a34; --navy-3:#1f3a52;
+    --bg:#f6f3ec; --surface:#fffdf8; --line:#e2dccd; --line-soft:#ece6d8;
+    --ink:#0a1f1c; --ink-soft:#0d5c4b; --ink-faint:#3f6b60;
+    --accent:#0f7a63; --accent-2:#149a7c; --accent-soft:#dcefe7;
+    --fh:"IBM Plex Sans","Segoe UI",Roboto,Arial,sans-serif;
     --gold:#b8852a;
     --ok:#2f8f4e; --ok-bg:#e6f3ea;
     --warn:#c67a12; --warn-bg:#fbefdb;
@@ -31,44 +35,48 @@
      e closeModal()), nunca um ajuste automático do navegador. */
   html{overflow-anchor:none}
   body{
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
-    background:var(--bg);color:var(--ink);font-size:14px;line-height:1.5;
+    font-family:"Atkinson Hyperlegible","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    background:var(--bg);color:var(--ink);font-size:15px;line-height:1.55;
     -webkit-font-smoothing:antialiased;
   }
-  h1,h2,h3,h4{font-weight:650;letter-spacing:-.01em;line-height:1.25}
+  h1,h2,h3,h4{font-family:var(--fh);font-weight:700;letter-spacing:-.01em;line-height:1.25}
   a{color:var(--accent)}
   button{font-family:inherit;cursor:pointer;border:none;background:none}
-  input,select,textarea{font-family:inherit;font-size:14px}
+  input,select,textarea{font-family:inherit;font-size:14.5px}
 
   /* ---------- LAYOUT ---------- */
   #app{display:flex;min-height:100vh}
   aside{
-    width:248px;flex-shrink:0;background:var(--navy);color:#cdd9e2;
+    width:256px;flex-shrink:0;background:#eef4f2;color:#12302b;border-right:1px solid var(--line);
     display:flex;flex-direction:column;position:sticky;top:0;height:100vh;
   }
-  .brand{padding:22px 22px 18px;border-bottom:1px solid rgba(255,255,255,.07)}
+  .brand{padding:20px 20px 18px;background:linear-gradient(160deg,var(--navy),var(--navy-2));border-bottom:3px solid #e0b04a}
   .brand .logo{
-    display:flex;align-items:center;gap:10px;font-weight:700;color:#fff;
-    font-size:15px;letter-spacing:-.02em;
+    display:flex;align-items:center;gap:11px;font-family:var(--fh);font-weight:700;color:#fff;
+    font-size:17px;letter-spacing:-.01em;line-height:1.2;
   }
   .brand .mark{
-    width:30px;height:30px;border-radius:8px;flex-shrink:0;
-    background:linear-gradient(135deg,var(--accent-2),var(--accent));
-    display:flex;align-items:center;justify-content:center;font-size:15px;
+    width:38px;height:38px;border-radius:10px;flex-shrink:0;
+    background:linear-gradient(135deg,#2fae8f,var(--accent));
+    display:flex;align-items:center;justify-content:center;font-size:18px;
   }
-  .brand .sub{font-size:11px;color:#7d909f;margin-top:3px;letter-spacing:.04em;text-transform:uppercase}
-  nav{padding:14px 12px;flex:1;overflow-y:auto}
-  .nav-label{font-size:10.5px;color:#5e7283;text-transform:uppercase;letter-spacing:.09em;
-    padding:14px 12px 6px;font-weight:600}
+  .brand .sub{font-size:11px;color:#9fd3c6;margin-top:8px;letter-spacing:.05em;text-transform:uppercase;font-weight:700;font-family:var(--fh)}
+  nav{padding:6px 12px 14px;flex:1;overflow-y:auto}
+  .nav-label{
+    margin:16px 0 6px;padding:6px 10px;font-family:var(--fh);font-size:11.5px;letter-spacing:.08em;
+    text-transform:uppercase;font-weight:700;color:#0a4a3c;background:#d5e6e1;
+    border-left:4px solid var(--accent);border-radius:4px;
+  }
   .nav-item{
     display:flex;align-items:center;gap:11px;width:100%;text-align:left;
-    padding:9px 12px;border-radius:8px;color:#b7c5d0;font-size:13.5px;
-    font-weight:500;transition:.13s;margin-bottom:1px;
+    padding:9px 12px;border-radius:9px;color:#12302b;font-family:var(--fh);font-size:14px;
+    font-weight:600;transition:.13s;margin-bottom:2px;
   }
-  .nav-item:hover{background:rgba(255,255,255,.055);color:#fff}
-  .nav-item.active{background:var(--accent);color:#fff;box-shadow:0 2px 8px rgba(31,111,107,.4)}
-  .nav-item .ic{font-size:15px;width:18px;text-align:center}
-  .nav-foot{padding:14px;border-top:1px solid rgba(255,255,255,.07);font-size:11px;color:#6c7f8e}
+  .nav-item:hover{background:rgba(15,122,99,.10);color:#062622}
+  .nav-item.active{background:var(--accent);color:#fff;box-shadow:0 3px 10px rgba(15,122,99,.35)}
+  .nav-item .ic{display:inline-flex;width:20px;justify-content:center;flex-shrink:0}
+  .nav-item .ic svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  .nav-foot{padding:14px;border-top:1px solid var(--line);font-size:11.5px;color:var(--ink-soft)}
 
   main{flex:1;min-width:0;display:flex;flex-direction:column}
   .topbar{
@@ -83,7 +91,7 @@
   /* ---------- COMPONENTS ---------- */
   .btn{
     display:inline-flex;align-items:center;gap:7px;padding:9px 15px;border-radius:8px;
-    font-size:13px;font-weight:600;background:var(--accent);color:#fff;transition:.13s;
+    font-family:var(--fh);font-size:13px;font-weight:600;background:var(--accent);color:#fff;transition:.13s;
     border:1px solid transparent;white-space:nowrap;
   }
   .btn:hover{background:var(--accent-2)}
@@ -119,24 +127,24 @@
 
   /* KPI */
   .kpi{padding:18px 20px}
-  .kpi .lbl{font-size:11.5px;color:var(--ink-faint);text-transform:uppercase;
-    letter-spacing:.06em;font-weight:600;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
-  .kpi .val{font-size:27px;font-weight:700;letter-spacing:-.02em;margin-top:7px;overflow-wrap:anywhere}
+  .kpi .lbl{font-family:var(--fh);font-size:11.5px;color:var(--ink-soft);text-transform:uppercase;
+    letter-spacing:.06em;font-weight:700;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .kpi .val{font-family:var(--fh);font-size:27px;font-weight:700;letter-spacing:-.02em;margin-top:7px;overflow-wrap:anywhere}
   .kpi .sub{font-size:12px;color:var(--ink-soft);margin-top:3px;overflow-wrap:anywhere}
   .kpi .dot{width:8px;height:8px;border-radius:50%}
 
   /* TABLE */
   table{width:100%;border-collapse:collapse}
   thead th{
-    text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;
-    color:var(--ink-faint);font-weight:600;padding:10px 14px;border-bottom:1px solid var(--line);
-    background:#f8fafb;
+    text-align:left;font-family:var(--fh);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;
+    color:var(--ink-soft);font-weight:700;padding:10px 14px;border-bottom:1px solid var(--line);
+    background:#f3eee1;
   }
   tbody td{padding:11px 14px;border-bottom:1px solid var(--line-soft);font-size:13px;vertical-align:middle}
   tbody tr:last-child td{border-bottom:none}
   tbody tr.clickable{cursor:pointer;transition:.1s}
   tbody tr.clickable:hover{background:var(--accent-soft)}
-  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--fh)}
   td.actions{text-align:right;white-space:nowrap}
   .table-wrap{overflow-x:auto}
 
@@ -1544,7 +1552,7 @@ function barChart(data,opts){
     bars+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="4" fill="${col}"/>`;
     bars+=`<text x="${x+bw/2}" y="${y-6}" text-anchor="middle" font-size="11" font-weight="700" fill="#1c2b39">${esc(opts.fmt?opts.fmt(d.value):fmtNum(d.value,0))}</text>`;
     const lbl=esc(d.label);
-    bars+=`<text x="${x+bw/2}" y="${top+chartH+16}" text-anchor="middle" font-size="10.5" fill="#5b6b7b">${lbl.length>10?lbl.slice(0,9)+"…":lbl}</text>`;
+    bars+=`<text x="${x+bw/2}" y="${top+chartH+16}" text-anchor="middle" font-size="10.5" fill="#0d5c4b">${lbl.length>10?lbl.slice(0,9)+"…":lbl}</text>`;
   });
   return `<svg class="chart-svg" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
     <line x1="0" y1="${top+chartH}" x2="${W}" y2="${top+chartH}" stroke="#dde3ea" stroke-width="1"/>
@@ -1575,7 +1583,7 @@ function stackedBarChart(data,opts){
     const topY=top+chartH-(d.total/max)*chartH;
     bars+=`<text x="${x+bw/2}" y="${topY-6}" text-anchor="middle" font-size="11" font-weight="700" fill="#1c2b39">${esc(opts.fmt?opts.fmt(d.total):fmtNum(d.total,0))}</text>`;
     const lbl=esc(d.label);
-    bars+=`<text x="${x+bw/2}" y="${top+chartH+16}" text-anchor="middle" font-size="10.5" fill="#5b6b7b">${lbl.length>10?lbl.slice(0,9)+"…":lbl}</text>`;
+    bars+=`<text x="${x+bw/2}" y="${top+chartH+16}" text-anchor="middle" font-size="10.5" fill="#0d5c4b">${lbl.length>10?lbl.slice(0,9)+"…":lbl}</text>`;
   });
   const legendData=opts.legend||[];
   const legendHtml=legendData.length
@@ -1612,7 +1620,7 @@ function donutChart(data){
   return `<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap">
     <svg viewBox="0 0 180 180" style="width:170px;flex-shrink:0">${segs}
       <text x="90" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#1c2b39">Total</text>
-      <text x="90" y="104" text-anchor="middle" font-size="13" fill="#5b6b7b">${fmtNum(total,total%1?1:0)}</text>
+      <text x="90" y="104" text-anchor="middle" font-size="13" fill="#0d5c4b">${fmtNum(total,total%1?1:0)}</text>
     </svg><div style="flex:1;min-width:160px">${leg}</div></div>`;
 }
 
@@ -1648,13 +1656,26 @@ const ST = {
    depois sem afetar as demais. Projetos antigos sem sessaoId (ou
    com um id que não existe mais aqui) caem em "Não classificados".
    ============================================================ */
+const ICONS={
+  painel:'<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>',
+  captacao:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>',
+  gestao:'<svg viewBox="0 0 24 24"><path d="M6 5v11M12 5v6M18 5v14"/></svg>',
+  estrut:'<svg viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg>',
+  eventos:'<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M8 14h.01M12 14h.01M16 14h.01"/></svg>',
+  cursos:'<svg viewBox="0 0 24 24"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>',
+  rotinas:'<svg viewBox="0 0 24 24"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>',
+  financeiro:'<svg viewBox="0 0 24 24"><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/></svg>',
+  equipe:'<svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  config:'<svg viewBox="0 0 24 24"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>',
+  inbox:'<svg viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>'
+};
 const SESSOES=[
-  {id:"captacao",         label:"Captação",               ic:"◈"},
-  {id:"gestao_projetos",  label:"Gestão de Projetos",     ic:"▤"},
-  {id:"estruturantes",    label:"Projetos Estruturantes", ic:"▨"},
-  {id:"eventos",          label:"Eventos",                ic:"◫"},
-  {id:"cursos",           label:"Cursos",                 ic:"◐"},
-  {id:"rotinas",          label:"Rotinas",                ic:"↻"}
+  {id:"captacao",         label:"Captação",               ic:ICONS.captacao},
+  {id:"gestao_projetos",  label:"Gestão de Projetos",     ic:ICONS.gestao},
+  {id:"estruturantes",    label:"Projetos Estruturantes", ic:ICONS.estrut},
+  {id:"eventos",          label:"Eventos",                ic:ICONS.eventos},
+  {id:"cursos",           label:"Cursos",                 ic:ICONS.cursos},
+  {id:"rotinas",          label:"Rotinas",                ic:ICONS.rotinas}
 ];
 function getSessao(id){ return SESSOES.find(s=>s.id===id); }
 function nomeSessao(id){ const s=getSessao(id); return s?s.label:"Não classificados"; }
@@ -1827,13 +1848,13 @@ function camposExtrasResumoHtml(cfg,p){
 
 const NAV=[
   {sec:"Visão geral"},
-  {id:"painel",label:"Painel Geral",ic:"▦"},
+  {id:"painel",label:"Painel Geral",ic:ICONS.painel},
   {portfolioSection:true},
   {sec:"Operação"},
-  {id:"financeiro",label:"Financeiro",ic:"₿"},
-  {id:"equipe",label:"Equipe",ic:"◍"},
+  {id:"financeiro",label:"Financeiro",ic:ICONS.financeiro},
+  {id:"equipe",label:"Equipe",ic:ICONS.equipe},
   {sec:"Sistema"},
-  {id:"config",label:"Configurações",ic:"⚙"}
+  {id:"config",label:"Configurações",ic:ICONS.config}
 ];
 
 
@@ -1854,7 +1875,7 @@ function renderNav(){
         const active=(ST.view==="portfolio"&&!ST.sessaoAtiva)||
           (!!projetoAtivo && !projetoSessaoValida(projetoAtivo));
         h+=`<button class="nav-item ${active?"active":""}" data-nav="portfolio" data-sessao="">
-          <span class="ic">❔</span><span>Não classificados</span></button>`;
+          <span class="ic">${ICONS.inbox}</span><span>Não classificados</span></button>`;
       }
       return;
     }
