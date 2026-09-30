@@ -196,6 +196,10 @@
     color:var(--ink);font-weight:500;cursor:pointer;
   }
   .select:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+  .select{max-width:100%;min-width:0;text-overflow:ellipsis}
+  .field-inline{max-width:100%;min-width:0}
+  .field-inline .select{max-width:min(320px,100%);white-space:nowrap;overflow:hidden}
+  @media(max-width:640px){.field-inline{flex-wrap:wrap;width:100%}.field-inline .select{flex:1;max-width:100%}}
   .search{
     padding:8px 12px 8px 32px;border:1px solid var(--line);border-radius:8px;width:230px;
     background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' stroke='%238a98a6' stroke-width='2'%3E%3Ccircle cx='6' cy='6' r='5'/%3E%3Cpath d='M10 10l3 3'/%3E%3C/svg%3E") no-repeat 11px center;
