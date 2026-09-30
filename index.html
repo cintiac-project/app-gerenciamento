@@ -127,11 +127,11 @@
 
   /* KPI */
   .kpi{padding:18px 20px}
-  .kpi .lbl{font-family:var(--fh);font-size:11.5px;color:var(--ink-soft);text-transform:uppercase;
-    letter-spacing:.06em;font-weight:700;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .kpi .lbl{display:flex;align-items:flex-start;gap:9px;font-family:var(--fh);font-size:11.5px;line-height:1.35;color:var(--ink-soft);
+    text-transform:uppercase;letter-spacing:.06em;font-weight:700;min-height:calc(2 * 1.35em)}
   .kpi .val{font-family:var(--fh);font-size:27px;font-weight:700;letter-spacing:-.02em;margin-top:7px;overflow-wrap:anywhere}
   .kpi .sub{font-size:12px;color:var(--ink-soft);margin-top:3px;overflow-wrap:anywhere}
-  .kpi .dot{width:8px;height:8px;border-radius:50%}
+  .kpi .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;margin-top:calc((1.35em - 9px) / 2)}
 
   /* TABLE */
   table{width:100%;border-collapse:collapse}
@@ -5314,7 +5314,7 @@ function exportarRelatorioProjeto(p){
 }
 
 /* ============================================================
-   CHECKLIST EXECUTIVO EM PPT (padrão visual do app: verde-petróleo e dourado)
+   CHECKLIST EXECUTIVO EM PPT (tema CCS — azul/verde, layout clean)
    Gera um .pptx com: slide de capa + slides de "Atividades realizadas"
    + slides de "Próximas atividades", prontos para colar na apresentação
    executiva da reunião. Usa a biblioteca PptxGenJS (carregada via CDN).
