@@ -1667,6 +1667,7 @@ const ICONS={
   financeiro:'<svg viewBox="0 0 24 24"><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/></svg>',
   equipe:'<svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   config:'<svg viewBox="0 0 24 24"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>',
+  relatorios:'<svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8M8 9h2"/></svg>',
   inbox:'<svg viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>'
 };
 const SESSOES=[
@@ -1851,6 +1852,7 @@ const NAV=[
   {id:"painel",label:"Painel Geral",ic:ICONS.painel},
   {portfolioSection:true},
   {sec:"Operação"},
+  {id:"relatorios",label:"Relatórios",ic:ICONS.relatorios},
   {id:"financeiro",label:"Financeiro",ic:ICONS.financeiro},
   {id:"equipe",label:"Equipe",ic:ICONS.equipe},
   {sec:"Sistema"},
@@ -1938,9 +1940,9 @@ function render(){
   renderNav();
   renderUserWidget();
   const titles={painel:"Painel Geral",
-    financeiro:"Controle Financeiro",
+    financeiro:"Controle Financeiro",relatorios:"Relatórios",
     equipe:"Equipe",config:"Configurações"};
-  const crumbs={painel:"Visão geral",financeiro:"Operação",equipe:"Operação",config:"Sistema"};
+  const crumbs={painel:"Visão geral",financeiro:"Operação",relatorios:"Operação",equipe:"Operação",config:"Sistema"};
   let title=titles[ST.view]||"Painel", crumb=crumbs[ST.view]||"";
   if(ST.view==="portfolio"){
     title=nomeSessao(ST.sessaoAtiva); crumb="Portfólio";
@@ -1963,6 +1965,7 @@ function render(){
   else if(ST.view==="portfolio") viewPortfolio(v);
   else if(ST.view==="projeto") viewProjeto(v);
   else if(ST.view==="financeiro") viewFinanceiro(v);
+  else if(ST.view==="relatorios") viewRelatorios(v);
   else if(ST.view==="equipe") viewEquipe(v);
   else if(ST.view==="config") viewConfig(v);
 
@@ -5115,6 +5118,183 @@ function viewConfig(v){
 /* ============================================================
    EXPORTAÇÃO DE ATA E RELATÓRIO DO PROJETO
    ============================================================ */
+/* ============================================================
+   RELATÓRIOS POR PÚBLICO / GOVERNANÇA
+   Layout A (Editorial): Governança, Gerencial, Ata
+   Layout B (Painel): Executivo, Financiador, Operacional
+   Tabelas em vez de flex/grid para abrir bem no Word.
+   ============================================================ */
+const REL_MODELOS={
+  exec:{n:"Executivo / Diretoria",lay:"B",eb:"Relatório Executivo"},
+  gov:{n:"Governança / Comitê de Portfólio",lay:"A",eb:"Relatório de Governança"},
+  ger:{n:"Gerencial / Projeto",lay:"A",eb:"Relatório de Projeto"},
+  fin:{n:"Financiador / Parceiros",lay:"B",eb:"Relatório de Acompanhamento"},
+  ope:{n:"Operacional / Equipe",lay:"B",eb:"Relatório Semanal"},
+  ata:{n:"Ata de Reunião",lay:"A",eb:"Ata de Reunião"}
+};
+const REL_CSS=`.rp{font-family:'Atkinson Hyperlegible',Calibri,Arial,sans-serif;color:#0a1f1c;font-size:13.5px;line-height:1.5;max-width:800px;margin:0 auto;background:#fffdf8}
+.rp .eb,.rp h3,.rp th,.rp .rp-k .l,.rp .rp-k .v,.rp .ti{font-family:'IBM Plex Sans',Arial,sans-serif}
+.rp-h td{padding:22px 30px}.rp .eb{font-size:10.5px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+.rp .ti{font-size:22px;font-weight:700;margin:4px 0 2px}.rp .sb{font-size:13px}
+.rp-b{padding:6px 30px 20px}.rp-s{margin-top:18px}.rp-s h3{font-size:12.5px;letter-spacing:.07em;text-transform:uppercase;margin:0 0 8px}
+.rp-k{width:100%;border-collapse:separate;border-spacing:8px 0}.rp-k td{padding:10px 12px;vertical-align:top}
+.rp-k .l{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}.rp-k .v{font-size:22px;font-weight:700}.rp-k .s{font-size:12px;color:#0d5c4b}
+.rp-t{width:100%;border-collapse:collapse;font-size:12.5px}.rp-t th{font-size:11px;letter-spacing:.05em;text-transform:uppercase;text-align:left;padding:7px 8px}
+.rp-t td{padding:7px 8px;border-bottom:1px solid #e2dccd;vertical-align:top}.rp-v{color:#3f6b60;font-style:italic}
+.rp ul{margin:4px 0;padding-left:18px}.rp li{margin:3px 0}.rp-f{margin:0 30px;padding:9px 0 14px;border-top:1px solid #e2dccd;font-size:10.5px;color:#3f6b60}
+.rp-A .rp-h td{background:#0b2a26;color:#fff;border-bottom:4px solid #e0b04a}.rp-A .eb{color:#9fd3c6}.rp-A .sb{color:#cfe8e1}
+.rp-A h3{color:#0f7a63;border-left:4px solid #e0b04a;padding-left:8px}.rp-A .rp-k td{background:#f6f3ec;border-top:3px solid #0f7a63}.rp-A .rp-t th{background:#0b2a26;color:#fff}
+.rp-B .rp-h td{background:#eef4f2;border-left:8px solid #0f7a63;border-bottom:1px solid #e2dccd}.rp-B .eb{color:#0f7a63}
+.rp-B h3{background:#d5e6e1;color:#0a4a3c;padding:6px 10px;border-left:4px solid #0f7a63}.rp-B .rp-k td{background:#fff;border:1px solid #e2dccd}.rp-B .rp-k .v{color:#0f7a63}.rp-B .rp-t th{background:#d5e6e1;color:#0a4a3c}`;
+function relTab(cols,rows){
+  return `<table class="rp-t"><thead><tr>${cols.map(c=>`<th>${c}</th>`).join("")}</tr></thead><tbody>${
+    rows.length?rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join(""):`<tr><td colspan="${cols.length}" class="rp-v">Nenhum registro.</td></tr>`}</tbody></table>`;
+}
+function relKpis(it){ return `<table class="rp-k"><tr>${it.map(i=>`<td><div class="l">${i[0]}</div><div class="v">${i[1]}</div><div class="s">${i[2]||""}</div></td>`).join("")}</tr></table>`; }
+function relSec(t,h){ return `<div class="rp-s"><h3>${t}</h3>${h}</div>`; }
+function relLista(it){ return it.length?`<ul>${it.map(x=>`<li>${x}</li>`).join("")}</ul>`:`<p class="rp-v">Nenhum registro.</p>`; }
+function relCor(t,c){ return `<b style="color:${c}">${t}</b>`; }
+function relDoc(lay,eb,ti,sb,corpo){
+  return `<style>${REL_CSS}</style><div class="rp rp-${lay}"><table class="rp-h" width="100%"><tr><td><div class="eb">${eb}</div><div class="ti">${ti}</div><div class="sb">${sb}</div></td></tr></table><div class="rp-b">${corpo}</div><div class="rp-f">Gestão de Portfólio · Gerado em ${fmtDate(todayStr())}</div></div>`;
+}
+function relMes(d){ return d?d.slice(5,7)+"/"+d.slice(0,4):"—"; }
+function relDados(o){
+  const ps=o.proj?[getProjeto(o.proj)].filter(Boolean):DB.data.projetos.slice();
+  const ids=new Set(ps.map(p=>p.id)), hoje=todayStr();
+  const ats=DB.data.atividades.filter(a=>ids.has(a.projetoId));
+  const fim=a=>a.dataFimPrev||"", ini=a=>a.dataInicioPrev||a.dataFimPrev||"";
+  const atrasada=a=>a.status!=="Concluída"&&a.status!=="Cancelada"&&fim(a)&&fim(a)<hoje;
+  const noPer=a=>(!o.de||!fim(a)||fim(a)>=o.de)&&(!o.ate||!ini(a)||ini(a)<=o.ate);
+  const fin=DB.data.financeiro.filter(f=>ids.has(f.projetoId));
+  const finPer=fin.filter(f=>(!o.de||!f.data||f.data>=o.de)&&(!o.ate||!f.data||f.data<=o.ate));
+  const nomeP=id=>{const p=getProjeto(id);return p?esc(p.nome):"—";};
+  const nomesAt=a=>(a.responsaveisIds||[]).map(getColab).filter(Boolean).map(c=>esc(c.nome)).join(", ")||"—";
+  const preds=a=>(Array.isArray(a.predecessorasIds)?a.predecessorasIds:[]).map(id=>DB.data.atividades.find(x=>x.id===id)).filter(Boolean);
+  const sit=a=>a.status==="Concluída"?relCor("Concluída","#1f7a4d"):atrasada(a)?relCor("Atrasada","#b83232"):esc(a.status||"—");
+  const bloq=a=>preds(a).filter(x=>atrasada(x));
+  const sem=p=>{const n=ats.filter(a=>a.projetoId===p.id&&atrasada(a)).length,st=statusCalculado(p);
+    if(st==="Concluído") return relCor("● Concluído","#1f7a4d");
+    return n>=3?relCor("● Crítico","#b83232"):(n>0||st==="Em risco")?relCor("● Atenção","#b7791f"):relCor("● No prazo","#1f7a4d");};
+  const orc=p=>despesasProjeto(p.id), real=p=>despesasProjeto(p.id,"realizado"), prev=p=>despesasProjeto(p.id,"previsto");
+  const pct=(a,b)=>b>0?Math.round(a/b*100)+"%":"—";
+  const riscos=ps.flatMap(p=>(p.riscos||[]).map(r=>Object.assign({_p:p},r)));
+  const superado=r=>r.status==="Mitigado"||r.status==="Encerrado";
+  const meses=()=>{const m={};finPer.forEach(f=>{const k=(f.data||"").slice(0,7); if(!k) return; m[k]=m[k]||{ap:0,dp:0,dr:0};
+    if(f.tipo==="receita") m[k].ap+=+f.valor||0; else if(f.status==="realizado") m[k].dr+=+f.valor||0; else m[k].dp+=+f.valor||0;});
+    return Object.keys(m).sort().map(k=>[relMes(k+"-01"),m[k]]);};
+  return {ps,ids,ats,hoje,atrasada,noPer,fin,finPer,nomeP,nomesAt,preds,sit,bloq,sem,orc,real,prev,pct,riscos,superado,meses,
+    prog:p=>progressoProjeto(p.id),gest:isGestor()};
+}
+function relSemFin(){ return `<p class="rp-v">Informações financeiras disponíveis apenas para gestores.</p>`; }
+function relTabMeses(d,modo){
+  const m=d.meses();
+  if(modo==="ope") return relTab(["Mês","Desembolso previsto","Desembolso realizado","A desembolsar"],
+    m.map(([k,x])=>[k,fmtBRL(x.dp+x.dr),fmtBRL(x.dr),fmtBRL(x.dp)]));
+  return relTab(["Mês","Aporte (receita)","Desembolso previsto","Desembolso realizado"],
+    m.map(([k,x])=>[k,fmtBRL(x.ap),fmtBRL(x.dp),fmtBRL(x.dr)]));
+}
+function relRubricas(d){
+  const m={}; d.fin.filter(f=>f.tipo==="despesa").forEach(f=>{const k=f.rubricaId||"-"; m[k]=m[k]||{p:0,r:0};
+    if(f.status==="realizado") m[k].r+=+f.valor||0; else m[k].p+=+f.valor||0;});
+  return relTab(["Rubrica","Previsto","Realizado","Execução"],Object.keys(m).map(k=>[esc(nomeRubrica(k)),fmtBRL(m[k].p+m[k].r),fmtBRL(m[k].r),d.pct(m[k].r,m[k].p+m[k].r)]));
+}
+function gerarRelatorio(o){
+  const M=REL_MODELOS[o.modelo]; if(!M) return "";
+  if(o.modelo==="ata"){
+    const p=getProjeto(o.proj), r=p&&(p.reunioes||[]).find(x=>x.id===o.reuniao);
+    return r?gerarHtmlAta(p,r):"";
+  }
+  const d=relDados(o), P=o.proj?getProjeto(o.proj):null;
+  const escopo=P?esc(P.nome):"Portfólio completo";
+  const sub=`${escopo} · Período: ${fmtDate(o.de)} a ${fmtDate(o.ate)}`;
+  const marcos=d.ats.filter(a=>a.marco&&d.noPer(a)).sort((a,b)=>(a.dataFimPrev||"").localeCompare(b.dataFimPrev||""));
+  const nAtr=d.ats.filter(d.atrasada).length;
+  const progM=d.ps.length?Math.round(d.ps.reduce((s,p)=>s+d.prog(p),0)/d.ps.length):0;
+  const totO=d.ps.reduce((s,p)=>s+d.orc(p),0), totR=d.ps.reduce((s,p)=>s+d.real(p),0);
+  const linhaMarco=a=>[d.nomeP(a.projetoId),"🚩 "+esc(a.nome),fmtDate(a.dataFimPrev),d.sit(a)];
+  const ativosR=d.riscos.filter(r=>!d.superado(r)&&r.status!=="Materializado");
+  const liRisco=r=>`<b>${esc(r._p.nome)}:</b> ${esc(r.descricao)}${r.mitigacao?` — <i>${esc(r.mitigacao)}</i>`:""}`;
+  let c="";
+  if(o.modelo==="exec"){
+    c=relSec("Indicadores",relKpis([["Projetos",d.ps.length,d.ps.filter(p=>["Em andamento","Em risco"].includes(statusCalculado(p))).length+" em andamento"],
+        ["Progresso médio",progM+"%",""],["Atividades atrasadas",nAtr,""],
+        d.gest?["Execução financeira",d.pct(totR,totO),fmtBRL(totR)+" de "+fmtBRL(totO)]:["Marcos",marcos.length,"no período"]]))
+      +relSec("Situação por projeto",relTab(["Projeto","Situação","Progresso"],d.ps.map(p=>[esc(p.nome),d.sem(p),d.prog(p)+"%"])))
+      +relSec("Marcos do período",relTab(["Projeto","Marco","Término previsto","Situação"],marcos.map(linhaMarco)))
+      +relSec("Stakeholders envolvidos",relTab(["Stakeholder","Organização","Papel","Projeto"],
+        d.ps.flatMap(p=>(p.stakeholders||[]).map(s=>[esc(s.nome),esc(s.organizacao||"—"),esc(s.papel||"—"),esc(p.nome)]))))
+      +relSec("Riscos superados",relLista(d.riscos.filter(d.superado).map(liRisco)))
+      +relSec("Riscos em atenção",relLista(ativosR.filter(r=>severidadeRisco(r)==="Alta").map(liRisco)));
+  } else if(o.modelo==="gov"){
+    c=relSec("Resumo do portfólio",relKpis([["Projetos",d.ps.length,""],["Progresso médio",progM+"%",""],["Atividades atrasadas",nAtr,""],
+        d.gest?["Orçamento",fmtBRL(totO),"realizado "+d.pct(totR,totO)]:["Riscos ativos",ativosR.length,""]]))
+      +relSec("Portfólio por projeto",relTab(d.gest?["Projeto","Término","Progresso","Orçamento","Saúde"]:["Projeto","Término","Progresso","Saúde"],
+        d.ps.map(p=>[esc(p.nome),fmtDate(p.dataFim),d.prog(p)+"%"].concat(d.gest?[fmtBRL(d.orc(p))]:[]).concat([d.sem(p)]))))
+      +relSec("Riscos críticos",relTab(["Projeto","Risco","Severidade","Responsável","Mitigação"],
+        ativosR.filter(r=>severidadeRisco(r)!=="Baixa").map(r=>[esc(r._p.nome),esc(r.descricao),severidadeRisco(r),esc(r.responsavel||"—"),esc(r.mitigacao||"—")])))
+      +relSec("Dependências críticas (bloqueadas por predecessora atrasada)",relTab(["Projeto","Atividade","Aguardando"],
+        d.ats.filter(a=>d.bloq(a).length&&a.status!=="Concluída").map(a=>[d.nomeP(a.projetoId),esc(a.nome),d.bloq(a).map(x=>esc(x.nome)).join("; ")])))
+      +relSec("Reuniões no período",relLista(d.ps.flatMap(p=>(p.reunioes||[]).filter(r=>r.data&&(!o.de||r.data>=o.de)&&(!o.ate||r.data<=o.ate)).map(r=>`${fmtDate(r.data)} — ${esc(r.titulo||"Reunião")} <i>(${esc(p.nome)})</i>`))));
+  } else if(o.modelo==="ger"){
+    const at=d.ats.filter(d.noPer).sort((a,b)=>(a.dataInicioPrev||"").localeCompare(b.dataInicioPrev||""));
+    c=relSec("Andamento",relKpis([["Progresso",progM+"%",""],["Atividades",d.ats.length,d.ats.filter(a=>a.status==="Concluída").length+" concluídas"],
+        ["Atrasadas",nAtr,""],d.gest?["Orçamento",fmtBRL(totO),"realizado "+d.pct(totR,totO)]:["Marcos",marcos.length,""]]))
+      +relSec("Cronograma e dependências",relTab(["Projeto","Atividade","Depende de","Prazo","Prog.","Situação"],
+        at.map(a=>[d.nomeP(a.projetoId),(a.marco?"🚩 ":"")+esc(a.nome),d.preds(a).map(x=>esc(x.nome)).join("; ")||"—",fmtDate(a.dataInicioPrev)+" → "+fmtDate(a.dataFimPrev),(+a.progresso||0)+"%",d.sit(a)])))
+      +relSec("Pontos de atenção",relLista(d.ats.filter(d.atrasada).map(a=>`Atrasada: ${esc(a.nome)} (${fmtDate(a.dataFimPrev)})`).concat(ativosR.map(liRisco))))
+      +(d.gest?relSec("Execução por rubrica",relRubricas(d)):"");
+  } else if(o.modelo==="fin"){
+    c=relSec("Execução",relKpis([["Meta física",progM+"%",""],
+        ...(d.gest?[["Execução financeira",d.pct(totR,totO),fmtBRL(totR)],["Receita/aportes",fmtBRL(d.fin.filter(f=>f.tipo==="receita").reduce((s,f)=>s+(+f.valor||0),0)),""]]:[]),
+        ["Marcos",marcos.length,marcos.filter(a=>a.status==="Concluída").length+" concluídos"]]))
+      +relSec("Metas e entregas",relTab(["Projeto","Meta / entrega","Prazo","Situação"],marcos.map(linhaMarco)))
+      +(d.gest?relSec("Execução financeira por rubrica",relRubricas(d))+relSec("Cronograma de aportes e desembolsos (por mês)",relTabMeses(d,"fin")):relSec("Execução financeira",relSemFin()))
+      +relSec("Justificativas e ajustes",relLista(d.ats.filter(d.atrasada).map(a=>`${esc(a.nome)} — previsto para ${fmtDate(a.dataFimPrev)}`)));
+  } else if(o.modelo==="ope"){
+    c=relSec("Em números",relKpis([["No período",d.ats.filter(d.noPer).length,"atividades"],["Atrasadas",nAtr,"prioridade"],
+        ["Concluídas",d.ats.filter(a=>a.status==="Concluída"&&d.noPer(a)).length,""],
+        d.gest?["Orçamento",fmtBRL(totO),"realizado "+fmtBRL(totR)]:["Bloqueadas",d.ats.filter(a=>d.bloq(a).length).length,""]]))
+      +relSec("Atividades",relTab(["Projeto","Atividade","Responsável","Prazo","Situação"],
+        d.ats.filter(a=>d.noPer(a)&&a.status!=="Concluída").sort((a,b)=>(a.dataFimPrev||"").localeCompare(b.dataFimPrev||""))
+          .map(a=>[d.nomeP(a.projetoId),esc(a.nome),d.nomesAt(a),fmtDate(a.dataFimPrev),d.sit(a)])))
+      +(d.gest?relSec("Orçamento previsto × realizado",relTab(["Projeto","Previsto (total)","Realizado","A desembolsar"],
+          d.ps.map(p=>[esc(p.nome),fmtBRL(d.orc(p)),fmtBRL(d.real(p)),fmtBRL(d.prev(p))])))
+        +relSec("Cronograma de desembolso (por mês)",relTabMeses(d,"ope")):"")
+      +relSec("Bloqueios",relLista(d.ats.filter(a=>d.bloq(a).length&&a.status!=="Concluída").map(a=>`${esc(a.nome)} — aguardando ${d.bloq(a).map(x=>esc(x.nome)).join("; ")}`)));
+  }
+  return relDoc(M.lay,M.eb,P?esc(P.nome):"Portfólio de projetos",sub,c);
+}
+function relParaTexto(html){
+  const t=document.createElement("textarea");
+  t.innerHTML=html.replace(/<style[\s\S]*?<\/style>/gi,"").replace(/<\/(tr|li|div|h3|p)>/gi,"\n").replace(/<\/t[dh]>/gi," | ").replace(/<[^>]+>/g,"");
+  return t.value.replace(/\n{3,}/g,"\n\n").trim();
+}
+function viewRelatorios(v){
+  const hj=todayStr(), y=+hj.slice(0,4), m=+hj.slice(5,7);
+  ST.rel=ST.rel||{modelo:"exec",proj:"",reuniao:"",de:`${y}-${pad(m)}-01`,ate:`${y}-${pad(m)}-${pad(new Date(y,m,0).getDate())}`};
+  const R=ST.rel;
+  const opt=(val,lab,sel)=>`<option value="${esc(val)}" ${sel?"selected":""}>${esc(lab)}</option>`;
+  const p=R.proj?getProjeto(R.proj):null;
+  const reunioes=p?(p.reunioes||[]).slice().sort((a,b)=>(b.data||"").localeCompare(a.data||"")):[];
+  if(R.modelo==="ata" && !reunioes.find(r=>r.id===R.reuniao)) R.reuniao=reunioes[0]?reunioes[0].id:"";
+  setTopAction(`<button class="btn">📤 Exportar (Word · PDF · HTML)</button>`,()=>{
+    const html=gerarRelatorio(R);
+    if(!html){ toast("Escolha um projeto e uma reunião para gerar a ata."); return; }
+    const nome=("relatorio-"+R.modelo+(p?"-"+p.nome:"")+"-"+hj).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,60);
+    modalExportar("📤 Exportar "+REL_MODELOS[R.modelo].n,html,relParaTexto(html),nome);
+  });
+  const lb='style="display:block;font-size:12px;font-weight:700;margin-bottom:4px;color:var(--ink-soft)"';
+  v.innerHTML=`<div class="card" style="margin-bottom:16px"><div class="card-pad"><div class="grid g4">
+    <div><label ${lb}>Modelo (público)</label><select id="rl-mod">${Object.keys(REL_MODELOS).map(k=>opt(k,REL_MODELOS[k].n,k===R.modelo)).join("")}</select></div>
+    <div><label ${lb}>Escopo</label><select id="rl-proj">${opt("","Portfólio completo",!R.proj)}${DB.data.projetos.map(x=>opt(x.id,x.nome,x.id===R.proj)).join("")}</select></div>
+    ${R.modelo==="ata"?`<div style="grid-column:span 2"><label ${lb}>Reunião</label><select id="rl-reu">${reunioes.length?reunioes.map(r=>opt(r.id,fmtDate(r.data)+" — "+(r.titulo||"Reunião"),r.id===R.reuniao)).join(""):opt("","Escolha um projeto com reuniões",true)}</select></div>`
+    :`<div><label ${lb}>De</label><input type="date" id="rl-de" value="${R.de||""}"></div><div><label ${lb}>Até</label><input type="date" id="rl-ate" value="${R.ate||""}"></div>`}
+  </div></div></div>
+  <div id="rl-prev" style="overflow:auto;border:1px solid var(--line);border-radius:12px;background:#fff;padding:12px">${gerarRelatorio(R)||`<div class="empty"><h3>Selecione um projeto e uma reunião</h3><p>A ata é gerada a partir de uma reunião registrada no projeto.</p></div>`}</div>`;
+  const on=(id,k,fn)=>{ const e=$(id); if(e) e.onchange=ev=>{ R[k]=ev.target.value; if(fn) fn(); viewRelatorios(v); }; };
+  on("#rl-mod","modelo"); on("#rl-proj","proj",()=>{R.reuniao="";}); on("#rl-reu","reuniao"); on("#rl-de","de"); on("#rl-ate","ate");
+}
+
 function exportarAta(p,r){
   const html=gerarHtmlAta(p,r);
   const texto=gerarTextoAta(p,r);
@@ -5134,7 +5314,7 @@ function exportarRelatorioProjeto(p){
 }
 
 /* ============================================================
-   CHECKLIST EXECUTIVO EM PPT (tema CCS — azul/verde, layout clean)
+   CHECKLIST EXECUTIVO EM PPT (padrão visual do app: verde-petróleo e dourado)
    Gera um .pptx com: slide de capa + slides de "Atividades realizadas"
    + slides de "Próximas atividades", prontos para colar na apresentação
    executiva da reunião. Usa a biblioteca PptxGenJS (carregada via CDN).
@@ -5146,17 +5326,18 @@ function exportarChecklistPPT(p,r){
   }
   // paleta discreta em azul e verde, alinhada ao tema do app
   const COR={
-    navy:"10202E", navy2:"16293B", navy3:"1F3A52",
-    azul:"2563A8", azulClaro:"E4EEF8",
-    verde:"1F6F6B", verdeClaro:"2A8D88", verdeBg:"E3F1F0",
-    branco:"FFFFFF", cinzaBg:"F4F7F9", linha:"DDE3EA",
-    tinta:"1C2B39", tintaSuave:"5B6B7B", tintaFraca:"8A98A6"
+    navy:"0B2A26", navy2:"0F3A34", navy3:"1F3A52",
+    azul:"0B2A26", azulClaro:"F3EEDF",
+    verde:"0F7A63", verdeClaro:"9FD3C6", verdeBg:"E3F1EC",
+    dourado:"E0B04A", douradoEsc:"A8741A",
+    branco:"FFFFFF", cinzaBg:"F6F3EC", linha:"E2DCCD",
+    tinta:"0A1F1C", tintaSuave:"0D5C4B", tintaFraca:"3F6B60"
   };
-  const FONTE="Calibri";
+  const FONTE="Atkinson Hyperlegible", FONTE_T="IBM Plex Sans"; // instale as fontes no computador para exibi-las no PowerPoint
   const pptx=new PptxGenJS();
   pptx.defineLayout({name:"CCS_WIDE",width:13.33,height:7.5});
   pptx.layout="CCS_WIDE";
-  pptx.author="CCS"; pptx.company=p.nome||"";
+  pptx.author="Gestão de Portfólio"; pptx.company=p.nome||"";
   pptx.title="Checklist executivo — "+(r.titulo||"Reunião");
 
   const periodo=r.resumoDe?`${fmtDate(r.resumoDe)} — ${fmtDate(r.resumoAte||r.data)}`:fmtDate(r.data);
@@ -5166,7 +5347,7 @@ function exportarChecklistPPT(p,r){
   function rodape(slide,paginaTxt){
     slide.addShape("rect",{x:0,y:7.14,w:13.33,h:0.02,fill:{color:COR.linha}});
     slide.addText((p.nome||"").toUpperCase(),{
-      x:0.5,y:7.2,w:6,h:0.28,fontFace:FONTE,fontSize:8.5,color:COR.tintaFraca,
+      x:0.5,y:7.2,w:6,h:0.28,fontFace:FONTE_T,fontSize:8.5,color:COR.tintaFraca,
       charSpacing:1,bold:true
     });
     slide.addText(paginaTxt||"",{
@@ -5178,27 +5359,28 @@ function exportarChecklistPPT(p,r){
   /* ---- slide de capa ---- */
   const capa=pptx.addSlide();
   capa.background={color:COR.navy};
+  capa.addShape("rect",{x:0,y:0,w:0.28,h:7.5,fill:{color:COR.dourado}});
   // barra decorativa azul→verde no rodapé da capa
   capa.addShape("rect",{x:0,y:7.36,w:13.33,h:0.14,fill:{type:"gradient",stops:[
-    {color:COR.azul,position:0},{color:COR.verde,position:100}
+    {color:COR.verde,position:0},{color:COR.dourado,position:100}
   ],angle:0}});
   capa.addText("CHECKLIST EXECUTIVO",{
-    x:0.9,y:2.15,w:11.5,h:0.4,fontFace:FONTE,fontSize:13,color:COR.verdeClaro,
+    x:0.9,y:2.15,w:11.5,h:0.4,fontFace:FONTE_T,fontSize:13,color:COR.verdeClaro,
     bold:true,charSpacing:3
   });
   capa.addText(r.titulo||"Reunião",{
-    x:0.9,y:2.6,w:11.5,h:1.1,fontFace:FONTE,fontSize:34,color:COR.branco,bold:true
+    x:0.9,y:2.6,w:11.5,h:1.1,fontFace:FONTE_T,fontSize:34,color:COR.branco,bold:true
   });
   capa.addText(p.nome||"",{
-    x:0.9,y:3.65,w:11.5,h:0.5,fontFace:FONTE,fontSize:17,color:"AFC2D1"
+    x:0.9,y:3.65,w:11.5,h:0.5,fontFace:FONTE,fontSize:17,color:"CFE8E1"
   });
-  capa.addShape("rect",{x:0.92,y:4.35,w:0.55,h:0.045,fill:{color:COR.verde}});
+  capa.addShape("rect",{x:0.92,y:4.35,w:0.55,h:0.045,fill:{color:COR.dourado}});
   capa.addText([
-    {text:"Período do resumo:  ",options:{color:"7D909F",bold:false}},
+    {text:"Período do resumo:  ",options:{color:"9FD3C6",bold:false}},
     {text:periodo,options:{color:COR.branco,bold:true}}
   ],{x:0.9,y:4.55,w:11.5,h:0.4,fontFace:FONTE,fontSize:13}); 
   capa.addText("Gerado em "+dataGeracao,{
-    x:0.9,y:6.85,w:11.5,h:0.3,fontFace:FONTE,fontSize:10,color:"5E7283"
+    x:0.9,y:6.85,w:11.5,h:0.3,fontFace:FONTE,fontSize:10,color:"9FD3C6"
   });
 
   /* ---- monta slides de checklist em blocos (paginação) ---- */
@@ -5210,11 +5392,12 @@ function exportarChecklistPPT(p,r){
 
     blocos.forEach((bloco,bi)=>{
       const slide=pptx.addSlide();
-      slide.background={color:COR.branco};
+      slide.background={color:"FFFDF8"};
       // faixa superior colorida
       slide.addShape("rect",{x:0,y:0,w:13.33,h:1.15,fill:{color:corFaixa}});
+      slide.addShape("rect",{x:0,y:1.15,w:13.33,h:0.06,fill:{color:COR.dourado}});
       slide.addText(iconeTxt+"  "+titulo,{
-        x:0.6,y:0.28,w:9,h:0.6,fontFace:FONTE,fontSize:22,color:COR.branco,bold:true
+        x:0.6,y:0.28,w:9,h:0.6,fontFace:FONTE_T,fontSize:22,color:COR.branco,bold:true
       });
       slide.addText(periodo+(blocos.length>1?`   ·   parte ${bi+1}/${blocos.length}`:""),{
         x:0.6,y:0.75,w:12,h:0.3,fontFace:FONTE,fontSize:10.5,color:COR.branco,transparency:15
@@ -5231,7 +5414,7 @@ function exportarChecklistPPT(p,r){
           x:0.75,y:y-0.02,w:0.5,h:rowH-0.1,fontFace:FONTE,fontSize:14,color:corFaixa,bold:true,valign:"top"
         });
         slide.addText(String(txt),{
-          x:1.25,y:y-0.02,w:11.2,h:rowH-0.1,fontFace:FONTE,fontSize:12.5,color:COR.tinta,
+          x:1.25,y:y-0.02,w:11.2,h:rowH-0.1,fontFace:FONTE,fontSize:13.5,color:COR.tinta,
           valign:"top",lineSpacingMultiple:1.12
         });
         y+=rowH;
@@ -5273,7 +5456,7 @@ function modalExportar(titulo,htmlConteudo,textoConteudo,nomeArquivo){
     </div>
   </div></div>`;
   function montarStandalone(){
-    return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(titulo)}</title></head><body style="background:#fff;margin:0;padding:18px 0">${htmlConteudo}</body></html>`;
+    return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(titulo)}</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"></head><body style="background:#fff;margin:0;padding:18px 0">${htmlConteudo}</body></html>`;
   }
   // .doc compatível com Word: envelope HTML com os namespaces e comentários
   // condicionais "mso" que o Word reconhece para abrir como documento nativo
@@ -5293,7 +5476,7 @@ function modalExportar(titulo,htmlConteudo,textoConteudo,nomeArquivo){
 </xml><![endif]-->
 <style>
 @page{ size:21cm 29.7cm; margin:2.4cm 2.2cm 2.2cm 2.2cm; }
-body{ font-family:Calibri,Arial,sans-serif; }
+body{ font-family:'Atkinson Hyperlegible',Calibri,Arial,sans-serif; }
 </style>
 </head>
 <body>${htmlConteudo}</body>
@@ -5369,27 +5552,27 @@ function gerarHtmlAta(p,r){
   // idêntica tanto no navegador/impressão quanto ao abrir o .doc no Word,
   // que não interpreta grid/flexbox.
   const style=`<style>
-  .ata-doc{max-width:800px;margin:0 auto;font-family:Calibri,Arial,sans-serif;color:#232f3a;line-height:1.6;padding:6px 4px 18px}
-  .ata-doc .eyebrow{font-family:Georgia,'Times New Roman',serif;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#8a6d3b;margin:0 0 6px}
-  .ata-doc h1{font-family:Georgia,'Times New Roman',serif;color:#1c2b39;margin:0 0 14px;font-size:26px;font-weight:700;letter-spacing:.2px}
-  .ata-doc .faixa{border-top:2.5px solid #1c2b39;border-bottom:.75px solid #c9ab73;margin:0 0 22px;padding-top:16px}
+  .ata-doc{max-width:800px;margin:0 auto;font-family:'Atkinson Hyperlegible',Calibri,Arial,sans-serif;color:#0a1f1c;line-height:1.6;padding:6px 4px 18px}
+  .ata-doc .eyebrow{font-family:'IBM Plex Sans',Arial,sans-serif;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#8a6d3b;margin:0 0 6px}
+  .ata-doc h1{font-family:'IBM Plex Sans',Arial,sans-serif;color:#0b2a26;margin:0 0 14px;font-size:26px;font-weight:700;letter-spacing:.2px}
+  .ata-doc .faixa{border-top:2.5px solid #0b2a26;border-bottom:.75px solid #c9ab73;margin:0 0 22px;padding-top:16px}
   .ata-doc table.info{width:100%;border-collapse:collapse;margin:0 0 26px}
   .ata-doc table.info td{padding:5px 0;font-size:13.5px;vertical-align:top;border-bottom:.75px solid #e7e1d3}
-  .ata-doc table.info td.lbl{width:150px;color:#6b7a87;font-weight:600;font-family:Georgia,'Times New Roman',serif;font-style:italic}
-  .ata-doc table.info td.val{color:#232f3a}
-  .ata-doc table.info td.val b{color:#1c2b39}
-  .ata-doc h2{font-family:Georgia,'Times New Roman',serif;font-weight:700;font-size:14px;letter-spacing:1px;text-transform:uppercase;color:#1c2b39;margin:28px 0 10px;padding-left:12px;border-left:4px solid #8a6d3b}
+  .ata-doc table.info td.lbl{width:150px;color:#0d5c4b;font-weight:600;font-family:'IBM Plex Sans',Arial,sans-serif;font-style:italic}
+  .ata-doc table.info td.val{color:#0a1f1c}
+  .ata-doc table.info td.val b{color:#0b2a26}
+  .ata-doc h2{font-family:'IBM Plex Sans',Arial,sans-serif;font-weight:700;font-size:14px;letter-spacing:1px;text-transform:uppercase;color:#0b2a26;margin:28px 0 10px;padding-left:12px;border-left:4px solid #8a6d3b}
   .ata-doc p{margin:0 0 8px;font-size:13.5px}
-  .ata-doc .vazio{color:#9aa4ac;font-style:italic}
+  .ata-doc .vazio{color:#3f6b60;font-style:italic}
   .ata-doc table.tb{width:100%;border-collapse:collapse;margin-top:6px}
-  .ata-doc table.tb th{background:#1c2b39;color:#f4f1e8;font-family:Georgia,'Times New Roman',serif;font-weight:600;font-size:12px;letter-spacing:.4px;text-transform:uppercase;text-align:left;padding:8px 10px;border:.75px solid #1c2b39}
+  .ata-doc table.tb th{background:#0b2a26;color:#f4f1e8;font-family:'IBM Plex Sans',Arial,sans-serif;font-weight:600;font-size:12px;letter-spacing:.4px;text-transform:uppercase;text-align:left;padding:8px 10px;border:.75px solid #0b2a26}
   .ata-doc table.tb td{border:.75px solid #d9dee2;padding:8px 10px;text-align:left;font-size:13px;vertical-align:top}
   .ata-doc table.tb tr:nth-child(even) td{background:#f7f6f1}
   .ata-doc ul{padding-left:20px;margin:4px 0 8px;font-size:13.5px}
   .ata-doc ol{padding-left:20px;margin:0}
   .ata-doc ol li{margin-bottom:13px;font-size:13.5px}
-  .ata-doc ol li b{display:block;color:#1c2b39;margin-bottom:3px}
-  .ata-doc .rodape{margin-top:38px;padding-top:10px;border-top:.75px solid #d9dee2;color:#9aa4ac;font-size:10.5px;font-family:Georgia,'Times New Roman',serif;font-style:italic}
+  .ata-doc ol li b{display:block;color:#0b2a26;margin-bottom:3px}
+  .ata-doc .rodape{margin-top:38px;padding-top:10px;border-top:.75px solid #d9dee2;color:#3f6b60;font-size:10.5px;font-family:'IBM Plex Sans',Arial,sans-serif;font-style:italic}
   @media print{.ata-doc{margin:0;padding:0}body{background:#fff}}
   </style>`;
   return `${style}<div class="ata-doc">
@@ -5475,8 +5658,8 @@ function gerarHtmlRelatorioProjeto(p){
     ${envInt.length?`<p style="margin:6px 0 4px"><b>Equipe interna</b></p>
       <ul>${envInt.map(c=>`<li>${esc(c.nome)}${c.cargo?` — ${esc(c.cargo)}`:""}</li>`).join("")}</ul>`:""}
     ${envPar.length?`<p style="margin:14px 0 4px"><b>Parceiros externos</b></p>
-      <ul>${envPar.map(c=>`<li>${esc(c.nome)}${c.organizacao?` <span style="color:#8a98a6">(${esc(c.organizacao)})</span>`:""}${c.cargo?` — ${esc(c.cargo)}`:""}</li>`).join("")}</ul>`:""}`
-    :"<p style='color:#8a98a6'>Nenhuma pessoa registrada com participação no projeto.</p>";
+      <ul>${envPar.map(c=>`<li>${esc(c.nome)}${c.organizacao?` <span style="color:#3f6b60">(${esc(c.organizacao)})</span>`:""}${c.cargo?` — ${esc(c.cargo)}`:""}</li>`).join("")}</ul>`:""}`
+    :"<p style='color:#3f6b60'>Nenhuma pessoa registrada com participação no projeto.</p>";
 
   const atsHtml=ats.length?`<table>
     <thead><tr><th>#</th><th>Atividade</th><th>Categoria</th><th>Responsável</th>
@@ -5490,7 +5673,7 @@ function gerarHtmlRelatorioProjeto(p){
       <td>${a.dataFimPrev?fmtDate(a.dataFimPrev):"—"}</td>
       <td>${a.progresso||0}%</td><td>${esc(a.status||"—")}</td></tr>`;
     }).join("")}</tbody></table>`
-    :"<p style='color:#8a98a6'>Nenhuma atividade cadastrada.</p>";
+    :"<p style='color:#3f6b60'>Nenhuma atividade cadastrada.</p>";
 
   const stkHtml=(p.stakeholders||[]).length?`<table>
     <thead><tr><th>Nome</th><th>Organização / Cargo</th><th>Influência</th><th>Interesse</th><th>Classificação</th></tr></thead>
@@ -5500,7 +5683,7 @@ function gerarHtmlRelatorioProjeto(p){
       <td>${esc(s.influencia||"—")}</td>
       <td>${esc(s.interesse||"—")}</td>
       <td>${esc(s.classificacao||"Secundário")}</td></tr>`).join("")}</tbody></table>`
-    :"<p style='color:#8a98a6'>Nenhum stakeholder cadastrado.</p>";
+    :"<p style='color:#3f6b60'>Nenhum stakeholder cadastrado.</p>";
 
   const riscosHtml=(p.riscos||[]).length?`<table>
     <thead><tr><th>Descrição</th><th>Probab.</th><th>Impacto</th><th>Severidade</th><th>Plano de resposta</th></tr></thead>
@@ -5510,7 +5693,7 @@ function gerarHtmlRelatorioProjeto(p){
       <td>${esc(r.impacto||"—")}</td>
       <td><b>${esc(severidadeRisco(r))}</b></td>
       <td>${esc(r.resposta||"—")}</td></tr>`).join("")}</tbody></table>`
-    :"<p style='color:#8a98a6'>Nenhum risco mapeado.</p>";
+    :"<p style='color:#3f6b60'>Nenhum risco mapeado.</p>";
 
   const reunHtml=reuns.length?`<table>
     <thead><tr><th>Data</th><th>Assunto</th><th>Participantes</th><th class="num">Entregas</th></tr></thead>
@@ -5522,7 +5705,7 @@ function gerarHtmlRelatorioProjeto(p){
         <td style="font-size:12px">${esc((r.participantes||[]).slice(0,4).join(", "))}${(r.participantes||[]).length>4?" …":""}</td>
         <td style="text-align:center">${ns||"—"}</td></tr>`;
     }).join("")}</tbody></table>`
-    :"<p style='color:#8a98a6'>Nenhuma reunião registrada.</p>";
+    :"<p style='color:#3f6b60'>Nenhuma reunião registrada.</p>";
 
   let finHtml="";
   if(showFin){
@@ -5555,7 +5738,7 @@ function gerarHtmlRelatorioProjeto(p){
   .rpt .kpi{border:1px solid #d8dde2;border-radius:8px;padding:10px 13px;background:#f9fafb}
   .rpt .kpi .lab{font-size:10.5px;color:#5d6c7a;text-transform:uppercase;letter-spacing:.04em;font-weight:600}
   .rpt .kpi .val{font-size:19px;font-weight:700;color:#1f3a3a;margin-top:4px}
-  .rpt .rodape{margin-top:36px;padding-top:12px;border-top:1px solid #e1e6ea;color:#8a98a6;font-size:11.5px}
+  .rpt .rodape{margin-top:36px;padding-top:12px;border-top:1px solid #e1e6ea;color:#3f6b60;font-size:11.5px}
   @media print{.rpt{margin:0;padding:0}body{background:#fff}.rpt .kpis{break-inside:avoid}}
   </style>`;
 
