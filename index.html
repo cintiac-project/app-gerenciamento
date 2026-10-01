@@ -197,6 +197,13 @@
   }
   .select:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
   .select{max-width:100%;min-width:0;text-overflow:ellipsis}
+  .rl-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+  .rl-f{min-width:0}
+  .rl-f select,.rl-f input{width:100%;min-width:0;padding:8px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface);
+    color:var(--ink);font-weight:500;text-overflow:ellipsis;font-family:inherit}
+  .rl-f select:focus,.rl-f input:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+  @media(max-width:900px){.rl-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:560px){.rl-grid{grid-template-columns:minmax(0,1fr)}.rl-f[style]{grid-column:auto!important}}
   .field-inline{max-width:100%;min-width:0}
   .field-inline .select{max-width:min(320px,100%);white-space:nowrap;overflow:hidden}
   @media(max-width:640px){.field-inline{flex-wrap:wrap;width:100%}.field-inline .select{flex:1;max-width:100%}}
@@ -959,6 +966,68 @@ function excluirAtividadeComConfirmacao(a,onDone){
       if(onDone) onDone(); else render();
     }
   );
+}
+
+/* ------------------------------------------------------------------
+   MOVER ATIVIDADE PARA OUTRO PROJETO (alocação equivocada)
+   Leva junto a Matriz RACI da atividade e, opcionalmente, as horas
+   apontadas nela. Dependências não atravessam projetos: as da própria
+   atividade (predecessoras) e as que outras atividades do projeto de
+   origem tinham com ela são desfeitas. */
+function moverAtividadeProjeto(a){
+  const origem=getProjeto(a.projetoId);
+  const destinos=DB.data.projetos.filter(x=>x.id!==a.projetoId).sort((x,y)=>(x.nome||"").localeCompare(y.nome||"","pt-BR"));
+  if(!destinos.length){ toast("Não há outro projeto para receber esta atividade."); return; }
+  const horasAtiv=DB.data.horas.filter(h=>h.atividadeId===a.id);
+  const totalH=horasAtiv.reduce((t,h)=>t+(+h.horas||0),0);
+  const preds=Array.isArray(a.predecessorasIds)?a.predecessorasIds.filter(id=>DB.data.atividades.some(x=>x.id===id)):[];
+  const sucs=DB.data.atividades.filter(x=>x.id!==a.id && x.projetoId===a.projetoId && Array.isArray(x.predecessorasIds) && x.predecessorasIds.includes(a.id));
+  const avisos=[];
+  if(preds.length) avisos.push(`${preds.length} predecessora(s) será(ão) desvinculada(s)`);
+  if(sucs.length) avisos.push(`${sucs.length} atividade(s) que dependia(m) desta perderá(ão) o vínculo`);
+  const fields=[
+    {key:"destinoId",label:"Projeto de destino",type:"select",required:true,
+      options:[{value:"",label:"Selecione…"}].concat(destinos.map(x=>({value:x.id,label:`${x.nome} — ${nomeSessao(x.sessaoId)}`}))),
+      help:`A atividade "${a.nome}" está hoje em "${origem?origem.nome:"—"}". A Matriz RACI dela acompanha a mudança.${avisos.length?" Atenção: "+avisos.join("; ")+".":""}`}
+  ];
+  if(horasAtiv.length) fields.push({key:"moverHoras",label:"Horas apontadas",checkboxLabel:`Mover também ${horasAtiv.length} apontamento(s) de horas desta atividade (${Math.round(totalH*10)/10} h)`,type:"checkbox",full:true,
+    help:"Desmarcado, as horas continuam no projeto de origem, apenas sem vínculo com a atividade."});
+  openForm({
+    title:"Mover atividade para outro projeto",
+    values:{destinoId:"",moverHoras:true},
+    fields,
+    onSave:async(v)=>{
+      const destino=getProjeto(v.destinoId);
+      if(!destino){ toast("Escolha o projeto de destino."); return false; }
+      const antigoId=a.projetoId;
+      // 1) dependências não atravessam projetos
+      for(const x of sucs){
+        x.predecessorasIds=x.predecessorasIds.filter(id=>id!==a.id);
+        await sbUpdate("atividades", x.id, {predecessoras_ids:x.predecessorasIds});
+      }
+      a.predecessorasIds=[];
+      // 2) a própria atividade
+      a.projetoId=destino.id;
+      await sbUpdate("atividades", a.id, {projeto_id:destino.id, predecessoras_ids:[]});
+      // 3) Matriz RACI
+      await sbUpdateWhere("raci", qsEq("atividade_id",a.id), {projeto_id:destino.id});
+      if(origem && origem.raci && origem.raci[a.id]){
+        destino.raci=destino.raci||{}; destino.raci[a.id]=origem.raci[a.id]; delete origem.raci[a.id];
+      }
+      // 4) horas apontadas
+      if(horasAtiv.length){
+        if(v.moverHoras){
+          await sbUpdateWhere("horas", qsEq("atividade_id",a.id), {projeto_id:destino.id});
+          horasAtiv.forEach(h=>{ h.projetoId=destino.id; });
+        } else {
+          await sbUpdateWhere("horas", qsEq("atividade_id",a.id), {atividade_id:null});
+          horasAtiv.forEach(h=>{ h.atividadeId=null; });
+        }
+      }
+      toast(`Atividade movida para "${destino.nome}".`);
+      render();
+    }
+  });
 }
 
 /* ------------------------------------------------------------------
@@ -3206,6 +3275,7 @@ function projCronograma(c,p){
         ${ocultarPct?"":`<span style="font-size:11.5px;font-weight:600;width:34px">${prog}%</span>`}</div></td>
       <td class="actions">${podeEditar?`
         <button class="btn-icon" data-eda="${a.id}">✎</button>
+        <button class="btn-icon" data-mva="${a.id}" title="Mover para outro projeto">⇄</button>
         <button class="btn-icon del" data-dla="${a.id}">🗑</button>`:""}</td></tr>`;
   }).join("");
 
@@ -3213,6 +3283,7 @@ function projCronograma(c,p){
   <div class="toolbar">
     <span class="section-title" style="margin:0">Atividades do cronograma</span>
     <div class="spacer"></div>
+    ${todasAts.length?`<button class="btn ghost sm" id="xlsx-crono" title="Exporta as atividades exibidas (respeita os filtros de status e período)">📊 Exportar Excel</button>`:""}
     ${podeEditar?`
     <button class="btn" id="add-ativ">+ Nova atividade</button>
     <button class="btn ghost sm" id="csv-modelo-crono">📋 Modelo CSV</button>
@@ -3262,6 +3333,7 @@ function projCronograma(c,p){
   const open=()=>formAtividade(p.id);
   $("#add-ativ").onclick=open;
   if($("#add-ativ2")) $("#add-ativ2").onclick=open;
+  if($("#xlsx-crono")) $("#xlsx-crono").onclick=()=>exportarCronogramaExcel(p,ats,todasAts.length);
   $("#csv-modelo-crono").onclick=baixarModeloCronograma;
   $("#csv-import-crono").onclick=()=>$("#csv-file-crono").click();
   $("#csv-file-crono").onchange=async (e)=>{
@@ -3269,6 +3341,7 @@ function projCronograma(c,p){
     render();
   };
   c.querySelectorAll("[data-eda]").forEach(b=>b.onclick=()=>formAtividade(p.id,getAtividade(b.dataset.eda)));
+  c.querySelectorAll("[data-mva]").forEach(b=>b.onclick=()=>moverAtividadeProjeto(getAtividade(b.dataset.mva)));
   c.querySelectorAll("[data-dla]").forEach(b=>b.onclick=()=>{
     excluirAtividadeComConfirmacao(getAtividade(b.dataset.dla));
   });
@@ -5151,8 +5224,15 @@ const REL_CSS=`.rp{font-family:'Atkinson Hyperlegible',Calibri,Arial,sans-serif;
 .rp-B .rp-h td{background:#eef4f2;border-left:8px solid #0f7a63;border-bottom:1px solid #e2dccd}.rp-B .eb{color:#0f7a63}
 .rp-B h3{background:#d5e6e1;color:#0a4a3c;padding:6px 10px;border-left:4px solid #0f7a63}.rp-B .rp-k td{background:#fff;border:1px solid #e2dccd}.rp-B .rp-k .v{color:#0f7a63}.rp-B .rp-t th{background:#d5e6e1;color:#0a4a3c}`;
 function relTab(cols,rows){
-  return `<table class="rp-t"><thead><tr>${cols.map(c=>`<th>${c}</th>`).join("")}</tr></thead><tbody>${
-    rows.length?rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join(""):`<tr><td colspan="${cols.length}" class="rp-v">Nenhum registro.</td></tr>`}</tbody></table>`;
+  const txt=c=>String(c).replace(/<[^>]*>/g,"").trim();
+  const curto=c=>txt(c).length<=26;
+  const numerico=c=>/^(R\$\s?)?[\d.,]+%?$|^\d{1,2}\/\d{2}(\/\d{4})?(\s*[→-]\s*\d{1,2}\/\d{2}(\/\d{4})?)?$/.test(txt(c));
+  const td=(c,k)=>{
+    const nw=k>0&&curto(c), num=numerico(c);
+    return `<td${nw?' nowrap':''} style="${nw?'white-space:nowrap;':''}${num?"font-family:'IBM Plex Sans',Arial,sans-serif;":''}">${c}</td>`;
+  };
+  return `<table class="rp-t"><thead><tr>${cols.map((c,k)=>`<th${k>0?' nowrap style="white-space:nowrap"':''}>${c}</th>`).join("")}</tr></thead><tbody>${
+    rows.length?rows.map(r=>`<tr>${r.map(td).join("")}</tr>`).join(""):`<tr><td colspan="${cols.length}" class="rp-v">Nenhum registro.</td></tr>`}</tbody></table>`;
 }
 function relKpis(it){ return `<table class="rp-k"><tr>${it.map(i=>`<td><div class="l">${i[0]}</div><div class="v">${i[1]}</div><div class="s">${i[2]||""}</div></td>`).join("")}</tr></table>`; }
 function relSec(t,h){ return `<div class="rp-s"><h3>${t}</h3>${h}</div>`; }
@@ -5261,7 +5341,7 @@ function gerarRelatorio(o){
       +relSec("Atividades",relTab(["Projeto","Atividade","Responsável","Prazo","Situação"],
         d.ats.filter(a=>d.noPer(a)&&a.status!=="Concluída").sort((a,b)=>(a.dataFimPrev||"").localeCompare(b.dataFimPrev||""))
           .map(a=>[d.nomeP(a.projetoId),esc(a.nome),d.nomesAt(a),fmtDate(a.dataFimPrev),d.sit(a)])))
-      +(d.gest?relSec("Orçamento previsto × realizado",relTab(["Projeto","Previsto (total)","Realizado","A desembolsar"],
+      +(d.gest?relSec("Orçamento previsto × realizado",relTab(["Projeto","Previsto","Realizado","A desembolsar"],
           d.ps.map(p=>[esc(p.nome),fmtBRL(d.orc(p)),fmtBRL(d.real(p)),fmtBRL(d.prev(p))])))
         +relSec("Cronograma de desembolso (por mês)",relTabMeses(d,"ope")):"")
       +relSec("Bloqueios",relLista(d.ats.filter(a=>d.bloq(a).length&&a.status!=="Concluída").map(a=>`${esc(a.nome)} — aguardando ${d.bloq(a).map(x=>esc(x.nome)).join("; ")}`)));
@@ -5288,11 +5368,11 @@ function viewRelatorios(v){
     modalExportar("📤 Exportar "+REL_MODELOS[R.modelo].n,html,relParaTexto(html),nome);
   });
   const lb='style="display:block;font-size:12px;font-weight:700;margin-bottom:4px;color:var(--ink-soft)"';
-  v.innerHTML=`<div class="card" style="margin-bottom:16px"><div class="card-pad"><div class="grid g4">
-    <div><label ${lb}>Modelo (público)</label><select id="rl-mod">${Object.keys(REL_MODELOS).map(k=>opt(k,REL_MODELOS[k].n,k===R.modelo)).join("")}</select></div>
-    <div><label ${lb}>Escopo</label><select id="rl-proj">${opt("","Portfólio completo",!R.proj)}${DB.data.projetos.map(x=>opt(x.id,x.nome,x.id===R.proj)).join("")}</select></div>
-    ${R.modelo==="ata"?`<div style="grid-column:span 2"><label ${lb}>Reunião</label><select id="rl-reu">${reunioes.length?reunioes.map(r=>opt(r.id,fmtDate(r.data)+" — "+(r.titulo||"Reunião"),r.id===R.reuniao)).join(""):opt("","Escolha um projeto com reuniões",true)}</select></div>`
-    :`<div><label ${lb}>De</label><input type="date" id="rl-de" value="${R.de||""}"></div><div><label ${lb}>Até</label><input type="date" id="rl-ate" value="${R.ate||""}"></div>`}
+  v.innerHTML=`<div class="card" style="margin-bottom:16px"><div class="card-pad"><div class="rl-grid">
+    <div class="rl-f"><label ${lb}>Modelo (público)</label><select id="rl-mod">${Object.keys(REL_MODELOS).map(k=>opt(k,REL_MODELOS[k].n,k===R.modelo)).join("")}</select></div>
+    <div class="rl-f"><label ${lb}>Escopo</label><select id="rl-proj">${opt("","Portfólio completo",!R.proj)}${DB.data.projetos.map(x=>opt(x.id,x.nome,x.id===R.proj)).join("")}</select></div>
+    ${R.modelo==="ata"?`<div class="rl-f" style="grid-column:span 2"><label ${lb}>Reunião</label><select id="rl-reu">${reunioes.length?reunioes.map(r=>opt(r.id,fmtDate(r.data)+" — "+(r.titulo||"Reunião"),r.id===R.reuniao)).join(""):opt("","Escolha um projeto com reuniões",true)}</select></div>`
+    :`<div class="rl-f"><label ${lb}>De</label><input type="date" id="rl-de" value="${R.de||""}"></div><div class="rl-f"><label ${lb}>Até</label><input type="date" id="rl-ate" value="${R.ate||""}"></div>`}
   </div></div></div>
   <div id="rl-prev" style="overflow:auto;border:1px solid var(--line);border-radius:12px;background:#fff;padding:12px">${gerarRelatorio(R)||`<div class="empty"><h3>Selecione um projeto e uma reunião</h3><p>A ata é gerada a partir de uma reunião registrada no projeto.</p></div>`}</div>`;
   const on=(id,k,fn)=>{ const e=$(id); if(e) e.onchange=ev=>{ R[k]=ev.target.value; if(fn) fn(); viewRelatorios(v); }; };
@@ -5860,6 +5940,103 @@ function parseCSVLine(linha, sep){
 /* ============================================================
    MODELO E IMPORTAÇÃO CSV DE CRONOGRAMA (atividades)
    ============================================================ */
+/* ---------- EXPORTAR CRONOGRAMA PARA EXCEL (.xlsx) ----------
+   Usa ExcelJS (carregada sob demanda) para manter as cores e fontes do app. */
+function carregarExcelJS(){
+  if(window.ExcelJS) return Promise.resolve();
+  return new Promise((ok,err)=>{
+    const sc=document.createElement("script");
+    sc.src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js";
+    sc.onload=ok; sc.onerror=()=>err(new Error("Não foi possível carregar a biblioteca do Excel. Verifique a conexão com a internet."));
+    document.head.appendChild(sc);
+  });
+}
+async function exportarCronogramaExcel(p,ats,totalProjeto){
+  if(!ats.length){ toast("Nenhuma atividade para exportar com os filtros atuais."); return; }
+  toast("Gerando planilha…");
+  try{
+    await carregarExcelJS();
+    const dt=v=>{ if(!v) return null; const [y,m,d]=String(v).slice(0,10).split("-").map(Number); return new Date(Date.UTC(y,m-1,d)); };
+    const hoje=todayStr();
+    const COR={navy:"FF0B2A26",verde:"FF0F7A63",dourado:"FFE0B04A",creme:"FFF6F3EC",linha:"FFE2DCCD",tinta:"FF0A1F1C"};
+    const fT="IBM Plex Sans", fB="Atkinson Hyperlegible";
+    const wb=new ExcelJS.Workbook(); wb.creator="Gestão de Portfólio"; wb.created=new Date();
+    const ws=wb.addWorksheet("Cronograma",{views:[{state:"frozen",ySplit:4,xSplit:2,showGridLines:false}],
+      pageSetup:{orientation:"landscape",fitToPage:true,fitToWidth:1,fitToHeight:0,paperSize:9}});
+    const cols=[["Nº",5],["Atividade",46],["Marco",8],["Categoria",24],["Responsável(is)",28],["Depende de",32],
+      ["Início previsto",13],["Término previsto",13],["Início real",13],["Término real",13],["Situação",14],["% Concluído",12],
+      ["Horas previstas",12],["Horas apontadas",12],["Anotações de progresso",50]];
+    ws.columns=cols.map(c=>({width:c[1]}));
+    const n=cols.length;
+    // título
+    ws.mergeCells(1,1,1,n); ws.mergeCells(2,1,2,n);
+    const c1=ws.getCell(1,1); c1.value=p.nome+" — Cronograma de atividades";
+    c1.font={name:fT,size:16,bold:true,color:{argb:"FFFFFFFF"}}; c1.alignment={vertical:"middle",indent:1};
+    const c2=ws.getCell(2,1);
+    c2.value="Gerado em "+fmtDate(hoje)+" · "+ats.length+(ats.length<totalProjeto?" de "+totalProjeto:"")+" atividade(s)"+(ats.length<totalProjeto?" (filtros ativos)":"");
+    c2.font={name:fB,size:10,color:{argb:"FFCFE8E1"}}; c2.alignment={vertical:"middle",indent:1};
+    for(let r=1;r<=2;r++) for(let c=1;c<=n;c++) ws.getCell(r,c).fill={type:"pattern",pattern:"solid",fgColor:{argb:COR.navy}};
+    for(let c=1;c<=n;c++) ws.getCell(2,c).border={bottom:{style:"thick",color:{argb:COR.dourado}}};
+    ws.getRow(1).height=30; ws.getRow(2).height=20; ws.getRow(3).height=6;
+    // cabeçalho
+    const hr=ws.getRow(4); hr.height=30;
+    cols.forEach((c,i)=>{ const x=hr.getCell(i+1); x.value=c[0];
+      x.font={name:fT,size:10,bold:true,color:{argb:"FFFFFFFF"}};
+      x.fill={type:"pattern",pattern:"solid",fgColor:{argb:COR.verde}};
+      x.alignment={vertical:"middle",horizontal:i>=6&&i<=13?"center":"left",wrapText:true};
+    });
+    ats.forEach((a,k)=>{
+      const prog=+a.progresso||0;
+      const atrasada=a.status!=="Cancelada" && a.dataFimPrev && daysBetween(hoje,a.dataFimPrev)<0 && prog<100;
+      const sit=atrasada?"Atrasada":(a.status||"Não iniciada");
+      const preds=(Array.isArray(a.predecessorasIds)?a.predecessorasIds:[]).map(id=>DB.data.atividades.find(x=>x.id===id)).filter(Boolean).map(x=>x.nome).join("; ");
+      const horasAp=DB.data.horas.filter(h=>h.atividadeId===a.id).reduce((s,h)=>s+(+h.horas||0),0);
+      const vals=[k+1,a.nome,a.marco?"Sim":"",nomeCategoria(a.categoriaId),nomesResponsaveisAtividade(a,p).join(", "),preds,
+        dt(a.dataInicioPrev),dt(a.dataFimPrev),dt(a.dataInicioReal),dt(a.dataFimReal),sit,prog/100,
+        totalHorasPrevistasAtividade(a)||null,horasAp||null,a.notasProgresso||""];
+      const row=ws.getRow(5+k);
+      vals.forEach((v,i)=>{
+        const x=row.getCell(i+1); x.value=v;
+        x.font={name:i===0||i===10?fT:fB,size:10,color:{argb:COR.tinta},bold:i===1};
+        x.alignment={vertical:"top",wrapText:[1,3,4,5,14].includes(i),horizontal:i===0||(i>=6&&i<=13)?"center":"left"};
+        x.border={bottom:{style:"thin",color:{argb:COR.linha}}};
+        if(k%2===1) x.fill={type:"pattern",pattern:"solid",fgColor:{argb:COR.creme}};
+        if(i>=6&&i<=9) x.numFmt="dd/mm/yyyy";
+        if(i===11) x.numFmt="0%";
+        if(i===12||i===13) x.numFmt="0.0";
+      });
+      const cs=row.getCell(11);
+      cs.font={name:fT,size:10,bold:true,color:{argb:sit==="Concluída"?"FF1F7A4D":sit==="Atrasada"?"FFB83232":sit==="Em andamento"?"FFB7791F":"FF3F6B60"}};
+      if(a.marco){ row.getCell(3).font={name:fT,size:10,bold:true,color:{argb:"FFA8741A"}}; row.getCell(1).border={left:{style:"thick",color:{argb:COR.dourado}},bottom:{style:"thin",color:{argb:COR.linha}}}; }
+    });
+    ws.autoFilter={from:{row:4,column:1},to:{row:4+ats.length,column:n}};
+    // aba de resumo
+    const rs=wb.addWorksheet("Resumo",{views:[{showGridLines:false}]});
+    rs.columns=[{width:26},{width:14},{width:14}];
+    const t=rs.getCell(1,1); t.value="Resumo por situação"; t.font={name:fT,size:14,bold:true,color:{argb:COR.navy}};
+    ["Situação","Atividades","% do total"].forEach((h,i)=>{ const x=rs.getCell(3,i+1); x.value=h;
+      x.font={name:fT,size:10,bold:true,color:{argb:"FFFFFFFF"}}; x.fill={type:"pattern",pattern:"solid",fgColor:{argb:COR.verde}}; });
+    const cont={}; ats.forEach(a=>{ const pr=+a.progresso||0;
+      const sv=(a.status!=="Cancelada"&&a.dataFimPrev&&daysBetween(hoje,a.dataFimPrev)<0&&pr<100)?"Atrasada":(a.status||"Não iniciada"); cont[sv]=(cont[sv]||0)+1; });
+    Object.keys(cont).forEach((sv,i)=>{ const r=4+i;
+      rs.getCell(r,1).value=sv; rs.getCell(r,2).value=cont[sv]; rs.getCell(r,3).value=cont[sv]/ats.length; rs.getCell(r,3).numFmt="0%";
+      [1,2,3].forEach(c=>{ rs.getCell(r,c).font={name:fB,size:10,color:{argb:COR.tinta}}; rs.getCell(r,c).border={bottom:{style:"thin",color:{argb:COR.linha}}}; });
+    });
+    const tr=4+Object.keys(cont).length;
+    rs.getCell(tr,1).value="Total"; rs.getCell(tr,2).value=ats.length;
+    [1,2,3].forEach(c=>{ rs.getCell(tr,c).font={name:fT,size:10,bold:true,color:{argb:COR.navy}}; });
+    const pm=Math.round(ats.reduce((s,a)=>s+(+a.progresso||0),0)/ats.length);
+    rs.getCell(tr+2,1).value="Progresso médio"; rs.getCell(tr+2,2).value=pm/100; rs.getCell(tr+2,2).numFmt="0%";
+    [1,2].forEach(c=>{ rs.getCell(tr+2,c).font={name:fT,size:10,bold:true,color:{argb:COR.verde}}; });
+    const buf=await wb.xlsx.writeBuffer();
+    const nome=("cronograma-"+p.nome+"-"+hoje).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,70)+".xlsx";
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));
+    a.download=nome; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+    toast("Planilha exportada: "+ats.length+" atividade(s).");
+  }catch(e){ console.error(e); toast("Erro ao exportar para Excel: "+(e.message||e)); }
+}
+
 function baixarModeloCronograma(){
   const catExemplo=DB.data.categorias.slice(0,1).map(c=>c.nome).join("") || "Nome da categoria";
   const hoje=todayStr();
