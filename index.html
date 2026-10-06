@@ -2506,6 +2506,8 @@ function viewPainel(v){
   <div class="toolbar">
     <span class="section-title" style="margin:0">Dashboards de horas</span>
     <div class="spacer"></div>
+    <button class="btn ghost sm" id="btn-imp-pend" title="Envie a planilha de pendências preenchida para gravar as datas reais e as horas executadas de uma vez">⬆ Importar pendências preenchidas</button>
+    <button class="btn ghost sm" id="btn-pend-conc" title="Planilha com as atividades concluídas que estão sem datas reais ou horas executadas, uma aba por projeto">⬇ Pendências de conclusão (.xlsx)</button>
     <div class="field-inline">Ano
       <select class="select" id="dash-year">${anosDisponiveis().map(y=>`<option ${y===ST.dashYear?"selected":""}>${y}</option>`).join("")}</select>
     </div>
@@ -2538,6 +2540,8 @@ function viewPainel(v){
   $("#painel-alerta-proj").onchange=e=>{ ST.painelAlertaProjeto=e.target.value; render(); };
   $("#painel-alerta-resp").onchange=e=>{ ST.painelAlertaResp=e.target.value; render(); };
   $("#dash-year").onchange=e=>{ ST.dashYear=e.target.value; render(); };
+  $("#btn-pend-conc").onclick=exportarPendenciasConclusao;
+  $("#btn-imp-pend").onclick=importarPendenciasConclusao;
   $("#dash-mode").querySelectorAll("button").forEach(b=>{
     b.onclick=()=>{ ST.dashMode=b.dataset.m; render(); };
   });
@@ -6111,6 +6115,291 @@ async function exportarCronogramaExcel(p,ats,totalProjeto){
     a.download=nome; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);
     toast("Planilha exportada: "+ats.length+" atividade(s).");
   }catch(e){ console.error(e); toast("Erro ao exportar para Excel: "+(e.message||e)); }
+}
+
+/* ---------- PLANILHA DE PENDÊNCIAS DE CONCLUSÃO (.xlsx) ----------
+   Lista as atividades CONCLUÍDAS que estão sem Início real, Término real ou
+   horas executadas de algum colaborador. Uma aba por projeto + aba "Resumo".
+   Uma linha por atividade × colaborador, para preencher as horas de cada
+   pessoa. As células a preencher saem em amarelo. */
+async function exportarPendenciasConclusao(){
+  toast("Gerando planilha de pendências…");
+  try{
+    await carregarExcelJS();
+    const dt=v=>{ if(!v) return null; const [y,m,d]=String(v).slice(0,10).split("-").map(Number); return new Date(Date.UTC(y,m-1,d)); };
+    const hoje=todayStr();
+    const COR={navy:"FF0B2A26",verde:"FF0F7A63",dourado:"FFE0B04A",creme:"FFF6F3EC",linha:"FFE2DCCD",tinta:"FF0A1F1C",pend:"FFFFF1B8",cinza:"FF8A948F"};
+    const fT="IBM Plex Sans", fB="Atkinson Hyperlegible";
+    const fill=c=>({type:"pattern",pattern:"solid",fgColor:{argb:c}});
+    const horaOk=v=>v!==null&&v!==undefined&&v!==""&&isFinite(+v)&&+v>=0;
+
+    // 1) levanta as pendências por projeto
+    const grupos=[];
+    DB.data.projetos.slice().sort((a,b)=>(a.nome||"").localeCompare(b.nome||"","pt-BR",{sensitivity:"base"})).forEach(proj=>{
+      const concl=DB.data.atividades.filter(a=>a.projetoId===proj.id && a.status!=="Cancelada" &&
+        (a.status==="Concluída"||(+a.progresso||0)>=100));
+      const pend=[];
+      concl.forEach(a=>{
+        const pessoas=(Array.isArray(a.estimativasPessoas)?a.estimativasPessoas:[]).filter(x=>x&&x.colaboradorId);
+        const faltas=[];
+        if(!a.dataInicioReal) faltas.push("Início real");
+        if(!a.dataFimReal) faltas.push("Término real");
+        const semHoras=pessoas.filter(x=>!horaOk(x.horasExecutadas));
+        if(semHoras.length) faltas.push("Horas executadas");
+        if(!pessoas.length) faltas.push("Sem equipe listada");
+        if(faltas.length) pend.push({a,pessoas,faltas});
+      });
+      if(concl.length) grupos.push({proj,totalConcl:concl.length,pend});
+    });
+    const comPend=grupos.filter(g=>g.pend.length);
+    if(!comPend.length){ toast("Nenhuma atividade concluída com pendências. Tudo preenchido!"); return; }
+
+    const wb=new ExcelJS.Workbook(); wb.creator="Gestão de Portfólio"; wb.created=new Date();
+
+    // 2) aba Resumo
+    const rs=wb.addWorksheet("Resumo",{views:[{showGridLines:false}]});
+    rs.columns=[{width:46},{width:22},{width:16},{width:16},{width:14}];
+    rs.mergeCells(1,1,1,5);
+    const t=rs.getCell(1,1); t.value="Pendências de conclusão — atividades concluídas sem dados";
+    t.font={name:fT,size:15,bold:true,color:{argb:"FFFFFFFF"}}; t.alignment={vertical:"middle",indent:1};
+    for(let c=1;c<=5;c++) rs.getCell(1,c).fill=fill(COR.navy);
+    rs.getRow(1).height=30;
+    rs.mergeCells(2,1,2,5);
+    const sub=rs.getCell(2,1);
+    sub.value="Gerado em "+fmtDate(hoje)+". Preencha as células em amarelo nas abas de cada projeto: Início real, Término real e Horas executadas de cada colaborador.";
+    sub.font={name:fB,size:10,color:{argb:COR.tinta}}; sub.alignment={wrapText:true,vertical:"middle",indent:1};
+    rs.getRow(2).height=32;
+    ["Projeto","Sessão","Concluídas","Com pendência","% pendente"].forEach((h,i)=>{
+      const x=rs.getCell(4,i+1); x.value=h; x.font={name:fT,size:10,bold:true,color:{argb:"FFFFFFFF"}};
+      x.fill=fill(COR.verde); x.alignment={vertical:"middle",horizontal:i>=2?"center":"left"};
+    });
+    let totC=0,totP=0;
+    comPend.forEach((g,i)=>{
+      const r=5+i; totC+=g.totalConcl; totP+=g.pend.length;
+      const vals=[g.proj.nome,nomeSessao(g.proj.sessaoId),g.totalConcl,g.pend.length,g.pend.length/g.totalConcl];
+      vals.forEach((v,j)=>{ const x=rs.getCell(r,j+1); x.value=v;
+        x.font={name:fB,size:10,color:{argb:COR.tinta}}; x.border={bottom:{style:"thin",color:{argb:COR.linha}}};
+        x.alignment={horizontal:j>=2?"center":"left"}; if(j===4) x.numFmt="0%"; });
+    });
+    const rt=5+comPend.length;
+    [["Total",null,totC,totP,totP/totC]].forEach(vals=>vals.forEach((v,j)=>{ const x=rs.getCell(rt,j+1); x.value=v;
+      x.font={name:fT,size:10,bold:true,color:{argb:COR.navy}}; x.alignment={horizontal:j>=2?"center":"left"}; if(j===4) x.numFmt="0%"; }));
+
+    // 3) uma aba por projeto
+    const usados=new Set(["Resumo"]);
+    const cols=[["ID da atividade",14],["Atividade",46],["Categoria",22],["Início previsto",13],["Término previsto",13],
+      ["Início real",14],["Término real",14],["Colaborador",30],["Horas previstas",12],["Horas executadas",13],["O que falta",32]];
+    const n=cols.length;
+    comPend.forEach(g=>{
+      let nome=String(g.proj.nome||"Projeto").replace(/[\\\/\?\*\[\]:]/g," ").trim().slice(0,28)||"Projeto";
+      let base=nome,k=2; while(usados.has(nome)){ nome=base.slice(0,28-String(k).length-1)+" "+k; k++; }
+      usados.add(nome);
+      const ws=wb.addWorksheet(nome,{views:[{state:"frozen",ySplit:4,xSplit:2,showGridLines:false}],
+        pageSetup:{orientation:"landscape",fitToPage:true,fitToWidth:1,fitToHeight:0,paperSize:9}});
+      ws.columns=cols.map(c=>({width:c[1]}));
+      ws.mergeCells(1,1,1,n); ws.mergeCells(2,1,2,n);
+      const c1=ws.getCell(1,1); c1.value=g.proj.nome+" — Pendências de conclusão";
+      c1.font={name:fT,size:15,bold:true,color:{argb:"FFFFFFFF"}}; c1.alignment={vertical:"middle",indent:1};
+      const c2=ws.getCell(2,1);
+      c2.value=g.pend.length+" de "+g.totalConcl+" atividade(s) concluída(s) com pendência · "+nomeSessao(g.proj.sessaoId)+" · gerado em "+fmtDate(hoje)+" · preencha as células amarelas";
+      c2.font={name:fB,size:10,color:{argb:"FFCFE8E1"}}; c2.alignment={vertical:"middle",indent:1};
+      for(let r=1;r<=2;r++) for(let c=1;c<=n;c++) ws.getCell(r,c).fill=fill(COR.navy);
+      for(let c=1;c<=n;c++) ws.getCell(2,c).border={bottom:{style:"thick",color:{argb:COR.dourado}}};
+      ws.getRow(1).height=30; ws.getRow(2).height=20; ws.getRow(3).height=6;
+      const hr=ws.getRow(4); hr.height=30;
+      cols.forEach((c,i)=>{ const x=hr.getCell(i+1); x.value=c[0];
+        x.font={name:fT,size:10,bold:true,color:{argb:"FFFFFFFF"}}; x.fill=fill(COR.verde);
+        x.alignment={vertical:"middle",horizontal:i>=3&&i!==7?"center":"left",wrapText:true}; });
+      let r=5, zebra=0;
+      g.pend.forEach(item=>{
+        const a=item.a;
+        const linhas=item.pessoas.length?item.pessoas:[null];
+        linhas.forEach((x,idx)=>{
+          const colab=x?getColab(x.colaboradorId):null;
+          const nomeCol=x?(colab?colab.nome:"(colaborador removido)"):"— sem equipe listada —";
+          const primeira=idx===0;
+          const faltaHora=x?!horaOk(x.horasExecutadas):false;
+          const falt=[];
+          if(primeira && !a.dataInicioReal) falt.push("Início real");
+          if(primeira && !a.dataFimReal) falt.push("Término real");
+          if(faltaHora) falt.push("Horas executadas");
+          if(!x) falt.push("Equipe/horas não cadastradas");
+          const vals=[a.id,primeira?a.nome:"",primeira?nomeCategoria(a.categoriaId):"",primeira?dt(a.dataInicioPrev):null,primeira?dt(a.dataFimPrev):null,
+            primeira?dt(a.dataInicioReal):null,primeira?dt(a.dataFimReal):null,nomeCol,
+            x&&x.horas!=null&&x.horas!==""?+x.horas:null, x&&horaOk(x.horasExecutadas)?+x.horasExecutadas:null, falt.join("; ")];
+          const row=ws.getRow(r);
+          vals.forEach((v,i)=>{
+            const c=row.getCell(i+1); c.value=v;
+            c.font={name:i===0?fB:fB,size:i===0?8:10,color:{argb:i===0?COR.cinza:COR.tinta},bold:i===1};
+            c.alignment={vertical:"top",wrapText:[1,2,10].includes(i),horizontal:(i>=3&&i!==7&&i!==10)?"center":"left"};
+            c.border={bottom:{style:"thin",color:{argb:idx===linhas.length-1?COR.linha:"FFF1ECDF"}}};
+            if(zebra%2===1) c.fill=fill(COR.creme);
+            if(i>=3&&i<=6) c.numFmt="dd/mm/yyyy";
+            if(i===8||i===9) c.numFmt="0.0";
+          });
+          // células a preencher
+          if(primeira && !a.dataInicioReal) row.getCell(6).fill=fill(COR.pend);
+          if(primeira && !a.dataFimReal) row.getCell(7).fill=fill(COR.pend);
+          if(faltaHora) row.getCell(10).fill=fill(COR.pend);
+          row.getCell(11).font={name:fT,size:10,bold:true,color:{argb:"FFB83232"}};
+          r++;
+        });
+        zebra++;
+      });
+      ws.autoFilter={from:{row:4,column:1},to:{row:r-1,column:n}};
+    });
+
+    const buf=await wb.xlsx.writeBuffer();
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));
+    a.download="pendencias-conclusao-"+hoje+".xlsx"; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+    toast("Planilha gerada: "+totP+" atividade(s) com pendência em "+comPend.length+" projeto(s).");
+  }catch(e){ console.error(e); toast("Erro ao gerar a planilha: "+(e.message||e)); }
+}
+
+/* ---------- IMPORTAR A PLANILHA DE PENDÊNCIAS PREENCHIDA ----------
+   Lê o .xlsx gerado por exportarPendenciasConclusao() depois de preenchido:
+   - Início real / Término real (primeira linha de cada atividade);
+   - Horas executadas de cada colaborador (uma linha por pessoa).
+   A atividade é identificada pela coluna "ID da atividade" e o colaborador
+   pelo nome. Células em branco NÃO apagam o que já existe no app. */
+function normNomeImp(s){ return String(s==null?"":s).normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim().toLowerCase(); }
+function valorCelulaImp(cell){
+  let v=cell?cell.value:null;
+  if(v && typeof v==="object" && !(v instanceof Date)){
+    if(Array.isArray(v.richText)) v=v.richText.map(t=>t.text).join("");
+    else if("result" in v) v=v.result;
+    else if("text" in v) v=v.text;
+  }
+  return v===undefined?null:v;
+}
+function parseDataImp(v){
+  if(v===null||v===undefined||(typeof v==="string"&&!v.trim())) return {vazio:true};
+  const iso=d=>d.getUTCFullYear()+"-"+pad(d.getUTCMonth()+1)+"-"+pad(d.getUTCDate());
+  if(v instanceof Date && !isNaN(v)) return {val:iso(v)};
+  if(typeof v==="number" && v>20000 && v<80000) return {val:iso(new Date(Math.round((v-25569)*86400000)))};
+  if(typeof v==="string"){
+    const t=v.trim(); let m;
+    if((m=t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/))){ const d=new Date(Date.UTC(+m[3],+m[2]-1,+m[1])); if(d.getUTCMonth()===+m[2]-1) return {val:iso(d)}; }
+    if((m=t.match(/^(\d{4})-(\d{2})-(\d{2})/))) return {val:m[1]+"-"+m[2]+"-"+m[3]};
+  }
+  return {invalido:true};
+}
+function parseHoraImp(v){
+  if(v===null||v===undefined||(typeof v==="string"&&!v.trim())) return {vazio:true};
+  const n=typeof v==="number"?v:parseFloat(String(v).trim().replace(",","."));
+  return (isFinite(n)&&n>=0)?{val:n}:{invalido:true};
+}
+function montarPlanoPendencias(wb){
+  const plano={itens:[],avisos:[],abas:0,linhas:0,restantes:0,ndatas:0,nhoras:0};
+  const grupos=new Map();
+  wb.worksheets.forEach(ws=>{
+    let hdr=0;
+    for(let r=1;r<=Math.min(ws.rowCount,10);r++){ if(normNomeImp(valorCelulaImp(ws.getCell(r,1)))==="id da atividade"){ hdr=r; break; } }
+    if(!hdr) return;
+    plano.abas++;
+    for(let r=hdr+1;r<=ws.rowCount;r++){
+      const id=String(valorCelulaImp(ws.getCell(r,1))||"").trim();
+      if(!id) continue;
+      plano.linhas++;
+      let g=grupos.get(id); if(!g){ g={id,aba:ws.name,ini:null,fim:null,horas:[]}; grupos.set(id,g); }
+      [[6,"ini","Início real"],[7,"fim","Término real"]].forEach(([col,k,rot])=>{
+        const d=parseDataImp(valorCelulaImp(ws.getCell(r,col)));
+        if(d.invalido) plano.avisos.push(`${ws.name}, linha ${r}: ${rot} inválido (use dd/mm/aaaa). Ignorado.`);
+        else if(d.val && !g[k]) g[k]=d.val;
+      });
+      g.horas.push({nome:String(valorCelulaImp(ws.getCell(r,8))||"").trim(),raw:valorCelulaImp(ws.getCell(r,10)),linha:r,aba:ws.name});
+    }
+  });
+  grupos.forEach(g=>{
+    const a=getAtividade(g.id);
+    if(!a){ plano.avisos.push(`Atividade com ID ${g.id} (aba "${g.aba}") não existe mais no app. Ignorada.`); return; }
+    const patch={}; let nd=0,nh=0;
+    let ini=g.ini||a.dataInicioReal||null, fim=g.fim||a.dataFimReal||null;
+    if(ini&&fim&&fim<ini){
+      plano.avisos.push(`"${a.nome}": Término real anterior ao Início real. Datas ignoradas.`);
+      ini=a.dataInicioReal||null; fim=a.dataFimReal||null;
+    }
+    if(ini!==(a.dataInicioReal||null)){ patch.dataInicioReal=ini; patch.inicioRealMesmo=(ini===a.dataInicioPrev); nd++; }
+    if(fim!==(a.dataFimReal||null)){ patch.dataFimReal=fim; patch.fimRealMesmo=(fim===a.dataFimPrev); nd++; }
+    const pessoas=(Array.isArray(a.estimativasPessoas)?a.estimativasPessoas:[]).map(x=>Object.assign({},x));
+    const usados=new Set();
+    g.horas.forEach(h=>{
+      const hv=parseHoraImp(h.raw);
+      if(hv.vazio) return;
+      if(normNomeImp(h.nome).includes("sem equipe")) return;
+      if(hv.invalido){ plano.avisos.push(`${h.aba}, linha ${h.linha}: horas executadas inválidas. Ignorado.`); return; }
+      const idx=pessoas.findIndex((x,j)=>!usados.has(j)&&x.colaboradorId&&normNomeImp((getColab(x.colaboradorId)||{}).nome)===normNomeImp(h.nome));
+      if(idx<0){ plano.avisos.push(`${h.aba}, linha ${h.linha}: colaborador "${h.nome}" não encontrado em "${a.nome}". Ignorado.`); return; }
+      usados.add(idx);
+      const atual=pessoas[idx].horasExecutadas;
+      if(atual!==null&&atual!==undefined&&atual!==""&&+atual===hv.val) return;
+      pessoas[idx].horasExecutadas=hv.val; nh++;
+    });
+    if(nh) patch.estimativasPessoas=pessoas;
+    if(!Object.keys(patch).length) return;
+    const concluida=a.status==="Concluída"||(+a.progresso||0)>=100;
+    const falta=concluida?erroConclusaoAtividade({dataInicioReal:ini,dataFimReal:fim,estimativasPessoas:pessoas}):"";
+    if(falta) plano.restantes++;
+    plano.ndatas+=nd; plano.nhoras+=nh;
+    plano.itens.push({a,patch,nd,nh});
+  });
+  return plano;
+}
+async function importarPendenciasConclusao(){
+  const inp=document.createElement("input");
+  inp.type="file"; inp.accept=".xlsx";
+  inp.onchange=async()=>{
+    const f=inp.files&&inp.files[0]; if(!f) return;
+    try{
+      toast("Lendo a planilha…");
+      await carregarExcelJS();
+      const wb=new ExcelJS.Workbook();
+      await wb.xlsx.load(await f.arrayBuffer());
+      const plano=montarPlanoPendencias(wb);
+      if(!plano.abas){ toast("Arquivo não reconhecido: use a planilha gerada pelo botão “Pendências de conclusão”."); return; }
+      mostrarPreviaImportacaoPendencias(plano);
+    }catch(e){ console.error(e); toast("Erro ao ler a planilha: "+(e.message||e)); }
+  };
+  inp.click();
+}
+function mostrarPreviaImportacaoPendencias(plano){
+  const av=plano.avisos.slice(0,15).map(t=>`<li>${esc(t)}</li>`).join("")+(plano.avisos.length>15?`<li>… e mais ${plano.avisos.length-15} aviso(s).</li>`:"");
+  $("#modal-root").innerHTML=`
+  <div class="overlay"><div class="modal" style="max-width:560px">
+    <div class="modal-head"><h3>Importar pendências preenchidas</h3></div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--ink-soft)">Foram lidas ${plano.linhas} linha(s) em ${plano.abas} aba(s).</p>
+      ${plano.itens.length?`<ul style="font-size:13.5px;line-height:1.7;margin:10px 0 0 18px">
+        <li><b>${plano.itens.length}</b> atividade(s) serão atualizadas</li>
+        <li><b>${plano.ndatas}</b> data(s) real(is) a gravar</li>
+        <li><b>${plano.nhoras}</b> lançamento(s) de horas executadas a gravar</li>
+        ${plano.restantes?`<li>${plano.restantes} atividade(s) ainda ficarão com pendência após a importação</li>`:""}
+      </ul>
+      <p style="font-size:12px;color:var(--ink-faint);margin-top:8px">Células em branco não apagam dados já existentes.</p>`
+      :`<p style="font-size:13.5px;margin-top:10px">Nada novo para gravar: as células amarelas ainda estão em branco ou os valores já estão no app.</p>`}
+      ${av?`<div style="margin-top:12px;padding:9px 12px;border-radius:8px;background:var(--danger-bg);color:var(--danger);font-size:12.5px">
+        <b>Avisos (${plano.avisos.length})</b><ul style="margin:6px 0 0 18px;line-height:1.5">${av}</ul></div>`:""}
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="imp-no">${plano.itens.length?"Cancelar":"Fechar"}</button>
+      ${plano.itens.length?'<button class="btn" id="imp-yes">Gravar no app</button>':""}
+    </div></div></div>`;
+  $("#imp-no").onclick=closeModal;
+  if(!plano.itens.length) return;
+  $("#imp-yes").onclick=async()=>{
+    const btn=$("#imp-yes"); btn.disabled=true; btn.textContent="Gravando…";
+    let ok=0; const falhas=[];
+    for(const it of plano.itens){
+      try{
+        await sbUpdate("atividades", it.a.id, toSnake(it.patch));
+        Object.assign(it.a,it.patch); ok++;
+      }catch(e){ falhas.push(`"${it.a.nome}": ${e.message||e}`); }
+    }
+    closeModal();
+    toast(`${ok} atividade(s) atualizada(s).`+(falhas.length?` ${falhas.length} falha(s): ${falhas.slice(0,2).join(" | ")}`:""));
+    render();
+  };
 }
 
 function baixarModeloCronograma(){
