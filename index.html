@@ -2051,7 +2051,10 @@ const SESSAO_CONFIG={
 // "Articulação Institucional" nasceu dentro de Rotinas: começa com a mesma
 // configuração (mesmos campos e abas), para os projetos movidos para cá não
 // mudarem de aparência. Ajuste aqui se quiser outro layout para esta sessão.
-SESSAO_CONFIG.articulacao=Object.assign({},SESSAO_CONFIG.rotinas);
+SESSAO_CONFIG.articulacao=Object.assign({},SESSAO_CONFIG.rotinas,{
+  // abas que não fazem sentido para Articulação Institucional
+  abasOcultas:["ocupacao","financeiro","raci","riscos"]
+});
 function cfgSessao(id){ return SESSAO_CONFIG[id]||{}; }
 
 // campo foi removido do formulário desta sessão (ex.: "cliente" em Rotinas
