@@ -974,57 +974,123 @@ function excluirAtividadeComConfirmacao(a,onDone){
    apontadas nela. Dependências não atravessam projetos: as da própria
    atividade (predecessoras) e as que outras atividades do projeto de
    origem tinham com ela são desfeitas. */
-function moverAtividadeProjeto(a){
-  const origem=getProjeto(a.projetoId);
-  const destinos=DB.data.projetos.filter(x=>x.id!==a.projetoId).sort((x,y)=>(x.nome||"").localeCompare(y.nome||"","pt-BR"));
-  if(!destinos.length){ toast("Não há outro projeto para receber esta atividade."); return; }
-  const horasAtiv=DB.data.horas.filter(h=>h.atividadeId===a.id);
-  const totalH=horasAtiv.reduce((t,h)=>t+(+h.horas||0),0);
-  const preds=Array.isArray(a.predecessorasIds)?a.predecessorasIds.filter(id=>DB.data.atividades.some(x=>x.id===id)):[];
-  const sucs=DB.data.atividades.filter(x=>x.id!==a.id && x.projetoId===a.projetoId && Array.isArray(x.predecessorasIds) && x.predecessorasIds.includes(a.id));
+/* MOVER ATIVIDADE(S) PARA OUTRO PROJETO — uma ou várias de uma vez.
+   - Nome repetido no destino: o banco só aceita um nome por projeto
+     (constraint atividades_projeto_nome_unq). Por isso o formulário pergunta
+     o que fazer: renomear (padrão, acrescenta o projeto de origem ao nome) ou
+     não mover as duplicadas.
+   - Dependências: vínculos ENTRE as atividades movidas são mantidos; vínculos
+     com atividades que ficam no projeto de origem são desfeitos.
+   - O estado local só muda DEPOIS que o servidor confirma (antes, uma falha
+     deixava a tela com a atividade "movida" sem ter sido salva). */
+function moverAtividadeProjeto(a){ moverAtividadesProjeto([a]); }
+function moverAtividadesProjeto(lista){
+  lista=(lista||[]).filter(Boolean);
+  if(!lista.length) return;
+  const origemId=lista[0].projetoId;
+  lista=lista.filter(x=>x.projetoId===origemId);
+  const origem=getProjeto(origemId);
+  const n=lista.length;
+  const movIds=new Set(lista.map(x=>x.id));
+  const destinos=DB.data.projetos.filter(x=>x.id!==origemId).sort((x,y)=>(x.nome||"").localeCompare(y.nome||"","pt-BR"));
+  if(!destinos.length){ toast("Não há outro projeto para receber "+(n>1?"estas atividades.":"esta atividade.")); return; }
+  const horasDe=new Map(lista.map(x=>[x.id,DB.data.horas.filter(h=>h.atividadeId===x.id)]));
+  let nHoras=0,totalH=0;
+  horasDe.forEach(arr=>arr.forEach(h=>{ nHoras++; totalH+=(+h.horas||0); }));
+  let predsCortadas=0,sucsCortadas=0;
+  lista.forEach(x=>predecessorasDe(x).forEach(id=>{ if(!movIds.has(id)&&DB.data.atividades.some(y=>y.id===id)) predsCortadas++; }));
+  DB.data.atividades.forEach(x=>{ if(x.projetoId===origemId&&!movIds.has(x.id)) predecessorasDe(x).forEach(id=>{ if(movIds.has(id)) sucsCortadas++; }); });
   const avisos=[];
-  if(preds.length) avisos.push(`${preds.length} predecessora(s) será(ão) desvinculada(s)`);
-  if(sucs.length) avisos.push(`${sucs.length} atividade(s) que dependia(m) desta perderá(ão) o vínculo`);
+  if(predsCortadas) avisos.push(`${predsCortadas} vínculo(s) de predecessora com atividades que ficam no projeto de origem será(ão) desfeito(s)`);
+  if(sucsCortadas) avisos.push(`${sucsCortadas} atividade(s) que ficam na origem e dependiam ${n>1?"destas":"desta"} perderá(ão) o vínculo`);
   const fields=[
     {key:"destinoId",label:"Projeto de destino",type:"select",required:true,
       options:[{value:"",label:"Selecione…"}].concat(destinos.map(x=>({value:x.id,label:`${x.nome} — ${nomeSessao(x.sessaoId)}`}))),
-      help:`A atividade "${a.nome}" está hoje em "${origem?origem.nome:"—"}". A Matriz RACI dela acompanha a mudança.${avisos.length?" Atenção: "+avisos.join("; ")+".":""}`}
+      help:(n===1?`A atividade "${lista[0].nome}" está hoje em "${origem?origem.nome:"—"}".`:`${n} atividades selecionadas, hoje em "${origem?origem.nome:"—"}".`)+
+        ` A Matriz RACI ${n>1?"delas acompanha":"dela acompanha"} a mudança.${avisos.length?" Atenção: "+avisos.join("; ")+".":""}`},
+    {key:"duplicadas",label:"Se já existir atividade com o mesmo nome no destino",type:"select",
+      placeholder:"Renomear (acrescentar o nome do projeto de origem)",
+      options:[{value:"pular",label:"Não mover as duplicadas"}],
+      help:"Um mesmo projeto não pode ter duas atividades com o mesmo nome."}
   ];
-  if(horasAtiv.length) fields.push({key:"moverHoras",label:"Horas apontadas",checkboxLabel:`Mover também ${horasAtiv.length} apontamento(s) de horas desta atividade (${Math.round(totalH*10)/10} h)`,type:"checkbox",full:true,
+  if(nHoras) fields.push({key:"moverHoras",label:"Horas apontadas",checkboxLabel:`Mover também ${nHoras} apontamento(s) de horas ${n>1?"destas atividades":"desta atividade"} (${Math.round(totalH*10)/10} h)`,type:"checkbox",full:true,
     help:"Desmarcado, as horas continuam no projeto de origem, apenas sem vínculo com a atividade."});
+  const msgErro=e=>{ const m=String((e&&e.message)||e); return /atividades_projeto_nome_unq|23505/.test(m)?"já existe uma atividade com este nome no projeto de destino":m; };
   openForm({
-    title:"Mover atividade para outro projeto",
-    values:{destinoId:"",moverHoras:true},
+    title:n>1?`Mover ${n} atividades para outro projeto`:"Mover atividade para outro projeto",
+    values:{destinoId:"",duplicadas:"",moverHoras:true},
     fields,
     onSave:async(v)=>{
       const destino=getProjeto(v.destinoId);
       if(!destino){ toast("Escolha o projeto de destino."); return false; }
-      const antigoId=a.projetoId;
-      // 1) dependências não atravessam projetos
-      for(const x of sucs){
-        x.predecessorasIds=x.predecessorasIds.filter(id=>id!==a.id);
-        await sbUpdate("atividades", x.id, {predecessoras_ids:x.predecessorasIds});
-      }
-      a.predecessorasIds=[];
-      // 2) a própria atividade
-      a.projetoId=destino.id;
-      await sbUpdate("atividades", a.id, {projeto_id:destino.id, predecessoras_ids:[]});
-      // 3) Matriz RACI
-      await sbUpdateWhere("raci", qsEq("atividade_id",a.id), {projeto_id:destino.id});
-      if(origem && origem.raci && origem.raci[a.id]){
-        destino.raci=destino.raci||{}; destino.raci[a.id]=origem.raci[a.id]; delete origem.raci[a.id];
-      }
-      // 4) horas apontadas
-      if(horasAtiv.length){
-        if(v.moverHoras){
-          await sbUpdateWhere("horas", qsEq("atividade_id",a.id), {projeto_id:destino.id});
-          horasAtiv.forEach(h=>{ h.projetoId=destino.id; });
-        } else {
-          await sbUpdateWhere("horas", qsEq("atividade_id",a.id), {atividade_id:null});
-          horasAtiv.forEach(h=>{ h.atividadeId=null; });
+      // 1) resolve nomes repetidos no destino
+      const nomesDest=new Set(DB.data.atividades.filter(x=>x.projetoId===destino.id).map(x=>normNomeImp(x.nome)));
+      const plano=[],pulados=[]; let renomeadas=0;
+      lista.forEach(a=>{
+        let novoNome=a.nome;
+        if(nomesDest.has(normNomeImp(a.nome))){
+          if(v.duplicadas==="pular"){ pulados.push(a); return; }
+          const base=`${a.nome} (${(origem?origem.nome:"outro projeto").slice(0,40)})`;
+          novoNome=base; let k=2;
+          while(nomesDest.has(normNomeImp(novoNome))) novoNome=`${base} ${k++}`;
+          renomeadas++;
         }
+        nomesDest.add(normNomeImp(novoNome));
+        plano.push({a,novoNome});
+      });
+      if(!plano.length){
+        const e=new Error(`${n>1?"Todas as atividades selecionadas já existem":"Esta atividade já existe"} no projeto de destino (mesmo nome). Escolha "Renomear" para movê-${n>1?"las":"la"} mesmo assim.`);
+        e.validacao=true; throw e;
       }
-      toast(`Atividade movida para "${destino.nome}".`);
+      // 2) move uma a uma (banco primeiro, estado local depois)
+      const okIds=new Set(), falhas=[];
+      for(const it of plano){
+        const a=it.a; let movida=false;
+        try{
+          const preds=predecessorasDe(a).filter(id=>movIds.has(id));
+          const patch={projeto_id:destino.id,predecessoras_ids:preds};
+          if(it.novoNome!==a.nome) patch.nome=it.novoNome;
+          await sbUpdate("atividades", a.id, patch);
+          a.projetoId=destino.id; a.predecessorasIds=preds; a.nome=it.novoNome;
+          okIds.add(a.id); movida=true;
+          await sbUpdateWhere("raci", qsEq("atividade_id",a.id), {projeto_id:destino.id});
+          if(origem && origem.raci && origem.raci[a.id]){
+            destino.raci=destino.raci||{}; destino.raci[a.id]=origem.raci[a.id]; delete origem.raci[a.id];
+          }
+          const hs=horasDe.get(a.id)||[];
+          if(hs.length){
+            if(v.moverHoras){
+              await sbUpdateWhere("horas", qsEq("atividade_id",a.id), {projeto_id:destino.id});
+              hs.forEach(h=>{ h.projetoId=destino.id; });
+            } else {
+              await sbUpdateWhere("horas", qsEq("atividade_id",a.id), {atividade_id:null});
+              hs.forEach(h=>{ h.atividadeId=null; });
+            }
+          }
+        }catch(e){ falhas.push(`"${a.nome}"${movida?" (movida, mas RACI/horas não atualizados)":""}: ${msgErro(e)}`); }
+      }
+      // 3) acerta dependências: entre as movidas só valem as que realmente foram;
+      //    quem ficou na origem perde o vínculo com as que saíram
+      try{
+        for(const a of lista){
+          if(!okIds.has(a.id)) continue;
+          const cur=predecessorasDe(a), ok=cur.filter(id=>okIds.has(id));
+          if(ok.length!==cur.length){ await sbUpdate("atividades", a.id, {predecessoras_ids:ok}); a.predecessorasIds=ok; }
+        }
+        for(const x of DB.data.atividades){
+          if(x.projetoId!==origemId) continue;
+          const cur=predecessorasDe(x), novo=cur.filter(id=>!okIds.has(id));
+          if(novo.length!==cur.length){ await sbUpdate("atividades", x.id, {predecessoras_ids:novo}); x.predecessorasIds=novo; }
+        }
+      }catch(e){ falhas.push("dependências: "+msgErro(e)); }
+      if(!okIds.size && falhas.length){
+        const e=new Error("Nenhuma atividade foi movida. "+falhas.slice(0,3).join(" | ")); e.validacao=true; throw e;
+      }
+      if(ST.cronoSelecionadas) ST.cronoSelecionadas.clear();
+      toast(`${okIds.size} atividade(s) movida(s) para "${destino.nome}".`+
+        (renomeadas?` ${renomeadas} renomeada(s) por já existir o mesmo nome no destino.`:"")+
+        (pulados.length?` ${pulados.length} não movida(s): nome já existe no destino.`:"")+
+        (falhas.length?` ${falhas.length} falha(s): ${falhas.slice(0,2).join(" | ")}`:""));
       render();
     }
   });
@@ -1761,6 +1827,7 @@ const ST = {
   cronoStatusVisiveis:new Set(["Não iniciada","Em andamento","Atrasada","Cancelada"]),
   // filtro de período do cronograma físico (aplicado junto com o de status)
   cronoFiltroData:{de:"",ate:""},
+  cronoSelecionadas:new Set(),
   // projetos "Concluído" somem da lista do Portfólio por padrão e só voltam
   // a aparecer quando esse botão-filtro é acionado (mesmo padrão do filtro
   // de status do cronograma acima).
@@ -3311,6 +3378,8 @@ function projCronograma(c,p){
   };
   const ats=todasAts.filter(a=>ST.cronoStatusVisiveis.has(statusEfetivo(a)) && cronoDataOk(a));
   const ocultas=todasAts.length-ats.length;
+  // seleção para mover em lote: mantém só as atividades visíveis neste cronograma
+  ST.cronoSelecionadas=new Set([...ST.cronoSelecionadas].filter(id=>ats.some(a=>a.id===id)));
   const fd=ST.cronoFiltroData;
   const filtroDataAtivo=!!(fd.de||fd.ate);
   const filtroHtml=`
@@ -3346,6 +3415,7 @@ function projCronograma(c,p){
     // marcos (entregas/pontos críticos) recebem uma borda lateral e um selo
     // "🚩 Marco" para se destacarem visualmente na lista de atividades.
     return `<tr${a.marco?' style="box-shadow:inset 3px 0 0 var(--gold)"':""}>
+      ${podeEditar?`<td style="width:34px;text-align:center"><input type="checkbox" data-sel="${a.id}" ${ST.cronoSelecionadas.has(a.id)?"checked":""} title="Selecionar para mover"></td>`:""}
       <td><div style="font-weight:600;display:flex;align-items:center;gap:6px">${esc(a.nome)}${a.marco?`<span class="badge b-marco" title="Marco de entrega deste projeto">🚩 Marco</span>`:""}${selosDependenciaHtml(a)}</div>
         <div style="font-size:11px;color:var(--ink-faint)">${esc(nomeCategoria(a.categoriaId))} · Resp.: ${responsaveis.join(", ")||"—"}${horasAtiv?` · ${horasAtiv}h apontadas`:""}${totalHorasPrevistasAtividade(a)>0?` · ${fmtNum(totalHorasPrevistasAtividade(a),1)}h previstas (${pessoasAlocadasAtividade(a).length} pessoa(s))`:""}</div></td>
       <td style="font-size:12px">${dIni} → ${dFim}${temReal?`<div style="color:var(--ink-faint);margin-top:2px">Real: ${dIniReal} → ${dFimReal}</div>`:""}</td>
@@ -3382,8 +3452,13 @@ function projCronograma(c,p){
     <div class="card-head"><h3>Linha do tempo</h3><span class="hint">Linha vermelha = hoje</span></div>
     <div class="card-pad" style="overflow-x:auto">${ganttHtml(p,ats)}</div>
   </div>`}
+  ${podeEditar?`<div id="crono-bulk" style="display:${ST.cronoSelecionadas.size?"flex":"none"};align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;padding:9px 14px;border:1px solid var(--line);border-radius:10px;background:var(--cream,#f6f3ec)">
+    <b id="crono-sel-n">${ST.cronoSelecionadas.size} selecionada(s)</b>
+    <button class="btn sm" id="crono-mover-sel">⇄ Mover selecionadas</button>
+    <button class="btn ghost sm" id="crono-sel-limpar">Limpar seleção</button>
+  </div>`:""}
   <div class="card table-wrap">
-    <table><thead><tr><th>Atividade</th><th>Prazo previsto / real</th><th>Situação</th>
+    <table><thead><tr>${podeEditar?'<th style="width:34px;text-align:center"><input type="checkbox" id="crono-sel-all" title="Selecionar todas as atividades exibidas"></th>':""}<th>Atividade</th><th>Prazo previsto / real</th><th>Situação</th>
       <th style="min-width:150px">Progresso</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table>
   </div>`:todasAts.length?`<div class="card"><div class="empty"><span class="ic">◷</span>
@@ -3410,6 +3485,21 @@ function projCronograma(c,p){
   }
 
   if(!podeEditar) return;
+  if($("#crono-bulk")){
+    const sel=ST.cronoSelecionadas, todos=$("#crono-sel-all");
+    const boxes=[...c.querySelectorAll("[data-sel]")];
+    const atualizaBarra=()=>{
+      const k=sel.size;
+      $("#crono-bulk").style.display=k?"flex":"none";
+      $("#crono-sel-n").textContent=k+" selecionada(s)";
+      todos.checked=k>0&&k===boxes.length; todos.indeterminate=k>0&&k<boxes.length;
+    };
+    boxes.forEach(b=>b.onchange=()=>{ if(b.checked) sel.add(b.dataset.sel); else sel.delete(b.dataset.sel); atualizaBarra(); });
+    todos.onchange=()=>{ boxes.forEach(b=>{ b.checked=todos.checked; if(todos.checked) sel.add(b.dataset.sel); else sel.delete(b.dataset.sel); }); atualizaBarra(); };
+    $("#crono-sel-limpar").onclick=()=>{ sel.clear(); boxes.forEach(b=>b.checked=false); atualizaBarra(); };
+    $("#crono-mover-sel").onclick=()=>moverAtividadesProjeto([...sel].map(getAtividade));
+    atualizaBarra();
+  }
   const open=()=>formAtividade(p.id);
   $("#add-ativ").onclick=open;
   if($("#add-ativ2")) $("#add-ativ2").onclick=open;
