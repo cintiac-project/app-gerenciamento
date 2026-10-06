@@ -1244,7 +1244,53 @@ function statusBadge(s){
 /* ============================================================
    CÁLCULOS DE NEGÓCIO
    ============================================================ */
-function horasProjeto(pid){ return DB.data.horas.filter(h=>h.projetoId===pid).reduce((s,h)=>s+(+h.horas||0),0); }
+/* HORAS EXECUTADAS DAS ATIVIDADES → ENTRAM NOS DASHBOARDS
+   O campo "Executada" (Horas previstas por colaborador, dentro da atividade)
+   fica em atividades.estimativasPessoas[].horasExecutadas e antes NÃO era
+   somado nos gráficos/totais, que só liam os apontamentos (DB.data.horas).
+   Aqui essas horas viram registros "sintéticos" no mesmo formato dos
+   apontamentos, para entrarem em gráficos e totais sem mexer no banco:
+   - o período é o Início real → Término real (se faltar, usa o previsto) e
+     as horas são distribuídas pelos dias úteis, indo para o mês de cada dia;
+   - sem dupla contagem: se a pessoa JÁ tem apontamento nessa atividade, o
+     apontamento prevalece e a horasExecutadas dela é ignorada. */
+function horasExecutadasAtividades(projetoId){
+  const apont=new Set();
+  DB.data.horas.forEach(h=>{ if(h.atividadeId && h.colaboradorId) apont.add(h.atividadeId+"|"+h.colaboradorId); });
+  const out=[];
+  DB.data.atividades.forEach(a=>{
+    if(projetoId && a.projetoId!==projetoId) return;
+    (Array.isArray(a.estimativasPessoas)?a.estimativasPessoas:[]).forEach(x=>{
+      const total=parseFloat(x.horasExecutadas);
+      if(!x.colaboradorId || !(total>0)) return;
+      if(apont.has(a.id+"|"+x.colaboradorId)) return;
+      const ini=a.dataInicioReal||a.dataInicioPrev||a.dataFimReal||a.dataFimPrev;
+      let fim=a.dataFimReal||a.dataFimPrev||ini;
+      if(!ini) return;
+      if(fim<ini) fim=ini;
+      let dias=diasUteisEntre(ini,fim);
+      if(!dias.length) dias=[fim];
+      const porMes={};
+      dias.forEach(d=>{ const ym=d.slice(0,7); (porMes[ym]=porMes[ym]||[]).push(d); });
+      Object.keys(porMes).forEach(ym=>{
+        const ds=porMes[ym];
+        out.push({id:"exec-"+a.id+"-"+x.colaboradorId+"-"+ym, projetoId:a.projetoId, atividadeId:a.id,
+          colaboradorId:x.colaboradorId, categoriaId:a.categoriaId||"", data:ds[ds.length-1],
+          horas:total*ds.length/dias.length, sintetico:true});
+      });
+    });
+  });
+  return out;
+}
+/* apontamentos + horas executadas das atividades (use em totais e gráficos) */
+function horasConsolidadas(projetoId){
+  const base=projetoId?DB.data.horas.filter(h=>h.projetoId===projetoId):DB.data.horas;
+  return base.concat(horasExecutadasAtividades(projetoId));
+}
+function horasAtividade(a){
+  return horasConsolidadas(a.projetoId).filter(h=>h.atividadeId===a.id).reduce((t,h)=>t+(+h.horas||0),0);
+}
+function horasProjeto(pid){ return horasConsolidadas(pid).reduce((s,h)=>s+(+h.horas||0),0); }
 function despesasProjeto(pid,statusFiltro){
   return DB.data.financeiro
     .filter(f=>f.projetoId===pid && f.tipo==="despesa" && (!statusFiltro||f.status===statusFiltro))
@@ -2297,7 +2343,7 @@ function viewPainel(v){
   const margens=ps.map(margemProjeto).filter(m=>m!=null);
   const margemMedia=margens.length? margens.reduce((a,b)=>a+b,0)/margens.length : null;
   const alertas=calcularAlertas();
-  const horasAno=DB.data.horas.filter(h=>yearOf(h.data)===ST.dashYear).reduce((s,h)=>s+(+h.horas||0),0);
+  const horasAno=horasConsolidadas().filter(h=>yearOf(h.data)===ST.dashYear).reduce((s,h)=>s+(+h.horas||0),0);
 
   // opções de filtro dos Alertas de prazo: apenas projetos e responsáveis que
   // de fato aparecem nos alertas atuais (evita opções "vazias" no filtro).
@@ -2581,18 +2627,36 @@ function abrirDetalheReceitaPortfolio(ps,titulo,descricao){
    executadas por cada pessoa — em vez de precisar abrir a atividade depois
    só para isso: um botão "OK" preenche a horas executadas igual à prevista,
    e quem gastou tempo diferente do previsto pode digitar o valor real. */
+/* REGRA DE CONCLUSÃO: uma atividade só pode ser concluída se tiver
+   Início real, Término real e as Horas executadas de TODOS os colaboradores
+   listados em "Horas previstas por colaborador". Devolve o texto do erro
+   ("" quando está tudo certo). Usada pelo formulário de atividade e pela
+   conclusão rápida do Painel Geral. */
+function erroConclusaoAtividade(d){
+  const pend=[];
+  if(!d.dataInicioReal) pend.push("Início real");
+  if(!d.dataFimReal) pend.push("Término real");
+  (Array.isArray(d.estimativasPessoas)?d.estimativasPessoas:[])
+    .filter(x=>x && x.colaboradorId)
+    .forEach(x=>{
+      const h=x.horasExecutadas;
+      const ok=h!==null && h!==undefined && h!=="" && isFinite(+h) && +h>=0;
+      if(!ok){
+        const c=getColab(x.colaboradorId);
+        pend.push("Horas executadas de "+(c?c.nome:"colaborador removido"));
+      }
+    });
+  if(pend.length)
+    return "Não é possível concluir a atividade. Preencha: "+pend.join("; ")+".";
+  if(d.dataFimReal<d.dataInicioReal)
+    return "O Término real não pode ser anterior ao Início real.";
+  return "";
+}
+
 async function marcarAtividadeConcluidaRapido(atividadeId){
   const a=getAtividade(atividadeId);
   if(!a) return;
   const pessoas=(Array.isArray(a.estimativasPessoas)?a.estimativasPessoas:[]).filter(x=>x.colaboradorId);
-  if(!pessoas.length){
-    // sem horas previstas por colaborador cadastradas: mantém o fluxo simples
-    // de sempre (só confirma a conclusão).
-    confirmar("Marcar esta atividade como concluída?",
-      `"${a.nome}" será marcada como 100% concluída, com término em ${fmtDate(todayStr())}.`,
-      ()=>salvarConclusaoAtividade(a,null));
-    return;
-  }
   const rowHtml=(item,idx)=>{
     const colab=getColab(item.colaboradorId);
     const nome=colab?colab.nome:"(colaborador removido)";
@@ -2607,22 +2671,35 @@ async function marcarAtividadeConcluidaRapido(atividadeId){
         title="Horas realmente executadas por esta pessoa">
     </div>`;
   };
+  const lblStyle='display:block;margin-bottom:5px;font-size:12.5px;font-weight:600;color:var(--ink-soft)';
   $("#modal-root").innerHTML=`
   <div class="overlay"><div class="modal" style="max-width:540px">
     <div class="modal-head"><h3>Marcar atividade como concluída?</h3></div>
     <div class="modal-body">
-      <p style="color:var(--ink-soft);font-size:13px">"${esc(a.nome)}" será marcada como 100% concluída,
-        com término em ${fmtDate(todayStr())}.</p>
-      <div style="margin-top:14px">
+      <p style="color:var(--ink-soft);font-size:13px">"${esc(a.nome)}" será marcada como 100% concluída.
+        Para concluir, informe as datas reais${pessoas.length?" e as horas executadas de cada colaborador":""}.</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px">
+        <div style="flex:1;min-width:150px">
+          <label style="${lblStyle}">Início real <span class="req">*</span></label>
+          <input type="date" id="c-ini" value="${esc(a.dataInicioReal||"")}">
+        </div>
+        <div style="flex:1;min-width:150px">
+          <label style="${lblStyle}">Término real <span class="req">*</span></label>
+          <input type="date" id="c-fim" value="${esc(a.dataFimReal||todayStr())}">
+        </div>
+      </div>
+      ${pessoas.length?`<div style="margin-top:14px">
         <label style="display:block;margin-bottom:7px;font-size:12.5px;font-weight:600;color:var(--ink-soft)">
-          Horas executadas por colaborador</label>
+          Horas executadas por colaborador <span class="req">*</span></label>
         <div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px">
           ${pessoas.map(rowHtml).join("")}
         </div>
         <span class="help" style="display:block;margin-top:6px">Clique em "OK" para confirmar que a pessoa
           cumpriu exatamente as horas previstas, ou informe manualmente as horas executadas caso o tempo
           gasto tenha sido diferente do previsto.</span>
-      </div>
+      </div>`:""}
+      <div id="c-err" style="display:none;margin-top:12px;padding:9px 12px;border-radius:8px;
+        background:var(--danger-bg);color:var(--danger);font-size:12.5px;line-height:1.5"></div>
     </div>
     <div class="modal-foot">
       <button class="btn ghost" id="c-no">Cancelar</button>
@@ -2637,34 +2714,33 @@ async function marcarAtividadeConcluidaRapido(atividadeId){
     };
   });
   $("#c-yes").onclick=()=>{
+    const dIni=$("#c-ini").value||null, dFim=$("#c-fim").value||null;
     const novasEstimativas=pessoas.map((item,idx)=>{
       const inp=$("#modal-root").querySelector(`[data-erole="horasExec"][data-idx="${idx}"]`);
       const val=inp?inp.value:"";
       return Object.assign({},item,{horasExecutadas:(val===""?null:parseFloat(val))});
     });
+    const erro=erroConclusaoAtividade({dataInicioReal:dIni,dataFimReal:dFim,estimativasPessoas:novasEstimativas});
+    if(erro){
+      const box=$("#c-err"); box.textContent=erro; box.style.display="block";
+      return;
+    }
     closeModal();
-    salvarConclusaoAtividade(a,novasEstimativas);
+    salvarConclusaoAtividade(a,pessoas.length?novasEstimativas:null,dIni,dFim);
   };
 }
-async function salvarConclusaoAtividade(a,novasEstimativas){
+async function salvarConclusaoAtividade(a,novasEstimativas,dataInicioReal,dataFimReal){
   try{
-    // CORREÇÃO: além do status e do progresso, registra também a data de
-    // término (hoje = data real da conclusão) — antes essa ação só
-    // marcava "Concluída"/100% e a atividade ficava sem data final no
-    // cronograma. Atualiza sempre para hoje, mesmo que já houvesse um
-    // prazo previsto no passado (é justamente o caso das atividades
-    // atrasadas que aparecem nos alertas): o que importa aqui é a data
-    // real em que a conclusão foi registrada.
-    const patch={status:"Concluída",progresso:100,dataFimPrev:todayStr()};
+    // Além de status e progresso, grava as datas reais informadas e a data
+    // de término (hoje = data em que a conclusão foi registrada), como já
+    // era feito. Só aplica no objeto em memória depois que o servidor
+    // confirmar (evita a tela mostrar "concluída" sem ter salvado).
+    const hoje=todayStr();
+    const patch={status:"Concluída",progresso:100,dataFimPrev:hoje,
+      dataInicioReal:dataInicioReal||null,dataFimReal:dataFimReal||null,
+      inicioRealMesmo:!!dataInicioReal && dataInicioReal===a.dataInicioPrev,
+      fimRealMesmo:!!dataFimReal && dataFimReal===hoje};
     if(novasEstimativas) patch.estimativasPessoas=novasEstimativas;
-    // CORREÇÃO: só aplica a mudança no objeto 'a' em memória depois que o
-    // servidor confirmar o sucesso (mesmo problema já corrigido no
-    // formulário de projeto — ver comentário em formProjeto). Antes,
-    // Object.assign(a,patch) rodava ANTES do await: se o PATCH falhasse
-    // (erro de rede, RLS etc.), a tela já mostrava a atividade como
-    // concluída mesmo sem ter sido salva de verdade, e um recarregamento
-    // trazia de volta o status antigo — dando a impressão de que a
-    // atividade nunca tinha sido marcada como concluída.
     await sbUpdate("atividades", a.id, toSnake(patch));
     Object.assign(a,patch);
     toast("Atividade marcada como concluída.");
@@ -2741,19 +2817,19 @@ async function marcarReuniaoOkRapido(reuniaoId, projetoId){
 }
 function anosDisponiveis(){
   const set=new Set([String(new Date().getFullYear())]);
-  DB.data.horas.forEach(h=>{ if(h.data) set.add(yearOf(h.data)); });
+  horasConsolidadas().forEach(h=>{ if(h.data) set.add(yearOf(h.data)); });
   return [...set].sort();
 }
 function horasDoPeriodo(){
-  if(ST.dashMode==="anual") return DB.data.horas;
-  return DB.data.horas.filter(h=>yearOf(h.data)===ST.dashYear);
+  if(ST.dashMode==="anual") return horasConsolidadas();
+  return horasConsolidadas().filter(h=>yearOf(h.data)===ST.dashYear);
 }
 function serieHorasPorCategoria(){
   function catColor(cid){ const c=getCategoria(cid); return c?c.cor:"#c7cfd6"; }
   function catNome(cid){ return cid?nomeCategoria(cid):"Sem categoria"; }
   function buildBuckets(labels, bucketOfFn){
     const buckets=labels.map(l=>({label:l,total:0,map:{}}));
-    DB.data.horas.forEach(h=>{
+    horasConsolidadas().forEach(h=>{
       const idx=bucketOfFn(h);
       if(idx==null||idx<0||idx>=buckets.length) return;
       const cid=h.categoriaId||"";
@@ -3009,7 +3085,7 @@ function projResumo(c,p){
   const riscosAltos=(p.riscos||[]).filter(r=>severidadeRisco(r)==="Alta").length;
   /* horas por categoria neste projeto */
   const catMapP={};
-  DB.data.horas.filter(h=>h.projetoId===p.id).forEach(h=>{
+  horasConsolidadas(p.id).forEach(h=>{
     if(!h.categoriaId) return;
     catMapP[h.categoriaId]=(catMapP[h.categoriaId]||0)+(+h.horas||0);
   });
@@ -3255,7 +3331,7 @@ function projCronograma(c,p){
     const prog=+a.progresso||0;
     const atrasada=a.status!=="Cancelada" && a.dataFimPrev && daysBetween(todayStr(),a.dataFimPrev)<0 && prog<100;
     const pcls=prog>=100?"ok":atrasada?"danger":prog<40?"warn":"";
-    const horasAtiv=DB.data.horas.filter(h=>h.atividadeId===a.id).reduce((s,h)=>s+(+h.horas||0),0);
+    const horasAtiv=horasAtividade(a);
     const dIni=a.dataInicioPrev?fmtDate(a.dataInicioPrev):"Indeterminada";
     const dFim=a.dataFimPrev?fmtDate(a.dataFimPrev):"Indeterminada";
     const temReal=a.dataInicioReal||a.dataFimReal;
@@ -4850,7 +4926,7 @@ function viewEquipe(v){
   }
   function rowsFor(list, showProjetos){
     return list.map(c=>{
-      const h=DB.data.horas.filter(x=>x.colaboradorId===c.id).reduce((s,x)=>s+(+x.horas||0),0);
+      const h=horasConsolidadas().filter(x=>x.colaboradorId===c.id).reduce((s,x)=>s+(+x.horas||0),0);
       return `<tr>
         <td style="font-weight:600">${esc(c.nome)}</td>
         <td>${esc(c.cargo||"—")}</td>
@@ -5990,7 +6066,7 @@ async function exportarCronogramaExcel(p,ats,totalProjeto){
       const atrasada=a.status!=="Cancelada" && a.dataFimPrev && daysBetween(hoje,a.dataFimPrev)<0 && prog<100;
       const sit=atrasada?"Atrasada":(a.status||"Não iniciada");
       const preds=(Array.isArray(a.predecessorasIds)?a.predecessorasIds:[]).map(id=>DB.data.atividades.find(x=>x.id===id)).filter(Boolean).map(x=>x.nome).join("; ");
-      const horasAp=DB.data.horas.filter(h=>h.atividadeId===a.id).reduce((s,h)=>s+(+h.horas||0),0);
+      const horasAp=horasAtividade(a);
       const vals=[k+1,a.nome,a.marco?"Sim":"",nomeCategoria(a.categoriaId),nomesResponsaveisAtividade(a,p).join(", "),preds,
         dt(a.dataInicioPrev),dt(a.dataFimPrev),dt(a.dataInicioReal),dt(a.dataFimReal),sit,prog/100,
         totalHorasPrevistasAtividade(a)||null,horasAp||null,a.notasProgresso||""];
@@ -6111,6 +6187,10 @@ async function importarCSVCronograma(event, projetoId){
 
         let status=statusRaw;
         if(status && !STATUS_ATIV.includes(status)) status="Não iniciada";
+        // REGRA: concluir exige datas reais e horas executadas, que o CSV não
+        // traz — então a atividade entra como "Em andamento" e deve ser
+        // concluída depois, pelo próprio app.
+        if(status==="Concluída"){ status="Em andamento"; resultado.rebaixadas=(resultado.rebaixadas||0)+1; }
 
         const nova={id:uid(), projetoId, nome:nomeRaw, categoriaId:cat.id,
           dataInicioPrev:dataInicio||null, dataFimPrev:dataFim||null,
@@ -6121,7 +6201,8 @@ async function importarCSVCronograma(event, projetoId){
       });
       if(novasAtividades.length){
         await sbInsert("atividades", novasAtividades.map(toSnake));
-        toast(`${novasAtividades.length} atividade(s) importada(s).`);
+        toast(`${novasAtividades.length} atividade(s) importada(s).`+
+          (resultado.rebaixadas?` ${resultado.rebaixadas} marcada(s) como "Concluída" entraram como "Em andamento" (conclua no app informando datas reais e horas executadas).`:""));
       }
       event.target.value="";
       const detalhes=resultado.mensagens.length
@@ -6638,8 +6719,9 @@ function openForm(cfg){
     }catch(e){
       console.error(e);
       const err=$("#f-err");
-      err.textContent="Erro ao salvar: "+(e.message||e);
+      err.textContent=(e && e.validacao)?e.message:"Erro ao salvar: "+(e.message||e);
       err.style.display="block";
+      err.scrollIntoView({block:"nearest"});
       btn.disabled=false; btn.textContent="Salvar";
     }
   };
@@ -6840,6 +6922,12 @@ function formAtividade(projetoId,a){
       v.predecessorasIds=Array.isArray(v.predecessorasIds)?v.predecessorasIds:[];
       if(v.status==="Concluída") v.progresso=100;
       else if(v.progresso>=100) v.status="Concluída";
+      // REGRA: não deixa concluir sem Início real, Término real e as horas
+      // executadas de cada colaborador listado (ver erroConclusaoAtividade).
+      if(v.status==="Concluída"){
+        const erroConc=erroConclusaoAtividade(v);
+        if(erroConc){ const e=new Error(erroConc); e.validacao=true; throw e; }
+      }
       // Quando a atividade é marcada como Concluída e o campo "Término
       // previsto" não foi preenchido manualmente neste salvamento, usa como
       // data final a data mais recente entre as horas já apontadas nesta
