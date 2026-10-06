@@ -968,6 +968,48 @@ function excluirAtividadeComConfirmacao(a,onDone){
   );
 }
 
+/* EXCLUIR VÁRIAS ATIVIDADES DE UMA VEZ (seleção no cronograma).
+   Exclui uma a uma; só remove da tela as que o servidor confirmou. As horas
+   apontadas ficam no projeto, apenas sem vínculo com a atividade (igual à
+   exclusão individual), e os vínculos de dependência que outras atividades
+   tinham com as excluídas são desfeitos. */
+function excluirAtividadesEmLote(lista){
+  lista=(lista||[]).filter(Boolean);
+  if(!lista.length) return;
+  if(lista.length===1){ excluirAtividadeComConfirmacao(lista[0]); return; }
+  const n=lista.length;
+  const nomes=lista.slice(0,6).map(a=>`"${a.nome}"`).join(", ")+(n>6?` e mais ${n-6}`:"");
+  const ids=new Set(lista.map(a=>a.id));
+  const nHoras=DB.data.horas.filter(h=>ids.has(h.atividadeId)).length;
+  confirmar(
+    `Excluir ${n} atividades?`,
+    `Serão excluídas: ${nomes}.`+(nHoras?` ${nHoras} apontamento(s) de horas vinculado(s) permanecerão no projeto, sem vínculo com a atividade.`:"")+` Esta ação não pode ser desfeita.`,
+    async()=>{
+      const okIds=new Set(), falhas=[];
+      for(const a of lista){
+        try{ await sbDelete("atividades", a.id); okIds.add(a.id); }
+        catch(e){ falhas.push(`"${a.nome}": ${(e&&e.message)||e}`); }
+      }
+      if(okIds.size){
+        DB.data.atividades=DB.data.atividades.filter(x=>!okIds.has(x.id));
+        DB.data.horas.forEach(h=>{ if(okIds.has(h.atividadeId)) h.atividadeId=null; });
+        const proj=getProjeto(lista[0].projetoId);
+        if(proj && proj.raci) okIds.forEach(id=>{ delete proj.raci[id]; });
+        // desfaz vínculos de dependência que apontavam para as excluídas
+        for(const x of DB.data.atividades){
+          const cur=predecessorasDe(x), novo=cur.filter(id=>!okIds.has(id));
+          if(novo.length!==cur.length){
+            try{ await sbUpdate("atividades", x.id, {predecessoras_ids:novo}); x.predecessorasIds=novo; }catch(e){}
+          }
+        }
+      }
+      if(ST.cronoSelecionadas) ST.cronoSelecionadas.clear();
+      toast(`${okIds.size} atividade(s) excluída(s).`+(falhas.length?` ${falhas.length} falha(s): ${falhas.slice(0,2).join(" | ")}`:""));
+      render();
+    }
+  );
+}
+
 /* ------------------------------------------------------------------
    MOVER ATIVIDADE PARA OUTRO PROJETO (alocação equivocada)
    Leva junto a Matriz RACI da atividade e, opcionalmente, as horas
@@ -1508,7 +1550,7 @@ function calcularAlertas(){
   DB.data.atividades.forEach(a=>{
     if(a.duplicataIgnorada) return;
     const proj=getProjeto(a.projetoId);
-    if(!proj || proj.sessaoId==="rotinas") return;
+    if(!proj || proj.sessaoId==="rotinas" || proj.sessaoId==="articulacao") return;
     const chave=normTxt(a.nome);
     if(!chave) return;
     (gruposDuplicados[chave]=gruposDuplicados[chave]||[]).push(a);
@@ -1850,6 +1892,7 @@ const ICONS={
   eventos:'<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M8 14h.01M12 14h.01M16 14h.01"/></svg>',
   cursos:'<svg viewBox="0 0 24 24"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>',
   rotinas:'<svg viewBox="0 0 24 24"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>',
+  articulacao:'<svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="m8.6 10.7 6.8-3.4M8.6 13.3l6.8 3.4"/></svg>',
   financeiro:'<svg viewBox="0 0 24 24"><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/></svg>',
   equipe:'<svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   config:'<svg viewBox="0 0 24 24"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>',
@@ -1862,7 +1905,8 @@ const SESSOES=[
   {id:"estruturantes",    label:"Projetos Estruturantes", ic:ICONS.estrut},
   {id:"eventos",          label:"Eventos",                ic:ICONS.eventos},
   {id:"cursos",           label:"Cursos",                 ic:ICONS.cursos},
-  {id:"rotinas",          label:"Rotinas",                ic:ICONS.rotinas}
+  {id:"rotinas",          label:"Rotinas",                ic:ICONS.rotinas},
+  {id:"articulacao",      label:"Articulação Institucional", ic:ICONS.articulacao}
 ];
 function getSessao(id){ return SESSOES.find(s=>s.id===id); }
 function nomeSessao(id){ const s=getSessao(id); return s?s.label:"Não classificados"; }
@@ -2004,6 +2048,10 @@ const SESSAO_CONFIG={
     ocultarPercentualAtividades:true
   }
 };
+// "Articulação Institucional" nasceu dentro de Rotinas: começa com a mesma
+// configuração (mesmos campos e abas), para os projetos movidos para cá não
+// mudarem de aparência. Ajuste aqui se quiser outro layout para esta sessão.
+SESSAO_CONFIG.articulacao=Object.assign({},SESSAO_CONFIG.rotinas);
 function cfgSessao(id){ return SESSAO_CONFIG[id]||{}; }
 
 // campo foi removido do formulário desta sessão (ex.: "cliente" em Rotinas
@@ -3455,6 +3503,7 @@ function projCronograma(c,p){
   ${podeEditar?`<div id="crono-bulk" style="display:${ST.cronoSelecionadas.size?"flex":"none"};align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;padding:9px 14px;border:1px solid var(--line);border-radius:10px;background:var(--cream,#f6f3ec)">
     <b id="crono-sel-n">${ST.cronoSelecionadas.size} selecionada(s)</b>
     <button class="btn sm" id="crono-mover-sel">⇄ Mover selecionadas</button>
+    <button class="btn danger sm" id="crono-excluir-sel">🗑 Excluir selecionadas</button>
     <button class="btn ghost sm" id="crono-sel-limpar">Limpar seleção</button>
   </div>`:""}
   <div class="card table-wrap">
@@ -3498,6 +3547,7 @@ function projCronograma(c,p){
     todos.onchange=()=>{ boxes.forEach(b=>{ b.checked=todos.checked; if(todos.checked) sel.add(b.dataset.sel); else sel.delete(b.dataset.sel); }); atualizaBarra(); };
     $("#crono-sel-limpar").onclick=()=>{ sel.clear(); boxes.forEach(b=>b.checked=false); atualizaBarra(); };
     $("#crono-mover-sel").onclick=()=>moverAtividadesProjeto([...sel].map(getAtividade));
+    $("#crono-excluir-sel").onclick=()=>excluirAtividadesEmLote([...sel].map(getAtividade));
     atualizaBarra();
   }
   const open=()=>formAtividade(p.id);
