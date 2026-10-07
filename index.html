@@ -696,6 +696,7 @@ const DB = {
       mds: toCamel(mdsData||[])
     };
     console.log("[PMO] DB.load concluído:", this.data.projetos.length, "projetos,", this.data.horas.length, "horas");
+    await carregarCapacidadeSemanal();   // não derruba o load se a tabela ainda não existir
   },
 
   // grava de volta no Supabase tudo que está em memória.
@@ -1497,6 +1498,127 @@ function limitesSemanaCorrente(){
   const diasAteFim=(7-dow)%7;                          // até o domingo
   return {ini:addDays(hoje,-diasDesdeSegunda), fim:addDays(hoje,diasAteFim), diasAteFim};
 }
+
+/* ============================================================
+   OCUPAÇÃO SEMANAL (gráfico da sessão SPRINT do Painel Geral)
+   - horas planejadas: horas previstas de cada pessoa nas atividades,
+     distribuídas pelos dias úteis (mesma regra da aba Ocupação), somando
+     apenas os dias úteis (seg-sex) da semana exibida, em TODOS os projetos.
+   - capacidade: 40h por semana (padrão), editável por pessoa e por semana
+     (feriado, licença, férias...). Gravada na tabela capacidade_semanal do
+     Supabase; se a tabela ainda não existir, usa o localStorage do navegador.
+   ============================================================ */
+const CAPACIDADE_SEMANAL_PADRAO=40;
+const CAPSEM={ mapa:{}, remoto:false };   // mapa: {"colaboradorId|AAAA-MM-DD(segunda)": horas}
+const CAPSEM_LS="pmo_capacidade_semanal";
+const capSemKey=(colabId,semanaIni)=>colabId+"|"+semanaIni;
+async function carregarCapacidadeSemanal(){
+  try{
+    const rows=toCamel(await sbFetch("capacidade_semanal?select=*"))||[];
+    CAPSEM.mapa={}; rows.forEach(r=>{ CAPSEM.mapa[capSemKey(r.colaboradorId,r.semanaInicio)]=+r.horas; });
+    CAPSEM.remoto=true;
+  }catch(e){
+    console.warn("[PMO] tabela capacidade_semanal indisponível — usando localStorage:",e.message||e);
+    CAPSEM.remoto=false;
+    try{ CAPSEM.mapa=JSON.parse(localStorage.getItem(CAPSEM_LS)||"{}")||{}; }catch(_){ CAPSEM.mapa={}; }
+  }
+}
+function capacidadeSemanalPessoa(colabId,semanaIni){
+  const v=CAPSEM.mapa[capSemKey(colabId,semanaIni)];
+  return (v===undefined||v===null||isNaN(v)) ? CAPACIDADE_SEMANAL_PADRAO : +v;
+}
+async function salvarCapacidadeSemanal(colabId,semanaIni,horas){
+  const k=capSemKey(colabId,semanaIni), anterior=CAPSEM.mapa[k];
+  const volta=(horas===null||horas===""||isNaN(horas)||+horas===CAPACIDADE_SEMANAL_PADRAO); // = padrão → remove o ajuste
+  if(volta) delete CAPSEM.mapa[k]; else CAPSEM.mapa[k]=+horas;
+  try{
+    if(CAPSEM.remoto){
+      if(volta) await sbDeleteWhere("capacidade_semanal", qsEq("colaborador_id",colabId)+"&"+qsEq("semana_inicio",semanaIni));
+      else await sbUpsert("capacidade_semanal",{colaborador_id:colabId,semana_inicio:semanaIni,horas:+horas},{onConflict:"colaborador_id,semana_inicio"});
+    } else {
+      localStorage.setItem(CAPSEM_LS,JSON.stringify(CAPSEM.mapa));
+    }
+  }catch(e){
+    if(anterior===undefined) delete CAPSEM.mapa[k]; else CAPSEM.mapa[k]=anterior;
+    toast("Erro ao salvar a carga horária: "+(e.message||e));
+  }
+}
+/* horas planejadas por pessoa na semana (sem distribuir pelos dias úteis):
+   - usa as horas RESTANTES de cada pessoa na atividade = horas previstas ×
+     (100% − % concluído), contadas inteiras na semana do prazo final
+     (dataFimPrev). Atividade concluída não pesa.
+   - atividades ATRASADAS (prazo já passou e ainda não concluídas) são puxadas
+     para a semana corrente do SPRINT, pois ou serão feitas agora ou precisarão
+     ser repactuadas se estourarem o limite de horas.
+   Só aparece quem tem horas restantes na semana. */
+function ocupacaoSemanalPessoas(semanaIni){
+  const semanaFim=addDays(semanaIni,6);
+  const hoje=todayStr();
+  const ehSemanaCorrente=(semanaIni===limitesSemanaCorrente().ini);
+  const pessoas={};
+  DB.data.atividades.forEach(a=>{
+    if(a.status==="Cancelada" || a.status==="Concluída" || !a.dataFimPrev) return;
+    const prog=Math.min(100,Math.max(0,+a.progresso||0));
+    if(prog>=100) return;
+    const atrasada=a.dataFimPrev<hoje;
+    const conta = atrasada ? ehSemanaCorrente : (a.dataFimPrev>=semanaIni && a.dataFimPrev<=semanaFim);
+    if(!conta) return;
+    const fator=(100-prog)/100;
+    (a.estimativasPessoas||[]).forEach(e=>{
+      const h=(+e.horas||0)*fator; if(!e.colaboradorId||h<=0) return;
+      const p=pessoas[e.colaboradorId]||(pessoas[e.colaboradorId]={id:e.colaboradorId,planejado:0,atrasado:0,porProjeto:{}});
+      p.planejado+=h; if(atrasada) p.atrasado+=h;
+      p.porProjeto[a.projetoId]=(p.porProjeto[a.projetoId]||0)+h;
+    });
+  });
+  return Object.values(pessoas).map(p=>({...p,nome:nomeColab(p.id),capacidade:capacidadeSemanalPessoa(p.id,semanaIni)}))
+    .sort((a,b)=>(b.planejado-b.capacidade)-(a.planejado-a.capacidade)||a.nome.localeCompare(b.nome,"pt-BR"));
+}
+/* HTML do gráfico (barras horizontais: planejado + em aberto + marcador da capacidade) */
+function ocupacaoSemanalHtml(semanaIni){
+  const lista=ocupacaoSemanalPessoas(semanaIni);
+  if(!lista.length) return `<div class="empty" style="padding:22px"><span class="ic">✓</span><p>Ninguém com horas previstas para esta semana.</p></div>`;
+  const escala=Math.max(CAPACIDADE_SEMANAL_PADRAO,...lista.map(p=>Math.max(p.capacidade,p.planejado)));
+  const pct=h=>Math.max(0,Math.min(100,h/escala*100));
+  const podeEditar=isGestor();
+  return lista.map(p=>{
+    const aberto=Math.max(0,p.capacidade-p.planejado), exc=Math.max(0,p.planejado-p.capacidade);
+    const ratio=p.capacidade>0? p.planejado/p.capacidade : (p.planejado>0?9:0);
+    const cor=ratio>1.0001?"var(--danger)":ratio>=0.80?"var(--warn)":"var(--ok)";
+    const ajustada=Math.abs(p.capacidade-CAPACIDADE_SEMANAL_PADRAO)>0.001;
+    const tip=Object.entries(p.porProjeto).sort((a,b)=>b[1]-a[1]).map(([pid,h])=>nomeProjeto(pid)+": "+fmtNum(h,1)+" h").join("\n")||"Sem horas previstas";
+    const tipFull=tip+(p.atrasado>0.04?"\n— inclui "+fmtNum(p.atrasado,1)+" h de atividades atrasadas":"");
+    const atrasTxt=p.atrasado>0.04?` <span style="color:var(--danger)">(inclui ${fmtNum(p.atrasado,1)} h de atividades atrasadas)</span>`:"";
+    const txt=(exc>0
+      ? `<b style="color:var(--danger)">${fmtNum(p.planejado,1)} h</b> planejadas · <b style="color:var(--danger)">${fmtNum(exc,1)} h acima do limite</b>`
+      : `<b>${fmtNum(p.planejado,1)} h</b> planejadas · <b>${fmtNum(aberto,1)} h</b> em aberto`)+atrasTxt;
+    const campo=podeEditar
+      ? `<input type="number" min="0" max="80" step="0.5" value="${p.capacidade}" data-capsem-colab="${p.id}" data-capsem-semana="${semanaIni}"
+           style="width:68px;padding:4px 6px;border:1px solid ${ajustada?"var(--warn)":"var(--line)"};border-radius:6px;background:${ajustada?"var(--warn-bg)":"var(--surface)"}" title="Horas disponíveis desta pessoa nesta semana (padrão ${CAPACIDADE_SEMANAL_PADRAO}h). Reduza em caso de feriado, licença ou férias.">
+         <span style="font-size:11.5px;color:var(--ink-faint)">h</span>
+         ${ajustada?`<button class="btn-icon" data-capsem-reset="${p.id}" data-capsem-semana="${semanaIni}" title="Voltar para ${CAPACIDADE_SEMANAL_PADRAO}h">↺</button>`:""}`
+      : `<span style="font-size:12px;color:var(--ink-soft)">${fmtNum(p.capacidade,1)} h${ajustada?" (ajustada)":""}</span>`;
+    return `<div style="display:grid;grid-template-columns:minmax(120px,190px) 1fr auto;gap:6px 14px;align-items:center;padding:7px 2px;border-bottom:1px solid var(--line-soft)">
+      <div style="font-weight:600;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.nome)}">${esc(p.nome)}</div>
+      <div>
+        <div title="${esc(tipFull)}" style="position:relative;height:16px;border-radius:5px;background:var(--line-soft);overflow:hidden;display:flex">
+          <div style="width:${pct(p.planejado)}%;background:${cor}"></div>
+          <div style="width:${pct(aberto)}%;background:repeating-linear-gradient(45deg,var(--accent-soft),var(--accent-soft) 4px,#fffdf8 4px,#fffdf8 8px)"></div>
+          <div style="position:absolute;top:0;bottom:0;left:calc(${pct(p.capacidade)}% - 1px);width:2px;background:var(--ink)"></div>
+        </div>
+        <div style="font-size:11.5px;color:var(--ink-soft);margin-top:2px">${txt}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;justify-content:flex-end">${campo}</div>
+    </div>`;
+  }).join("")
+  + `<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--ink-faint);margin-top:10px">
+      <span><i style="display:inline-block;width:10px;height:10px;background:var(--ok);border-radius:2px"></i> planejado (até 80%)</span>
+      <span><i style="display:inline-block;width:10px;height:10px;background:var(--warn);border-radius:2px"></i> 80–100%</span>
+      <span><i style="display:inline-block;width:10px;height:10px;background:var(--danger);border-radius:2px"></i> acima do limite</span>
+      <span><i style="display:inline-block;width:10px;height:10px;background:var(--accent-soft);border:1px solid var(--line);border-radius:2px"></i> em aberto</span>
+      <span>│ limite semanal da pessoa</span></div>`;
+}
+
 /* alertas: retorna lista de {tipo,secao,sev,titulo,desc,dias}
    secao: "vencidos" | "sprint" | "reunioes" | "duplicidades" (usado pelo Painel Geral) */
 function calcularAlertas(){
@@ -1881,6 +2003,7 @@ const ST = {
   dashMode:"mensal",
   search:{},
   painelAlertaProjeto:"",   // filtro de projeto dos Alertas de prazo (Painel Geral)
+  sprintSemanaOffset:0,     // semana do gráfico de ocupação do SPRINT (0 = corrente, -1 anterior, +1 próxima)
   painelAlertaResp:"",      // filtro de responsável dos Alertas de prazo (Painel Geral)
   // status visíveis no cronograma físico de cada projeto — "Concluída" some
   // da lista por padrão e só volta a aparecer quando marcada no filtro
@@ -2639,18 +2762,36 @@ function viewPainel(v){
   const reuAberto=secReunioes.filter(a=>a.dias<0).sort((a,b)=>b.dias-a.dias);
   const vazioHtml=msg=>`<div class="empty" style="padding:26px"><span class="ic">✓</span><p>${msg}</p></div>`;
   const subTitulo=t=>`<div style="font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-faint);margin:6px 2px 8px">${t}</div>`;
-  const secaoCard=(id,titulo,hint,qtd,sev,corpo)=>`
+  const secaoCard=(id,titulo,hint,qtd,sev,corpo,extra="")=>`
     <div class="card" style="margin-bottom:18px">
       <div class="card-head" style="flex-wrap:wrap;gap:10px">
         <h3>${titulo} <span class="badge ${qtd?sev:"b-ok"}" style="margin-left:6px">${qtd}</span></h3>
         <span class="hint">${hint}</span>
       </div>
       <div class="card-pad" id="alertas-scroll-box-${id}" style="${qtd>5?"max-height:440px;overflow-y:auto":""}">${corpo}</div>
+      ${extra}
     </div>`;
   const reunioesCorpo=secReunioes.length
     ? (reuProx.length? subTitulo("Próximas reuniões (até 7 dias)")+reuProx.map(alertaRowHtml).join("") : "")
       +(reuAberto.length? subTitulo("Reuniões em aberto (já realizadas, sem OK)")+reuAberto.map(alertaRowHtml).join("") : "")
     : vazioHtml(alertas.some(a=>a.secao==="reunioes")?"Nenhuma reunião para o filtro selecionado.":"Nenhuma reunião próxima ou em aberto.");
+  const semOcupIni=addDays(sem.ini,7*(ST.sprintSemanaOffset||0));
+  const sprintOcupHtml=`
+    <div class="card-pad" style="border-top:1px solid var(--line)">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+        <h4 style="font-size:14px">📊 Ocupação semanal da equipe</h4>
+        <button class="btn ghost sm" id="sprint-sem-prev" title="Semana anterior">◀</button>
+        <span style="font-size:12.5px;font-weight:600">${fmtDate(semOcupIni)} a ${fmtDate(addDays(semOcupIni,6))}${ST.sprintSemanaOffset?"":" (semana atual)"}</span>
+        <button class="btn ghost sm" id="sprint-sem-next" title="Próxima semana">▶</button>
+        ${ST.sprintSemanaOffset?`<button class="btn ghost sm" id="sprint-sem-hoje">Semana atual</button>`:""}
+      </div>
+      <div style="font-size:12px;color:var(--ink-faint);margin-bottom:8px">
+        Horas <b>restantes</b> (previstas × % ainda não realizado) das atividades que vencem na semana, mais as <b>atrasadas</b> (levadas para a semana atual), em todos os projetos, contra o limite de ${CAPACIDADE_SEMANAL_PADRAO}h.
+        ${isGestor()?"Edite o campo à direita para ajustar o limite de uma pessoa (feriado, licença, férias).":""}
+        ${CAPSEM.remoto?"":"<br><span style='color:var(--warn)'>⚠ Tabela <b>capacidade_semanal</b> não encontrada no Supabase: os ajustes ficam salvos só neste navegador.</span>"}
+      </div>
+      ${ocupacaoSemanalHtml(semOcupIni)}
+    </div>`;
   const alertasSecoesHtml=`
     <div class="card" style="margin-bottom:18px">
       <div class="card-head" style="flex-wrap:wrap;gap:10px">
@@ -2664,7 +2805,7 @@ function viewPainel(v){
     ${secaoCard("vencidos","1. Alertas de prazos vencidos","atividades e lançamentos financeiros com prazo anterior a hoje",secVencidos.length,"b-danger",
       secVencidos.length? secVencidos.map(alertaRowHtml).join("") : vazioHtml(alertas.some(a=>a.secao==="vencidos")?"Nenhum alerta para o filtro selecionado.":"Nenhum prazo vencido. 🎉"))}
     ${secaoCard("sprint","2. SPRINT","vencem na semana corrente · "+fmtDate(sem.ini)+" a "+fmtDate(sem.fim),secSprint.length,"b-warn",
-      secSprint.length? secSprint.map(alertaRowHtml).join("") : vazioHtml(alertas.some(a=>a.secao==="sprint")?"Nenhum alerta para o filtro selecionado.":"Nada vence no restante desta semana."))}
+      secSprint.length? secSprint.map(alertaRowHtml).join("") : vazioHtml(alertas.some(a=>a.secao==="sprint")?"Nenhum alerta para o filtro selecionado.":"Nada vence no restante desta semana."),sprintOcupHtml)}
     ${secaoCard("reunioes","3. Próximas reuniões / reuniões em aberto","reuniões dos próximos 7 dias e as já realizadas que ainda não receberam OK",secReunioes.length,"b-info",reunioesCorpo)}
     ${secaoCard("duplicidades","4. Duplicidades","atividades com o mesmo nome em um ou mais cronogramas",secDup.length,"b-warn",
       secDup.length? secDup.map(alertaRowHtml).join("") : vazioHtml(alertas.some(a=>a.secao==="duplicidades")?"Nenhum alerta para o filtro selecionado.":"Nenhuma duplicidade encontrada."))}
@@ -2714,6 +2855,19 @@ function viewPainel(v){
   $("#painel-alerta-proj").onchange=e=>{ ST.painelAlertaProjeto=e.target.value; render(); };
   $("#painel-alerta-resp").onchange=e=>{ ST.painelAlertaResp=e.target.value; render(); };
   $("#dash-year").onchange=e=>{ ST.dashYear=e.target.value; render(); };
+  // gráfico de ocupação semanal (SPRINT): navegação de semana e ajuste de horas por pessoa
+  $("#sprint-sem-prev").onclick=()=>{ ST.sprintSemanaOffset=(ST.sprintSemanaOffset||0)-1; render(); };
+  $("#sprint-sem-next").onclick=()=>{ ST.sprintSemanaOffset=(ST.sprintSemanaOffset||0)+1; render(); };
+  if($("#sprint-sem-hoje")) $("#sprint-sem-hoje").onclick=()=>{ ST.sprintSemanaOffset=0; render(); };
+  v.querySelectorAll("[data-capsem-colab]").forEach(inp=>{
+    inp.onchange=async()=>{
+      const h=inp.value===""?null:Math.max(0,+inp.value);
+      await salvarCapacidadeSemanal(inp.dataset.capsemColab,inp.dataset.capsemSemana,h); render();
+    };
+  });
+  v.querySelectorAll("[data-capsem-reset]").forEach(b=>{
+    b.onclick=async()=>{ await salvarCapacidadeSemanal(b.dataset.capsemReset,b.dataset.capsemSemana,null); render(); };
+  });
   $("#btn-pend-conc").onclick=exportarPendenciasConclusao;
   $("#btn-imp-pend").onclick=importarPendenciasConclusao;
   $("#dash-mode").querySelectorAll("button").forEach(b=>{
