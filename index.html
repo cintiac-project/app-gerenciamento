@@ -1489,9 +1489,19 @@ function motivoStatusCalculado(p){
   if(s==="Em andamento") return "Atividades em progresso ou horas já apontadas no projeto.";
   return "Ainda não há atividades, horas ou datas indicando início dos trabalhos.";
 }
-/* alertas: retorna lista de {tipo,sev,titulo,desc,dias} */
+/* semana corrente (segunda a domingo) usada pela sessão SPRINT do Painel Geral */
+function limitesSemanaCorrente(){
+  const hoje=todayStr();
+  const dow=new Date(hoje+"T00:00:00").getDay();      // 0=dom ... 6=sáb
+  const diasDesdeSegunda=dow===0?6:dow-1;
+  const diasAteFim=(7-dow)%7;                          // até o domingo
+  return {ini:addDays(hoje,-diasDesdeSegunda), fim:addDays(hoje,diasAteFim), diasAteFim};
+}
+/* alertas: retorna lista de {tipo,secao,sev,titulo,desc,dias}
+   secao: "vencidos" | "sprint" | "reunioes" | "duplicidades" (usado pelo Painel Geral) */
 function calcularAlertas(){
   const hoje=todayStr(); const out=[];
+  const diasAteFimSemana=limitesSemanaCorrente().diasAteFim;
   DB.data.atividades.forEach(a=>{
     if(!a.dataFimPrev || a.status==="Concluída" || a.status==="Cancelada" || (+a.progresso||0)>=100) return;
     const d=daysBetween(hoje,a.dataFimPrev);
@@ -1500,11 +1510,11 @@ function calcularAlertas(){
     // não tenha estimativas de horas por pessoa preenchidas.
     const proj=getProjeto(a.projetoId);
     const resp=nomesResponsaveisAtividade(a,proj).join(", ");
-    if(d<0) out.push({tipo:"fisico",sev:"danger",dias:d,
+    if(d<0) out.push({tipo:"fisico",secao:"vencidos",sev:"danger",dias:d,
       titulo:`Atividade atrasada: ${a.nome}`,
       desc:`${nomeProjeto(a.projetoId)} · venceu há ${Math.abs(d)} dia(s) · ${a.progresso||0}% concluído`,
       responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:a.notasProgresso||""});
-    else if(d<=7) out.push({tipo:"fisico",sev:"warn",dias:d,
+    else if(d<=diasAteFimSemana) out.push({tipo:"fisico",secao:"sprint",sev:"warn",dias:d,
       titulo:`Prazo próximo: ${a.nome}`,
       desc:`${nomeProjeto(a.projetoId)} · vence em ${d} dia(s) · ${a.progresso||0}% concluído`,
       responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:a.notasProgresso||""});
@@ -1515,11 +1525,11 @@ function calcularAlertas(){
     const lbl=f.tipo==="receita"?"Receita a receber":"Despesa a pagar";
     const proj=getProjeto(f.projetoId);
     const resp=proj && proj.gerente ? proj.gerente : null;
-    if(d<0) out.push({tipo:"financeiro",sev:"danger",dias:d,
+    if(d<0) out.push({tipo:"financeiro",secao:"vencidos",sev:"danger",dias:d,
       titulo:`${lbl} vencida: ${f.descricao||nomeRubrica(f.rubricaId)}`,
       desc:`${nomeProjeto(f.projetoId)} · ${fmtBRL(f.valor)} · venceu há ${Math.abs(d)} dia(s)`,
       responsavel:resp, projetoId:f.projetoId, financeiroId:f.id});
-    else if(d<=7) out.push({tipo:"financeiro",sev:"warn",dias:d,
+    else if(d<=diasAteFimSemana) out.push({tipo:"financeiro",secao:"sprint",sev:"warn",dias:d,
       titulo:`${lbl} próxima: ${f.descricao||nomeRubrica(f.rubricaId)}`,
       desc:`${nomeProjeto(f.projetoId)} · ${fmtBRL(f.valor)} · vence em ${d} dia(s)`,
       responsavel:resp, projetoId:f.projetoId, financeiroId:f.id});
@@ -1535,7 +1545,15 @@ function calcularAlertas(){
       if(d>7) return;
       const parts=(r.participantes||[]).filter(Boolean).join(", ");
       const quando=d===0?"hoje":d===1?"amanhã":d>1?`em ${d} dia(s)`:d===-1?"ontem":`há ${Math.abs(d)} dia(s)`;
-      out.push({tipo:"reuniao",sev:d<0?"danger":d<=2?"warn":"info",dias:d,
+      // dados que ainda faltam preencher (aparecem na sessão de reuniões)
+      const ata=r.ata||{}, faltando=[];
+      if(!parts) faltando.push("participantes");
+      if(d<0){
+        if(!String(ata.objetivo||"").trim()) faltando.push("objetivo da ata");
+        if(!(ata.topicos||[]).some(t=>t&&(t.tema||t.notas))) faltando.push("tópicos discutidos");
+        if(!(ata.saidas||[]).some(x=>x&&x.descricao)) faltando.push("encaminhamentos");
+      } else if(!r.hora) faltando.push("horário");
+      out.push({tipo:"reuniao",secao:"reunioes",faltando,sev:d<0?"danger":d<=2?"warn":"info",dias:d,
         titulo:`Reunião: ${r.titulo||"(sem título)"}`,
         desc:`${p.nome} · ${quando}${r.hora?" às "+r.hora:""}${parts?" · Participantes: "+parts:""}`,
         responsavel:null, projetoId:p.id, reuniaoId:r.id});
@@ -1566,7 +1584,7 @@ function calcularAlertas(){
       if(outrosProjetosNomes.length) partes.push("em: "+outrosProjetosNomes.join(", "));
       const proj=getProjeto(a.projetoId);
       const resp=nomesResponsaveisAtividade(a,proj).join(", ");
-      out.push({tipo:"duplicada",sev:"warn",dias:9999, // não é baseado em prazo; sempre aparece por último
+      out.push({tipo:"duplicada",secao:"duplicidades",sev:"warn",dias:9999, // não é baseado em prazo; sempre aparece por último
         titulo:`Atividade duplicada: ${a.nome}`,
         desc:`${nomeProjeto(a.projetoId)} · também aparece ${partes.join(" · ")}`,
         responsavel:resp, projetoId:a.projetoId, atividadeId:a.id});
@@ -2168,7 +2186,7 @@ function render(){
   // Guarda o quanto cada um estava rolado agora, e restaura depois de
   // recriá-los.
   const scrollsInternosAntes={};
-  ["nav","alertas-scroll-box"].forEach(id=>{
+  ["nav","alertas-scroll-box-vencidos","alertas-scroll-box-sprint","alertas-scroll-box-reunioes","alertas-scroll-box-duplicidades"].forEach(id=>{
     const el=document.getElementById(id);
     if(el && el.scrollTop>0) scrollsInternosAntes[id]=el.scrollTop;
   });
@@ -2543,7 +2561,7 @@ function viewPainel(v){
   // tempo), não deveria limitar a QUANTIDADE de itens exibidos. Removido:
   // agora mostra todos os alertas encontrados, com rolagem interna quando
   // a lista fica longa, para não estourar o layout da página.
-  const alertasHtml=alertasFiltrados.length? alertasFiltrados.map(a=>{
+  const alertaRowHtml=a=>{
     const col=a.sev==="danger"?"var(--danger)":a.sev==="info"?"var(--info)":"var(--warn)";
     const respHtml=a.tipo==="reuniao"
       ? ""
@@ -2583,13 +2601,15 @@ function viewPainel(v){
             <button class="btn-icon" data-alerta-editar-fin="${a.financeiroId}" data-proj="${a.projetoId}" title="Editar lançamento (ex.: nova data)">✎</button>
           </div>`
     ) : "";
+    const faltaHtml=(a.faltando&&a.faltando.length)
+      ? `<div class="alert-resp sem"><span class="rl">Faltam dados:</span> ${esc(a.faltando.join(", "))}</div>` : "";
     return `<div class="alert-row"><div class="ab" style="background:${col}"></div>
       <div class="at"><div class="t">${esc(a.titulo)}</div>
         <div class="d">${esc(a.desc)}</div>
-        ${respHtml}${notasHtml}</div>
+        ${respHtml}${notasHtml}${faltaHtml}</div>
       <span class="badge ${a.sev==="danger"?"b-danger":a.sev==="info"?"b-info":"b-warn"}">${a.tipo==="fisico"?"Físico":a.tipo==="financeiro"?"Financeiro":a.tipo==="duplicada"?"Duplicada":"Reunião"}</span>
       ${acoesHtml}</div>`;
-  }).join("") : `<div class="empty" style="padding:26px"><span class="ic">✓</span><p>${alertas.length?"Nenhum alerta para o filtro selecionado.":"Nenhum prazo crítico nem reunião nos próximos 7 dias."}</p></div>`;
+  };
 
   const alertasFiltroHtml=`
     <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
@@ -2608,19 +2628,52 @@ function viewPainel(v){
       </div>
     </div>`;
 
+  // ---- Sessões do painel de alertas (ordem: vencidos → sprint → reuniões → duplicidades)
+  const sem=limitesSemanaCorrente();
+  const dosec=k=>alertasFiltrados.filter(a=>a.secao===k);
+  const secVencidos=dosec("vencidos");
+  const secSprint=dosec("sprint");
+  const secReunioes=dosec("reunioes");
+  const secDup=dosec("duplicidades");
+  const reuProx=secReunioes.filter(a=>a.dias>=0).sort((a,b)=>a.dias-b.dias);
+  const reuAberto=secReunioes.filter(a=>a.dias<0).sort((a,b)=>b.dias-a.dias);
+  const vazioHtml=msg=>`<div class="empty" style="padding:26px"><span class="ic">✓</span><p>${msg}</p></div>`;
+  const subTitulo=t=>`<div style="font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-faint);margin:6px 2px 8px">${t}</div>`;
+  const secaoCard=(id,titulo,hint,qtd,sev,corpo)=>`
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-head" style="flex-wrap:wrap;gap:10px">
+        <h3>${titulo} <span class="badge ${qtd?sev:"b-ok"}" style="margin-left:6px">${qtd}</span></h3>
+        <span class="hint">${hint}</span>
+      </div>
+      <div class="card-pad" id="alertas-scroll-box-${id}" style="${qtd>5?"max-height:440px;overflow-y:auto":""}">${corpo}</div>
+    </div>`;
+  const reunioesCorpo=secReunioes.length
+    ? (reuProx.length? subTitulo("Próximas reuniões (até 7 dias)")+reuProx.map(alertaRowHtml).join("") : "")
+      +(reuAberto.length? subTitulo("Reuniões em aberto (já realizadas, sem OK)")+reuAberto.map(alertaRowHtml).join("") : "")
+    : vazioHtml(alertas.some(a=>a.secao==="reunioes")?"Nenhuma reunião para o filtro selecionado.":"Nenhuma reunião próxima ou em aberto.");
+  const alertasSecoesHtml=`
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-head" style="flex-wrap:wrap;gap:10px">
+        <h3>⚠ Central de alertas</h3>
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <span class="hint">${alertasFiltrados.length} de ${alertas.length} alerta(s)</span>
+          ${alertasFiltroHtml}
+        </div>
+      </div>
+    </div>
+    ${secaoCard("vencidos","1. Alertas de prazos vencidos","atividades e lançamentos financeiros com prazo anterior a hoje",secVencidos.length,"b-danger",
+      secVencidos.length? secVencidos.map(alertaRowHtml).join("") : vazioHtml(alertas.some(a=>a.secao==="vencidos")?"Nenhum alerta para o filtro selecionado.":"Nenhum prazo vencido. 🎉"))}
+    ${secaoCard("sprint","2. SPRINT","vencem na semana corrente · "+fmtDate(sem.ini)+" a "+fmtDate(sem.fim),secSprint.length,"b-warn",
+      secSprint.length? secSprint.map(alertaRowHtml).join("") : vazioHtml(alertas.some(a=>a.secao==="sprint")?"Nenhum alerta para o filtro selecionado.":"Nada vence no restante desta semana."))}
+    ${secaoCard("reunioes","3. Próximas reuniões / reuniões em aberto","reuniões dos próximos 7 dias e as já realizadas que ainda não receberam OK",secReunioes.length,"b-info",reunioesCorpo)}
+    ${secaoCard("duplicidades","4. Duplicidades","atividades com o mesmo nome em um ou mais cronogramas",secDup.length,"b-warn",
+      secDup.length? secDup.map(alertaRowHtml).join("") : vazioHtml(alertas.some(a=>a.secao==="duplicidades")?"Nenhum alerta para o filtro selecionado.":"Nenhuma duplicidade encontrada."))}
+  `;
+
   v.innerHTML=`
   ${kpis}
   <div style="height:18px"></div>
-  <div class="card" style="margin-bottom:18px">
-    <div class="card-head" style="flex-wrap:wrap;gap:10px">
-      <h3>⚠ Alertas de prazos, reuniões e duplicidades</h3>
-      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-        <span class="hint">${alertasFiltrados.length} de ${alertas.length} alerta(s) · próximos 7 dias, itens vencidos e reuniões agendadas</span>
-        ${alertasFiltroHtml}
-      </div>
-    </div>
-    <div class="card-pad" id="alertas-scroll-box" style="${alertasFiltrados.length>7?"max-height:520px;overflow-y:auto":""}">${alertasHtml}</div>
-  </div>
+  ${alertasSecoesHtml}
 
   ${mciMdsPainelHtml()}
 
