@@ -2443,8 +2443,8 @@ function mciMdsPainelHtml(){
       <div style="flex:1;min-width:0">
         <textarea class="mds-texto" data-id="${m.id}" placeholder="Descreva a medida de direção semanal…"
           style="width:100%;min-height:44px;padding:8px 9px;border:1px solid var(--line);border-radius:6px;font-family:inherit;font-size:13px;background:#fff;resize:vertical">${esc(m.texto||"")}</textarea>
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px">
-          <select class="mds-resp select" data-id="${m.id}" style="max-width:240px">
+        <div style="display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap;margin-top:6px;min-width:0;max-width:100%">
+          <select class="mds-resp select" data-id="${m.id}" style="max-width:min(240px,100%)">
             <option value="">Responsável…</option>
             ${getInternos().map(cIt=>`<option value="${cIt.id}" ${String(m.responsavelId||"")===String(cIt.id)?"selected":""}>${esc(cIt.nome)}</option>`).join("")}
           </select>
@@ -2452,7 +2452,7 @@ function mciMdsPainelHtml(){
             const ref=semanaDaData(m.criadoEm||todayStr());
             const antiga=ref.ini<semAtualMcs.ini;
             return `<span class="mds-semana" title="Semana (segunda a domingo) em que esta MCS foi definida${antiga?" — ainda não concluída, vem de semana anterior":""}"
-              style="font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:999px;white-space:nowrap;background:${antiga?"var(--warn-bg)":"var(--info-bg)"};color:${antiga?"var(--warn)":"var(--info)"}">
+              style="box-sizing:border-box;max-width:100%;font-size:11.5px;line-height:1.35;font-weight:600;padding:4px 10px;border-radius:12px;white-space:normal;background:${antiga?"var(--warn-bg)":"var(--info-bg)"};color:${antiga?"var(--warn)":"var(--info)"}">
               📅 Semana de referência: ${fmtDate(ref.ini)} a ${fmtDate(ref.fim)}${antiga?" · semana anterior":""}</span>`;
           })()}
         </div>
