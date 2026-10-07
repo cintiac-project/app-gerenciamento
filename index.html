@@ -1987,6 +1987,9 @@ const SESSAO_CONFIG={
     ],
     abasOcultas:["financeiro","raci"],
     linhaDoTempo:false,
+    // em Captação o "Status da captação" já é o status do projeto; o Status
+    // automático do resumo seria redundante
+    ocultarStatusResumo:true,
     conversao:{statusField:"statusCaptacao", statusGatilho:"Aprovado", destino:"gestao_projetos"}
   },
   gestao_projetos:{
@@ -3265,9 +3268,9 @@ function projResumo(c,p){
       ${isGestor()?'<button class="btn ghost sm" id="edit-p">✎ Editar</button>':""}</div>
     <div class="card-pad">
       <div class="mini-stat"><span>Código</span><span class="v">${esc(p.codigo||"—")}</span></div>
-      <div class="mini-stat"><span>Status</span><span title="${esc(motivoStatusCalculado(p))}">${statusBadge(statusCalculado(p))}
+      ${cfgAtual.ocultarStatusResumo?"":`<div class="mini-stat"><span>Status</span><span title="${esc(motivoStatusCalculado(p))}">${statusBadge(statusCalculado(p))}
         ${isGestor()?`<button class="btn-icon" id="btn-cancelar-proj" title="${statusCalculado(p)==='Cancelado'?'Reativar projeto':'Marcar como cancelado'}" style="margin-left:6px;font-size:11px">${statusCalculado(p)==='Cancelado'?'↺':'✕'}</button>`:""}</span></div>
-      <div class="mini-stat" style="font-size:11px;color:var(--ink-faint)"><span></span><span>${esc(motivoStatusCalculado(p))}</span></div>
+      <div class="mini-stat" style="font-size:11px;color:var(--ink-faint)"><span></span><span>${esc(motivoStatusCalculado(p))}</span></div>`}
       ${campoOcultoSessao(p,"cliente")?"":`<div class="mini-stat"><span>Cliente / Área demandante</span><span class="v">${esc(p.cliente||"—")}</span></div>`}
       ${campoOcultoResumo(p,"dataInicio")?"":`<div class="mini-stat"><span>Início</span><span class="v">${fmtDate(p.dataInicio)}</span></div>`}
       ${campoOcultoResumo(p,"dataFim")?"":`<div class="mini-stat"><span>Término previsto</span><span class="v">${fmtDate(p.dataFim)}</span></div>`}
