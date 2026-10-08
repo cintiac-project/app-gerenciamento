@@ -286,9 +286,9 @@
   .alert-row .alert-resp{font-size:11.5px;margin-top:4px;color:var(--ink);
     background:#f4f7f8;padding:3px 9px;border-radius:5px;display:inline-block}
   .alert-row .alert-resp .rl{color:var(--ink-faint);font-weight:500}
-  .alertas-filtros{display:flex;align-items:center;gap:14px;flex-wrap:nowrap;width:100%}
-  .alertas-filtros .field-inline{flex:1 1 0;min-width:0;width:auto}
-  .alertas-filtros .field-inline .select{flex:1;min-width:0;max-width:100%}
+  .alertas-filtros{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;width:100%;max-width:100%;min-width:0;box-sizing:border-box}
+  .alertas-filtros .field-inline{display:flex;align-items:center;flex-wrap:nowrap;gap:7px;min-width:0;max-width:100%;width:auto}
+  .alertas-filtros .field-inline .select{flex:1 1 0;width:0;min-width:0;max-width:100%;text-overflow:ellipsis}
   .btn-icon.mcs-on{background:var(--info-bg);color:var(--info);border-color:var(--info)}
   .alert-row .alert-resp.sem{background:#fdf0e8;color:#a8551f}
   .alert-row .alert-resp.sem .rl{color:#a8551f}
@@ -2883,7 +2883,7 @@ function viewPainel(v){
     <div class="card" style="margin-bottom:18px">
       <div class="card-head" style="flex-wrap:wrap;gap:10px">
         <h3>⚠ Central de alertas</h3>
-        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <div style="display:flex;flex-direction:column;align-items:stretch;gap:10px;width:100%;min-width:0;box-sizing:border-box">
           <span class="hint">${alertasFiltrados.length} de ${alertas.length} alerta(s)</span>
           ${alertasFiltroHtml}
         </div>
