@@ -7804,8 +7804,7 @@ function formColab(c){
     values:c||{tipo:"parceiro"},
     fields:[
       {key:"nome",label:"Nome completo",required:true,full:true,
-        disabled: ehInterno, // interno só altera nome pela própria conta
-        help: ehInterno?"Colaboradores internos editam o próprio nome em sua conta.":""},
+        help: ehInterno?"Corrige o nome exibido no app (a conta de login não muda).":""},
       ...(ehInterno ? [
         {key:"papel",label:"Papel no sistema",type:"select",required:true,
           options:[
@@ -7834,9 +7833,9 @@ function formColab(c){
       if(edit){
         Object.assign(c,v);
         if(ehInterno){
-          // atualiza profile existente (nome não muda aqui; papel/cargo/custo/email sim)
+          // atualiza profile existente (nome, papel, cargo, custo e e-mail)
           await sbUpdate("profiles", c.id, toSnake({
-            papel:v.papel, cargo:v.cargo, organizacao:v.organizacao,
+            nome:v.nome, papel:v.papel, cargo:v.cargo, organizacao:v.organizacao,
             custoHora:v.custoHora, email:v.email||null
           }));
         } else {
