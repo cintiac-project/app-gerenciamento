@@ -286,6 +286,10 @@
   .alert-row .alert-resp{font-size:11.5px;margin-top:4px;color:var(--ink);
     background:#f4f7f8;padding:3px 9px;border-radius:5px;display:inline-block}
   .alert-row .alert-resp .rl{color:var(--ink-faint);font-weight:500}
+  .alert-row .at .d.d-linha{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px}
+  .alert-row .at .d.d-linha .alert-resp{margin-top:0}
+  .alert-row .at .d.d-linha .proj-nome{font-weight:600;color:var(--ink)}
+  .btn-icon.mcs-on{background:var(--info-bg);color:var(--info);border-color:var(--info)}
   .alert-row .alert-resp.sem{background:#fdf0e8;color:#a8551f}
   .alert-row .alert-resp.sem .rl{color:#a8551f}
   .alert-acoes{display:flex;gap:4px;flex-shrink:0}
@@ -695,6 +699,11 @@ const DB = {
       mci: toCamel(mciData||[]),
       mds: toCamel(mdsData||[])
     };
+    // migração suave: status de captação antigos viram a nova numeração (em memória;
+    // grava no banco na próxima edição do projeto — ou rode o SQL de migração)
+    this.data.projetos.forEach(p=>{
+      if(p.statusCaptacao && STATUS_CAPTACAO_LEGADO[p.statusCaptacao]) p.statusCaptacao=STATUS_CAPTACAO_LEGADO[p.statusCaptacao];
+    });
     console.log("[PMO] DB.load concluído:", this.data.projetos.length, "projetos,", this.data.horas.length, "horas");
     await carregarCapacidadeSemanal();   // não derruba o load se a tabela ainda não existir
   },
@@ -2119,6 +2128,32 @@ function opcoesProjetosBusca(){
    Projetos). Sessões sem entrada aqui (ex.: gestao_projetos)
    usam o comportamento padrão, sem nenhuma restrição.
    ============================================================ */
+/* Status usados na Captação (numeração oficial). Mantenha a ordem. */
+const STATUS_CAPTACAO=[
+  "01 - Captação de Cliente",
+  "02 - Avaliação de Oportunidade de Editais e/ou Captação de Recurso e Viabilidade Técnica",
+  "03 - Projeto em Estruturação com Time Interno",
+  "04 - Projeto em Análise pelo Cliente",
+  "05 - Projeto Declinado pelo Cliente",
+  "06 - Projeto Não Submetido",
+  "07 - Projeto Submetido e em Acompanhamento",
+  "08 - Projeto Não Aprovado",
+  "09 - Projeto Aprovado",
+  "10 - Projeto Contratado"
+];
+/* status que NÃO contam como captação prevista (perdidos/encerrados) */
+const STATUS_CAPTACAO_FORA_PREVISTO=["05 - Projeto Declinado pelo Cliente","06 - Projeto Não Submetido","08 - Projeto Não Aprovado"];
+/* status que liberam o botão "converter em projeto" */
+const STATUS_CAPTACAO_GATILHO=["09 - Projeto Aprovado","10 - Projeto Contratado"];
+/* converte os status antigos já salvos no banco para a nova numeração */
+const STATUS_CAPTACAO_LEGADO={
+  "Em prospecção":"01 - Captação de Cliente",
+  "Em elaboração":"03 - Projeto em Estruturação com Time Interno",
+  "Submetido":"07 - Projeto Submetido e em Acompanhamento",
+  "Não submetido":"06 - Projeto Não Submetido",
+  "Aprovado":"09 - Projeto Aprovado",
+  "Reprovado":"08 - Projeto Não Aprovado"
+};
 const SESSAO_CONFIG={
   captacao:{
     camposExtras:[
@@ -2130,14 +2165,14 @@ const SESSAO_CONFIG={
         help:"Opcional. Valor total do edital/programa de fomento, quando for diferente do valor pleiteado neste projeto."},
       {key:"prazoSubmissao",label:"Prazo de submissão",type:"date"},
       {key:"statusCaptacao",label:"Status da captação",type:"select",
-        options:["Em prospecção","Em elaboração","Submetido","Não submetido","Aprovado","Reprovado"].map(s=>({value:s,label:s}))}
+        options:STATUS_CAPTACAO.map(s=>({value:s,label:s}))}
     ],
     abasOcultas:["financeiro","raci"],
     linhaDoTempo:false,
     // em Captação o "Status da captação" já é o status do projeto; o Status
     // automático do resumo seria redundante
     ocultarStatusResumo:true,
-    conversao:{statusField:"statusCaptacao", statusGatilho:"Aprovado", destino:"gestao_projetos"}
+    conversao:{statusField:"statusCaptacao", statusGatilho:STATUS_CAPTACAO_GATILHO, destino:"gestao_projetos"}
   },
   gestao_projetos:{
     // depois que um projeto é convertido de "Captação" para "Gestão de
@@ -2483,6 +2518,32 @@ function mciMdsPainelHtml(){
   </div>`;
 }
 
+/* Marca/desmarca uma atividade da SPRINT como MCS. Cria (ou remove) uma linha na
+   tabela "mds" ligada à atividade (colunas atividade_id e projeto_id). */
+async function alternarAtividadeComoMcs(atividadeId){
+  const at=getAtividade(atividadeId); if(!at) return;
+  DB.data.mds=DB.data.mds||[];
+  const existente=DB.data.mds.find(m=>!m.concluido && m.atividadeId===atividadeId);
+  if(existente){
+    DB.data.mds=DB.data.mds.filter(m=>m.id!==existente.id);
+    try{ await sbDelete("mds", existente.id); toast("Atividade removida do quadro de MCS."); }
+    catch(e){ DB.data.mds.push(existente); toast("Erro ao remover MCS: "+e.message); }
+    render(); return;
+  }
+  // se houver um único responsável interno identificável, já preenche
+  const nomes=nomesResponsaveisAtividade(at,getProjeto(at.projetoId));
+  const interno=nomes.length===1? getInternos().find(c=>c.nome===nomes[0]) : null;
+  const novo={id:uid(), texto:`${at.nome} (${nomeProjeto(at.projetoId)})`, responsavelId:interno?interno.id:null,
+    criadoEm:todayStr(), concluido:false, concluidoEm:null, atividadeId:at.id, projetoId:at.projetoId};
+  DB.data.mds.push(novo);
+  try{ await sbInsert("mds", toSnake(novo)); toast("Atividade adicionada ao quadro de MCS. 📍"); }
+  catch(e){
+    DB.data.mds=DB.data.mds.filter(m=>m.id!==novo.id);
+    toast("Erro ao criar MCS (confira se as colunas atividade_id e projeto_id existem na tabela mds): "+e.message);
+  }
+  render();
+}
+
 function abrirHistoricoMci(){
   const lista=mciHistorico();
   $("#modal-root").innerHTML=`
@@ -2580,8 +2641,12 @@ function wirePainelMciMds(v){
       try{
         await sbUpdate("mds", item.id, {concluido:true, concluido_em:item.concluidoEm});
         toast("MCS concluída e arquivada no histórico.");
-      }catch(e){ toast("Erro ao concluir MCS: "+e.message); }
+      }catch(e){ toast("Erro ao concluir MCS: "+e.message); return render(); }
       render();
+      // MCS vinda de uma atividade da sprint: conclui também a atividade
+      // (abre a confirmação com datas reais e horas executadas)
+      const ativ=item.atividadeId?getAtividade(item.atividadeId):null;
+      if(ativ && ativ.status!=="Concluída" && (+ativ.progresso||0)<100) marcarAtividadeConcluidaRapido(ativ.id);
     };
   });
   v.querySelectorAll(".mds-rm").forEach(b=>{
@@ -2612,7 +2677,6 @@ function viewPainel(v){
   // há mais chance real de virarem receita, então não entram na soma nem
   // no raio-x de Captação (continuam existindo/editáveis normalmente,
   // só não contam para o total previsto do Painel Geral).
-  const STATUS_CAPTACAO_FORA_PREVISTO=["Não submetido","Reprovado"];
   const projetosCaptacao=ps.filter(p=>p.sessaoId==="captacao"
     && !STATUS_CAPTACAO_FORA_PREVISTO.includes(p.statusCaptacao));
   const projetosNaoCaptacao=ps.filter(p=>p.sessaoId!=="captacao");
@@ -2711,6 +2775,22 @@ function viewPainel(v){
     // anotações de progresso da atividade (preenchidas em "Editar atividade",
     // logo abaixo de "% Concluído"), exibidas aqui para dar contexto rápido
     // do andamento sem precisar abrir a atividade.
+    // linha única: nome do projeto + responsável (+ detalhe de prazo/progresso)
+    let projNomeAl=a.projetoId?nomeProjeto(a.projetoId):"", descRestAl=a.desc||"";
+    const linhaUnica=a.tipo!=="reuniao" && projNomeAl && descRestAl.startsWith(projNomeAl+" · ");
+    if(linhaUnica) descRestAl=descRestAl.slice(projNomeAl.length+3);
+    const respInline=a.responsavel
+      ? `<span class="alert-resp"><span class="rl">Responsável:</span> <b>${esc(a.responsavel)}</b></span>`
+      : `<span class="alert-resp sem"><span class="rl">Responsável:</span> <i>não atribuído</i></span>`;
+    const descHtml=linhaUnica
+      ? `<div class="d d-linha"><span class="proj-nome">${esc(projNomeAl)}</span>${respInline}<span>· ${esc(descRestAl)}</span></div>`
+      : `<div class="d">${esc(a.desc)}</div>`;
+    // ITEM 3: botão "marcar como MCS" nas atividades da SPRINT
+    const mcsAtiva=(a.tipo==="fisico" && a.secao==="sprint")
+      ? (DB.data.mds||[]).find(m=>!m.concluido && m.atividadeId===a.atividadeId) : null;
+    const mcsBtnHtml=(a.tipo==="fisico" && a.secao==="sprint")
+      ? `<div class="alert-acoes"><button class="btn-icon ${mcsAtiva?"mcs-on":""}" data-alerta-mcs="${a.atividadeId}"
+           title="${mcsAtiva?"Já é uma MCS desta semana — clique para remover do quadro de MCS":"Escolher esta atividade como MCS (aparece no quadro de MCS)"}">📍</button></div>` : "";
     const notasHtml=(a.tipo==="fisico" && a.notasProgresso)
       ? `<div class="alert-resp"><span class="rl">Anotações:</span> ${esc(a.notasProgresso)}</div>`
       : "";
@@ -2745,10 +2825,10 @@ function viewPainel(v){
       ? `<div class="alert-resp sem"><span class="rl">Faltam dados:</span> ${esc(a.faltando.join(", "))}</div>` : "";
     return `<div class="alert-row"><div class="ab" style="background:${col}"></div>
       <div class="at"><div class="t">${esc(a.titulo)}</div>
-        <div class="d">${esc(a.desc)}</div>
-        ${respHtml}${notasHtml}${faltaHtml}</div>
+        ${descHtml}
+        ${linhaUnica?"":respHtml}${notasHtml}${faltaHtml}</div>
       <span class="badge ${a.sev==="danger"?"b-danger":a.sev==="info"?"b-info":"b-warn"}">${a.tipo==="fisico"?"Físico":a.tipo==="financeiro"?"Financeiro":a.tipo==="duplicada"?"Duplicada":"Reunião"}</span>
-      ${acoesHtml}</div>`;
+      ${mcsBtnHtml}${acoesHtml}</div>`;
   };
 
   const alertasFiltroHtml=`
@@ -2892,6 +2972,9 @@ function viewPainel(v){
   });
 
   // ações rápidas dos alertas de prazo (ver calcularAlertas/alertasHtml acima)
+  v.querySelectorAll("[data-alerta-mcs]").forEach(b=>{
+    b.onclick=()=>alternarAtividadeComoMcs(b.dataset.alertaMcs);
+  });
   v.querySelectorAll("[data-alerta-concluir-ativ]").forEach(b=>{
     b.onclick=()=>marcarAtividadeConcluidaRapido(b.dataset.alertaConcluirAtiv);
   });
@@ -2921,7 +3004,7 @@ function viewPainel(v){
   });
   $("#kpi-captacao").onclick=()=>abrirDetalheReceitaPortfolio(projetosCaptacao,
     "◈ Captação (previsto) — por projeto",
-    "Projetos da sessão \"Captação\" ainda com chance real de virar receita (em prospecção, elaboração, submetidos ou aprovados aguardando conversão), ordenados do maior para o menor valor pleiteado. Propostas \"Não submetido\" ou \"Reprovado\" não entram nesse total. Assim que um projeto é aprovado, ele é convertido para \"Gestão de Projetos\" e passa a contar em \"Receita já captada\". Clique num projeto para abri-lo e conferir/corrigir o campo \"Receita / Valor do projeto\".");
+    "Projetos da sessão \"Captação\" ainda com chance real de virar receita (status 01 a 04, 07, 09 e 10 — ou seja, tudo exceto declinados, não submetidos e não aprovados), ordenados do maior para o menor valor pleiteado. Propostas nos status \"05 - Declinado\", \"06 - Não Submetido\" ou \"08 - Não Aprovado\" não entram nesse total. Assim que um projeto é aprovado/contratado, ele é convertido para \"Gestão de Projetos\" e passa a contar em \"Receita já captada\". Clique num projeto para abri-lo e conferir/corrigir o campo \"Receita / Valor do projeto\".");
   $("#kpi-receita").onclick=()=>abrirDetalheReceitaPortfolio(projetosNaoCaptacao,
     "💰 Receita já captada — por projeto",
     "Todos os projetos do portfólio, exceto os que ainda estão em Captação, ordenados do maior para o menor valor contratado. Clique num projeto para abri-lo e conferir/corrigir o campo \"Receita / Valor do projeto\".");
@@ -3462,12 +3545,12 @@ function projResumo(c,p){
     </table>` : "";
 
   const cfgAtual=cfgSessao(p.sessaoId);
-  const podeConverter = cfgAtual.conversao && p[cfgAtual.conversao.statusField]===cfgAtual.conversao.statusGatilho;
+  const podeConverter = cfgAtual.conversao && [].concat(cfgAtual.conversao.statusGatilho).includes(p[cfgAtual.conversao.statusField]);
   const bannerConversao = podeConverter ? `<div class="card" style="margin-bottom:16px;border-color:var(--ok)">
       <div class="card-pad" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
         <div><b>Captação aprovada!</b><div style="font-size:12.5px;color:var(--ink-faint)">
           Converta este registro em projeto na sessão "${esc(nomeSessao(cfgAtual.conversao.destino))}", mantendo todo o histórico (atividades, horas, documentos, reuniões).</div></div>
-        <button class="btn" id="btn-converter-projeto">Aprovado → converter em projeto</button>
+        <button class="btn" id="btn-converter-projeto">Converter em projeto</button>
       </div></div>` : "";
 
   c.innerHTML=`
@@ -7477,7 +7560,7 @@ function formProjeto(p,sessaoIdDefault){
     });
   }
   abrir(p||Object.assign({status:"Planejado",dataInicio:todayStr(),sessaoId:sessaoIdDefault||null},
-    sessaoIdDefault==="captacao"?{statusCaptacao:"Em prospecção"}:{}));
+    sessaoIdDefault==="captacao"?{statusCaptacao:STATUS_CAPTACAO[0]}:{}));
 }
 
 /* ---- FORM: ATIVIDADE (removido campo responsavelId) ---- */
