@@ -286,9 +286,9 @@
   .alert-row .alert-resp{font-size:11.5px;margin-top:4px;color:var(--ink);
     background:#f4f7f8;padding:3px 9px;border-radius:5px;display:inline-block}
   .alert-row .alert-resp .rl{color:var(--ink-faint);font-weight:500}
-  .alert-row .at .d.d-linha{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px}
-  .alert-row .at .d.d-linha .alert-resp{margin-top:0}
-  .alert-row .at .d.d-linha .proj-nome{font-weight:600;color:var(--ink)}
+  .alertas-filtros{display:flex;align-items:center;gap:14px;flex-wrap:nowrap;width:100%}
+  .alertas-filtros .field-inline{flex:1 1 0;min-width:0;width:auto}
+  .alertas-filtros .field-inline .select{flex:1;min-width:0;max-width:100%}
   .btn-icon.mcs-on{background:var(--info-bg);color:var(--info);border-color:var(--info)}
   .alert-row .alert-resp.sem{background:#fdf0e8;color:#a8551f}
   .alert-row .alert-resp.sem .rl{color:#a8551f}
@@ -2775,16 +2775,6 @@ function viewPainel(v){
     // anotações de progresso da atividade (preenchidas em "Editar atividade",
     // logo abaixo de "% Concluído"), exibidas aqui para dar contexto rápido
     // do andamento sem precisar abrir a atividade.
-    // linha única: nome do projeto + responsável (+ detalhe de prazo/progresso)
-    let projNomeAl=a.projetoId?nomeProjeto(a.projetoId):"", descRestAl=a.desc||"";
-    const linhaUnica=a.tipo!=="reuniao" && projNomeAl && descRestAl.startsWith(projNomeAl+" · ");
-    if(linhaUnica) descRestAl=descRestAl.slice(projNomeAl.length+3);
-    const respInline=a.responsavel
-      ? `<span class="alert-resp"><span class="rl">Responsável:</span> <b>${esc(a.responsavel)}</b></span>`
-      : `<span class="alert-resp sem"><span class="rl">Responsável:</span> <i>não atribuído</i></span>`;
-    const descHtml=linhaUnica
-      ? `<div class="d d-linha"><span class="proj-nome">${esc(projNomeAl)}</span>${respInline}<span>· ${esc(descRestAl)}</span></div>`
-      : `<div class="d">${esc(a.desc)}</div>`;
     // ITEM 3: botão "marcar como MCS" nas atividades da SPRINT
     const mcsAtiva=(a.tipo==="fisico" && a.secao==="sprint")
       ? (DB.data.mds||[]).find(m=>!m.concluido && m.atividadeId===a.atividadeId) : null;
@@ -2825,14 +2815,14 @@ function viewPainel(v){
       ? `<div class="alert-resp sem"><span class="rl">Faltam dados:</span> ${esc(a.faltando.join(", "))}</div>` : "";
     return `<div class="alert-row"><div class="ab" style="background:${col}"></div>
       <div class="at"><div class="t">${esc(a.titulo)}</div>
-        ${descHtml}
-        ${linhaUnica?"":respHtml}${notasHtml}${faltaHtml}</div>
+        <div class="d">${esc(a.desc)}</div>
+        ${respHtml}${notasHtml}${faltaHtml}</div>
       <span class="badge ${a.sev==="danger"?"b-danger":a.sev==="info"?"b-info":"b-warn"}">${a.tipo==="fisico"?"Físico":a.tipo==="financeiro"?"Financeiro":a.tipo==="duplicada"?"Duplicada":"Reunião"}</span>
       ${mcsBtnHtml}${acoesHtml}</div>`;
   };
 
   const alertasFiltroHtml=`
-    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <div class="alertas-filtros">
       <div class="field-inline">Projeto
         <select class="select" id="painel-alerta-proj">
           <option value="">Todos</option>
