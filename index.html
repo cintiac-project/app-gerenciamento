@@ -4843,10 +4843,18 @@ function formReuniao(p){
 }
 
 /* ---- DETALHE / EDIÇÃO DA REUNIÃO ---- */
+function ordenarSaidasPorData(lista){
+  lista.map((x,i)=>[x,i]).sort((a,b)=>{
+    const da=a[0].dataEntrega||"9999-99-99", db=b[0].dataEntrega||"9999-99-99";
+    return da.localeCompare(db)||a[1]-b[1];
+  }).forEach((par,i)=>{ lista[i]=par[0]; });
+}
 function reuniaoDetalhe(c,p,r){
   r.ata=r.ata||{objetivo:"",topicos:[],saidas:[]};
   r.ata.topicos=r.ata.topicos||[];
   r.ata.saidas=r.ata.saidas||[];
+  // entregas em ordem crescente de data (sem data vão para o fim; ordem estável)
+  ordenarSaidasPorData(r.ata.saidas);
   r.participantes=r.participantes||[];
   r.resumoRealizadas=r.resumoRealizadas||[];
   r.resumoProximas=r.resumoProximas||[];
@@ -6130,6 +6138,7 @@ body{ font-family:'Atkinson Hyperlegible',Calibri,Arial,sans-serif; }
 
 function gerarHtmlAta(p,r){
   const ata=r.ata||{objetivo:"",topicos:[],saidas:[]};
+  if(ata.saidas) ordenarSaidasPorData(ata.saidas);
   const parts=(r.participantes||[]).filter(Boolean);
   const partsHtml=parts.length
     ? "<ul>"+parts.map(x=>`<li>${esc(x)}</li>`).join("")+"</ul>"
@@ -6204,6 +6213,7 @@ function gerarHtmlAta(p,r){
 
 function gerarTextoAta(p,r){
   const ata=r.ata||{};
+  if(ata.saidas) ordenarSaidasPorData(ata.saidas);
   const parts=(r.participantes||[]).filter(Boolean);
   let out="ATA DE REUNIÃO\n";
   out+="Projeto: "+p.nome+"\n";
@@ -7235,8 +7245,9 @@ function openForm(cfg){
         const btnOk=row.querySelector('[data-erole="ok"]');
         const btnRm=row.querySelector('[data-erole="rm"]');
         selColab.onchange=()=>{ vals[f.key][idx].colaboradorId=selColab.value; };
-        inpHoras.oninput=()=>{ vals[f.key][idx].horas=inpHoras.value; };
-        inpExec.oninput=()=>{ vals[f.key][idx].horasExecutadas=inpExec.value; };
+        const avisar=()=>{ if(cfg.onEstimativasChange) cfg.onEstimativasChange(vals,$("#f-grid")); };
+        inpHoras.oninput=()=>{ vals[f.key][idx].horas=inpHoras.value; avisar(); };
+        inpExec.oninput=()=>{ vals[f.key][idx].horasExecutadas=inpExec.value; avisar(); };
         // "OK": entende que a pessoa cumpriu exatamente as horas previstas —
         // copia o valor de "Horas" (previstas) para "Executada". Se depois o
         // tempo realmente gasto for diferente, basta editar o campo
@@ -7244,8 +7255,9 @@ function openForm(cfg){
         btnOk.onclick=()=>{
           vals[f.key][idx].horasExecutadas=inpHoras.value;
           inpExec.value=inpHoras.value;
+          avisar();
         };
-        btnRm.onclick=()=>{ vals[f.key].splice(idx,1); renderRows(); };
+        btnRm.onclick=()=>{ vals[f.key].splice(idx,1); renderRows(); avisar(); };
       });
     }
     function renderRows(){
@@ -7602,7 +7614,7 @@ function formAtividade(projetoId,a){
         options:STATUS_ATIV.map(s=>({value:s,label:s})),
         help:"Marcar como \"Concluída\" preenche automaticamente 100% em % Concluído."},
       {key:"progresso",label:"% Concluído",type:"number",min:0,
-        help:"Valor de 0 a 100",placeholder:"0"},
+        help:"Valor de 0 a 100. Preenchido automaticamente pelas horas executadas ÷ previstas (você pode ajustar à mão).",placeholder:"0"},
       {key:"notasProgresso",label:"Anotações de progresso",type:"textarea",full:true,
         placeholder:"Ex.: o que foi feito, pendências, próximos passos…",
         help:"Aparece também no alerta desta atividade em Alertas de prazos, no Painel Geral."},
@@ -7621,6 +7633,21 @@ function formAtividade(projetoId,a){
           }
         } : null}
     ],
+    // % Concluído acompanha as horas: soma executada ÷ soma prevista de todos os
+    // colaboradores, atualizada a cada digitação/clique em OK (limitada a 100%).
+    // Só calcula quando há horas previstas e ao menos uma executada informada;
+    // o campo continua editável à mão (o próximo ajuste de horas recalcula).
+    onEstimativasChange:(vv,gridEl)=>{
+      const lista=Array.isArray(vv.estimativasPessoas)?vv.estimativasPessoas:[];
+      const prev=lista.reduce((t,x)=>t+(parseFloat(x.horas)||0),0);
+      const algumaExec=lista.some(x=>x.horasExecutadas!==""&&x.horasExecutadas!=null);
+      if(prev<=0||!algumaExec) return;
+      const exec=lista.reduce((t,x)=>t+(parseFloat(x.horasExecutadas)||0),0);
+      const pct=Math.max(0,Math.min(100,Math.round(exec/prev*100)));
+      vv.progresso=pct;
+      const inp=gridEl.querySelector('[data-k="progresso"]');
+      if(inp) inp.value=pct;
+    },
     onFieldChange:(vv,key,gridEl)=>{
       if(key==="status" && vv.status==="Concluída"){
         vv.progresso=100;
