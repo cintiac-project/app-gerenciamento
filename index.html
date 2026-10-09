@@ -1566,6 +1566,33 @@ async function salvarCapacidadeSemanal(colabId,semanaIni,horas){
      para a semana corrente do SPRINT, pois ou serão feitas agora ou precisarão
      ser repactuadas se estourarem o limite de horas.
    Só aparece quem tem horas restantes na semana. */
+/* horas EXECUTADAS por pessoa dentro de uma semana: apontamentos com data na
+   semana + horas "Executada" das atividades (sem apontamento da pessoa),
+   distribuídas pelos dias úteis do período real/previsto da atividade. */
+function horasExecutadasSemanaPorPessoa(semanaIni){
+  const semanaFim=addDays(semanaIni,6), out={};
+  const add=(cid,pid,h)=>{ if(!cid||!(h>0)) return;
+    const p=out[cid]||(out[cid]={h:0,porProjeto:{}}); p.h+=h; p.porProjeto[pid]=(p.porProjeto[pid]||0)+h; };
+  const apont=new Set();
+  DB.data.horas.forEach(h=>{
+    if(h.atividadeId && h.colaboradorId) apont.add(h.atividadeId+"|"+h.colaboradorId);
+    if(h.data>=semanaIni && h.data<=semanaFim) add(h.colaboradorId,h.projetoId,+h.horas||0);
+  });
+  DB.data.atividades.forEach(a=>{
+    (Array.isArray(a.estimativasPessoas)?a.estimativasPessoas:[]).forEach(x=>{
+      const total=parseFloat(x.horasExecutadas);
+      if(!x.colaboradorId || !(total>0) || apont.has(a.id+"|"+x.colaboradorId)) return;
+      const ini=a.dataInicioReal||a.dataInicioPrev||a.dataFimReal||a.dataFimPrev;
+      let fim=a.dataFimReal||a.dataFimPrev||ini;
+      if(!ini) return;
+      if(fim<ini) fim=ini;
+      let dias=diasUteisEntre(ini,fim); if(!dias.length) dias=[fim];
+      const naSemana=dias.filter(d=>d>=semanaIni && d<=semanaFim).length;
+      if(naSemana) add(x.colaboradorId,a.projetoId,total*naSemana/dias.length);
+    });
+  });
+  return out;
+}
 function ocupacaoSemanalPessoas(semanaIni){
   const semanaFim=addDays(semanaIni,6);
   const hoje=todayStr();
@@ -1586,25 +1613,34 @@ function ocupacaoSemanalPessoas(semanaIni){
       p.porProjeto[a.projetoId]=(p.porProjeto[a.projetoId]||0)+h;
     });
   });
-  return Object.values(pessoas).map(p=>({...p,nome:nomeColab(p.id),capacidade:capacidadeSemanalPessoa(p.id,semanaIni)}))
-    .sort((a,b)=>(b.planejado-b.capacidade)-(a.planejado-a.capacidade)||a.nome.localeCompare(b.nome,"pt-BR"));
+  // acrescenta as horas já executadas na semana (inclui quem só tem executadas)
+  const exec=horasExecutadasSemanaPorPessoa(semanaIni);
+  Object.keys(exec).forEach(cid=>{
+    const p=pessoas[cid]||(pessoas[cid]={id:cid,planejado:0,atrasado:0,porProjeto:{}});
+    p.executado=exec[cid].h; p.execPorProjeto=exec[cid].porProjeto;
+  });
+  return Object.values(pessoas).map(p=>({executado:0,execPorProjeto:{},...p,nome:nomeColab(p.id),capacidade:capacidadeSemanalPessoa(p.id,semanaIni)}))
+    .sort((a,b)=>((b.planejado+b.executado)-b.capacidade)-((a.planejado+a.executado)-a.capacidade)||a.nome.localeCompare(b.nome,"pt-BR"));
 }
 /* HTML do gráfico (barras horizontais: planejado + em aberto + marcador da capacidade) */
 function ocupacaoSemanalHtml(semanaIni){
   const lista=ocupacaoSemanalPessoas(semanaIni);
   if(!lista.length) return `<div class="empty" style="padding:22px"><span class="ic">✓</span><p>Ninguém com horas previstas para esta semana.</p></div>`;
-  const escala=Math.max(CAPACIDADE_SEMANAL_PADRAO,...lista.map(p=>Math.max(p.capacidade,p.planejado)));
+  const escala=Math.max(CAPACIDADE_SEMANAL_PADRAO,...lista.map(p=>Math.max(p.capacidade,p.planejado+p.executado)));
   const pct=h=>Math.max(0,Math.min(100,h/escala*100));
   const podeEditar=isGestor();
   return lista.map(p=>{
-    const aberto=Math.max(0,p.capacidade-p.planejado), exc=Math.max(0,p.planejado-p.capacidade);
-    const ratio=p.capacidade>0? p.planejado/p.capacidade : (p.planejado>0?9:0);
+    const carga=p.executado+p.planejado;   // executadas + restantes da semana
+    const aberto=Math.max(0,p.capacidade-carga), exc=Math.max(0,carga-p.capacidade);
+    const ratio=p.capacidade>0? carga/p.capacidade : (carga>0?9:0);
     const cor=ratio>1.0001?"var(--danger)":ratio>=0.80?"var(--warn)":"var(--ok)";
     const ajustada=Math.abs(p.capacidade-CAPACIDADE_SEMANAL_PADRAO)>0.001;
     const tip=Object.entries(p.porProjeto).sort((a,b)=>b[1]-a[1]).map(([pid,h])=>nomeProjeto(pid)+": "+fmtNum(h,1)+" h").join("\n")||"Sem horas previstas";
-    const tipFull=tip+(p.atrasado>0.04?"\n— inclui "+fmtNum(p.atrasado,1)+" h de atividades atrasadas":"");
+    const tipExec=Object.entries(p.execPorProjeto).sort((a,b)=>b[1]-a[1]).map(([pid,h])=>nomeProjeto(pid)+": "+fmtNum(h,1)+" h").join("\n");
+    const tipFull=(tipExec?"EXECUTADAS na semana:\n"+tipExec+"\n\nPLANEJADAS (restantes):\n":"")+tip+(p.atrasado>0.04?"\n— inclui "+fmtNum(p.atrasado,1)+" h de atividades atrasadas":"");
     const atrasTxt=p.atrasado>0.04?` <span style="color:var(--danger)">(inclui ${fmtNum(p.atrasado,1)} h de atividades atrasadas)</span>`:"";
-    const txt=(exc>0
+    const execTxt=p.executado>0.04?`<b style="color:var(--info)">${fmtNum(p.executado,1)} h</b> executadas · `:"";
+    const txt=execTxt+(exc>0
       ? `<b style="color:var(--danger)">${fmtNum(p.planejado,1)} h</b> planejadas · <b style="color:var(--danger)">${fmtNum(exc,1)} h acima do limite</b>`
       : `<b>${fmtNum(p.planejado,1)} h</b> planejadas · <b>${fmtNum(aberto,1)} h</b> em aberto`)+atrasTxt;
     const campo=podeEditar
@@ -1617,6 +1653,7 @@ function ocupacaoSemanalHtml(semanaIni){
       <div style="font-weight:600;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.nome)}">${esc(p.nome)}</div>
       <div>
         <div title="${esc(tipFull)}" style="position:relative;height:16px;border-radius:5px;background:var(--line-soft);overflow:hidden;display:flex">
+          <div style="width:${pct(p.executado)}%;background:var(--info)" title="Executadas na semana"></div>
           <div style="width:${pct(p.planejado)}%;background:${cor}"></div>
           <div style="width:${pct(aberto)}%;background:repeating-linear-gradient(45deg,var(--accent-soft),var(--accent-soft) 4px,#fffdf8 4px,#fffdf8 8px)"></div>
           <div style="position:absolute;top:0;bottom:0;left:calc(${pct(p.capacidade)}% - 1px);width:2px;background:var(--ink)"></div>
@@ -1627,6 +1664,7 @@ function ocupacaoSemanalHtml(semanaIni){
     </div>`;
   }).join("")
   + `<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--ink-faint);margin-top:10px">
+      <span><i style="display:inline-block;width:10px;height:10px;background:var(--info);border-radius:2px"></i> executado</span>
       <span><i style="display:inline-block;width:10px;height:10px;background:var(--ok);border-radius:2px"></i> planejado (até 80%)</span>
       <span><i style="display:inline-block;width:10px;height:10px;background:var(--warn);border-radius:2px"></i> 80–100%</span>
       <span><i style="display:inline-block;width:10px;height:10px;background:var(--danger);border-radius:2px"></i> acima do limite</span>
@@ -1647,7 +1685,9 @@ function calcularAlertas(){
     // não tenha estimativas de horas por pessoa preenchidas.
     const proj=getProjeto(a.projetoId);
     const resp=nomesResponsaveisAtividade(a,proj).join(", ");
-    if(d<0) out.push({tipo:"fisico",secao:"vencidos",sev:"danger",dias:d,
+    // atrasada, mas com prazo DENTRO da semana corrente: permanece na SPRINT
+    // (ainda dá tempo de entregar). Só vai para "vencidos" quando a semana virar.
+    if(d<0) out.push({tipo:"fisico",secao:(a.dataFimPrev>=limitesSemanaCorrente().ini?"sprint":"vencidos"),sev:"danger",dias:d,
       titulo:`Atividade atrasada: ${a.nome}`,
       desc:`${nomeProjeto(a.projetoId)} · venceu há ${Math.abs(d)} dia(s) · ${a.progresso||0}% concluído`,
       responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:a.notasProgresso||""});
@@ -2873,7 +2913,7 @@ function viewPainel(v){
         ${ST.sprintSemanaOffset?`<button class="btn ghost sm" id="sprint-sem-hoje">Semana atual</button>`:""}
       </div>
       <div style="font-size:12px;color:var(--ink-faint);margin-bottom:8px">
-        Horas <b>restantes</b> (previstas × % ainda não realizado) das atividades que vencem na semana, mais as <b>atrasadas</b> (levadas para a semana atual), em todos os projetos, contra o limite de ${CAPACIDADE_SEMANAL_PADRAO}h.
+        Horas <b>restantes</b> (previstas × % ainda não realizado) das atividades que vencem na semana, mais as <b>atrasadas</b> (levadas para a semana atual), mais as horas <b>já executadas</b> na semana (barra azul), em todos os projetos, contra o limite de ${CAPACIDADE_SEMANAL_PADRAO}h.
         ${isGestor()?"Edite o campo à direita para ajustar o limite de uma pessoa (feriado, licença, férias).":""}
         ${CAPSEM.remoto?"":"<br><span style='color:var(--warn)'>⚠ Tabela <b>capacidade_semanal</b> não encontrada no Supabase: os ajustes ficam salvos só neste navegador.</span>"}
       </div>
@@ -2891,7 +2931,7 @@ function viewPainel(v){
     </div>
     ${secaoCard("vencidos","1. Alertas de prazos vencidos","atividades e lançamentos financeiros com prazo anterior a hoje",secVencidos.length,"b-danger",
       secVencidos.length? secVencidos.map(alertaRowHtml).join("") : vazioHtml(alertas.some(a=>a.secao==="vencidos")?"Nenhum alerta para o filtro selecionado.":"Nenhum prazo vencido. 🎉"))}
-    ${secaoCard("sprint","2. SPRINT","vencem na semana corrente · "+fmtDate(sem.ini)+" a "+fmtDate(sem.fim),secSprint.length,"b-warn",
+    ${secaoCard("sprint","2. SPRINT","vencem (ou venceram) na semana corrente · "+fmtDate(sem.ini)+" a "+fmtDate(sem.fim),secSprint.length,"b-warn",
       secSprint.length? secSprint.map(alertaRowHtml).join("") : vazioHtml(alertas.some(a=>a.secao==="sprint")?"Nenhum alerta para o filtro selecionado.":"Nada vence no restante desta semana."),sprintOcupHtml)}
     ${secaoCard("reunioes","3. Próximas reuniões / reuniões em aberto","reuniões dos próximos 7 dias e as já realizadas que ainda não receberam OK",secReunioes.length,"b-info",reunioesCorpo)}
     ${secaoCard("duplicidades","4. Duplicidades","atividades com o mesmo nome em um ou mais cronogramas",secDup.length,"b-warn",
