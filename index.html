@@ -2842,6 +2842,7 @@ function viewPainel(v){
       : isGestor()? (
       a.tipo==="fisico"
         ? `<div class="alert-acoes">
+            ${a.secao==="vencidos"?`<button class="btn-icon" data-alerta-sprint="${a.atividadeId}" title="Jogar esta atividade para a sprint desta semana (novo prazo dentro da semana corrente)">📅</button>`:""}
             <button class="btn-icon" data-alerta-concluir-ativ="${a.atividadeId}" title="Marcar atividade como concluída">✓</button>
             <button class="btn-icon" data-alerta-editar-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Editar atividade (ex.: novo prazo)">✎</button>
             <button class="btn-icon del" data-alerta-excluir-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Excluir atividade">🗑</button>
@@ -3005,11 +3006,14 @@ function viewPainel(v){
   v.querySelectorAll("[data-alerta-mcs]").forEach(b=>{
     b.onclick=()=>alternarAtividadeComoMcs(b.dataset.alertaMcs);
   });
+  v.querySelectorAll("[data-alerta-sprint]").forEach(b=>{
+    b.onclick=()=>moverAtividadeParaSprint(b.dataset.alertaSprint);
+  });
   v.querySelectorAll("[data-alerta-concluir-ativ]").forEach(b=>{
     b.onclick=()=>marcarAtividadeConcluidaRapido(b.dataset.alertaConcluirAtiv);
   });
   v.querySelectorAll("[data-alerta-editar-ativ]").forEach(b=>{
-    b.onclick=()=>formAtividade(b.dataset.proj, getAtividade(b.dataset.alertaEditarAtiv));
+    b.onclick=()=>formAtividade(b.dataset.proj, getAtividade(b.dataset.alertaEditarAtiv), {semPredecessoras:true});
   });
   v.querySelectorAll("[data-alerta-excluir-ativ]").forEach(b=>{
     b.onclick=()=>excluirAtividadeComConfirmacao(getAtividade(b.dataset.alertaExcluirAtiv));
@@ -3113,6 +3117,59 @@ function erroConclusaoAtividade(d){
   if(d.dataFimReal<d.dataInicioReal)
     return "O Término real não pode ser anterior ao Início real.";
   return "";
+}
+
+/* Ação rápida do Painel Geral (Alertas de prazos vencidos): reprograma o
+   Término previsto de uma atividade atrasada para dentro da semana corrente,
+   o que a faz sair de "Alertas de prazos vencidos" e entrar na SPRINT.
+   Sugere a sexta-feira da semana (ou hoje, se já passou da sexta), mas a
+   pessoa pode escolher qualquer dia entre hoje e o fim da semana. */
+function moverAtividadeParaSprint(atividadeId){
+  const a=getAtividade(atividadeId);
+  if(!a) return;
+  const hoje=todayStr(), sem=limitesSemanaCorrente();
+  const sexta=addDays(sem.ini,4);
+  const sugestao=hoje>sexta?hoje:sexta;
+  $("#modal-root").innerHTML=`
+  <div class="overlay"><div class="modal" style="max-width:500px">
+    <div class="modal-head"><h3>Jogar para a sprint desta semana</h3></div>
+    <div class="modal-body">
+      <p style="color:var(--ink-soft);font-size:13px">"${esc(a.nome)}" está com prazo em ${fmtDate(a.dataFimPrev)}.
+        Escolha o novo Término previsto, dentro da semana corrente (${fmtDate(sem.ini)} a ${fmtDate(sem.fim)}).</p>
+      <div style="margin-top:12px">
+        <label style="display:block;margin-bottom:5px;font-size:12.5px;font-weight:600;color:var(--ink-soft)">Novo término previsto <span class="req">*</span></label>
+        <input type="date" id="sp-fim" value="${sugestao}" min="${hoje}" max="${sem.fim}">
+      </div>
+      <div id="sp-err" style="display:none;margin-top:12px;padding:9px 12px;border-radius:8px;
+        background:var(--danger-bg);color:var(--danger);font-size:12.5px"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="sp-no">Cancelar</button>
+      <button class="btn" id="sp-yes">Jogar para a sprint</button>
+    </div></div></div>`;
+  $("#sp-no").onclick=closeModal;
+  $("#sp-yes").onclick=async()=>{
+    const novo=$("#sp-fim").value;
+    const err=$("#sp-err");
+    if(!novo || novo<hoje || novo>sem.fim){
+      err.textContent="Escolha uma data entre hoje e "+fmtDate(sem.fim)+" (semana corrente).";
+      err.style.display="block"; return;
+    }
+    const antigo=a.dataFimPrev;
+    // registra o histórico do reagendamento nas anotações de progresso
+    const linha=`[${fmtDate(hoje)}] Prazo reprogramado de ${fmtDate(antigo)} para ${fmtDate(novo)} (sprint da semana).`;
+    const notas=a.notasProgresso?(a.notasProgresso+"\n"+linha):linha;
+    try{
+      await sbUpdate("atividades", a.id, toSnake({dataFimPrev:novo,notasProgresso:notas}));
+      a.dataFimPrev=novo; a.notasProgresso=notas;
+      closeModal();
+      toast("Atividade movida para a sprint desta semana.");
+      render();
+    }catch(e){
+      err.textContent="Erro ao atualizar a atividade: "+(e.message||e);
+      err.style.display="block";
+    }
+  };
 }
 
 async function marcarAtividadeConcluidaRapido(atividadeId){
@@ -7606,8 +7663,12 @@ function formProjeto(p,sessaoIdDefault){
 }
 
 /* ---- FORM: ATIVIDADE (removido campo responsavelId) ---- */
-function formAtividade(projetoId,a){
+function formAtividade(projetoId,a,opts){
   const edit=!!a;
+  // opts.semPredecessoras: usado quando o formulário abre pelo Painel Geral,
+  // onde não faz sentido definir "Depende de" (isso fica só no cronograma do
+  // projeto). As predecessoras já salvas são preservadas.
+  const semPred=!!(opts&&opts.semPredecessoras);
   const proj=getProjeto(projetoId);
   // sessões sem Matriz RACI (ex.: Rotinas) precisam de um jeito direto de
   // marcar quem é responsável pela atividade, já que não têm a aba RACI
@@ -7629,7 +7690,7 @@ function formAtividade(projetoId,a){
       {key:"categoriaId",label:"Categoria",type:"select",required:true,
         options:DB.data.categorias.map(c=>({value:c.id,label:c.nome}))},
       ...(semRaci?[campoResponsaveis]:[]),
-      {key:"predecessorasIds",label:"Depende de (atividades predecessoras)",type:"checklist",full:true,dynamic:true,
+      ...(semPred?[]:[{key:"predecessorasIds",label:"Depende de (atividades predecessoras)",type:"checklist",full:true,dynamic:true,
         optionsFn:()=>{
           // exclui a própria atividade e quem já depende dela (evita dependência circular)
           const bloqueadas=edit?sucessorasTransitivas(a.id,projetoId):new Set();
@@ -7638,7 +7699,7 @@ function formAtividade(projetoId,a){
             .sort((p,q)=>(p.dataInicioPrev||"9999").localeCompare(q.dataInicioPrev||"9999"))
             .map(x=>({value:x.id,label:x.nome}));
         },
-        help:"Marque as atividades que precisam terminar/começar antes desta. Quando uma predecessora atrasar, o app sugere deslocar automaticamente as que dependem dela."},
+        help:"Marque as atividades que precisam terminar/começar antes desta. Quando uma predecessora atrasar, o app sugere deslocar automaticamente as que dependem dela."}]),
       {key:"dataInicioPrev",label:"Início previsto",type:"date",allowIndeterminate:true},
       {key:"dataFimPrev",label:"Término previsto",type:"date",allowIndeterminate:true},
       {key:"dataInicioReal",label:"Início real",type:"dateSameAs",
