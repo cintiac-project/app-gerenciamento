@@ -1332,6 +1332,14 @@ function getReuniao(rid){
   } return null;
 }
 function nomeProjeto(id){ const p=getProjeto(id); return p?p.nome:"—"; }
+/* rótulo "CÓDIGO — Nome" (usado no Painel Geral, para facilitar a busca/localização).
+   Se o projeto não tem código, mostra só o nome. */
+function rotuloProjeto(p){
+  if(!p) return "—";
+  const cod=p.codigo?String(p.codigo).trim():"";
+  return cod?`${cod} — ${p.nome}`:p.nome;
+}
+function nomeProjetoCod(id){ return rotuloProjeto(getProjeto(id)); }
 function nomeColab(id){ const c=getColab(id); return c?c.nome:"—"; }
 function colabBadge(c){ return c && c.tipo==="parceiro" ? ' <span class="tag" style="background:#f3ead7;color:#b8852a;font-size:10px;padding:1px 6px">Parceiro</span>' : ""; }
 function nomeCategoria(id){ const c=getCategoria(id); return c?c.nome:"—"; }
@@ -1362,6 +1370,40 @@ function statusBadge(s){
 /* ============================================================
    CÁLCULOS DE NEGÓCIO
    ============================================================ */
+/* LOG DAS HORAS EXECUTADAS (por colaborador, dentro da atividade)
+   Cada item de estimativasPessoas guarda "horasExecutadas" (total) e agora também
+   "horasExecLog": [{data, horas}] — a cada aumento do total, a diferença é
+   registrada com a data de HOJE; assim as horas ficam na semana em que foram
+   atribuídas (e não espalhadas pelo período da atividade). Reduzir o total
+   desfaz as entradas mais recentes. O que já existia antes do log ("legado")
+   continua distribuído pelos dias úteis da atividade, como antes. */
+function atualizarLogExecucao(itemAnterior,novoTotal){
+  const log=(itemAnterior&&Array.isArray(itemAnterior.horasExecLog)?itemAnterior.horasExecLog:[])
+    .filter(e=>e&&e.data).map(e=>({data:e.data,horas:+e.horas||0}));
+  const a0=itemAnterior?parseFloat(itemAnterior.horasExecutadas):0;
+  const antes=a0>0?a0:0;
+  const n0=parseFloat(novoTotal);
+  const depois=n0>0?n0:0;
+  const delta=depois-antes;
+  if(delta>0.0001){
+    const hoje=todayStr(), ult=log.find(e=>e.data===hoje);
+    if(ult) ult.horas+=delta; else log.push({data:hoje,horas:delta});
+  } else if(delta<-0.0001){
+    let resta=-delta;
+    for(let i=log.length-1;i>=0&&resta>0.0001;i--){ const t=Math.min(log[i].horas,resta); log[i].horas-=t; resta-=t; }
+  }
+  return log.filter(e=>e.horas>0.0001);
+}
+/* separa o total executado de um item em {log:[{data,horas}], legado:horas sem data} */
+function partesExecucaoItem(x){
+  const total=parseFloat(x.horasExecutadas);
+  if(!(total>0)) return {log:[],legado:0};
+  let log=(Array.isArray(x.horasExecLog)?x.horasExecLog:[]).filter(e=>e&&e.data&&+e.horas>0).map(e=>({data:e.data,horas:+e.horas}));
+  const soma=log.reduce((t,e)=>t+e.horas,0);
+  if(soma>total+0.0001){ const f=total/soma; log=log.map(e=>({data:e.data,horas:e.horas*f})); return {log,legado:0}; }
+  return {log,legado:Math.max(0,total-soma)};
+}
+
 /* HORAS EXECUTADAS DAS ATIVIDADES → ENTRAM NOS DASHBOARDS
    O campo "Executada" (Horas previstas por colaborador, dentro da atividade)
    fica em atividades.estimativasPessoas[].horasExecutadas e antes NÃO era
@@ -1379,9 +1421,13 @@ function horasExecutadasAtividades(projetoId){
   DB.data.atividades.forEach(a=>{
     if(projetoId && a.projetoId!==projetoId) return;
     (Array.isArray(a.estimativasPessoas)?a.estimativasPessoas:[]).forEach(x=>{
-      const total=parseFloat(x.horasExecutadas);
-      if(!x.colaboradorId || !(total>0)) return;
+      if(!x.colaboradorId || !(parseFloat(x.horasExecutadas)>0)) return;
       if(apont.has(a.id+"|"+x.colaboradorId)) return;
+      const partes=partesExecucaoItem(x);
+      partes.log.forEach((e,i)=>out.push({id:"execlog-"+a.id+"-"+x.colaboradorId+"-"+i, projetoId:a.projetoId, atividadeId:a.id,
+        colaboradorId:x.colaboradorId, categoriaId:a.categoriaId||"", data:e.data, horas:e.horas, sintetico:true}));
+      const total=partes.legado;
+      if(!(total>0.0001)) return;
       const ini=a.dataInicioReal||a.dataInicioPrev||a.dataFimReal||a.dataFimPrev;
       let fim=a.dataFimReal||a.dataFimPrev||ini;
       if(!ini) return;
@@ -1580,8 +1626,11 @@ function horasExecutadasSemanaPorPessoa(semanaIni){
   });
   DB.data.atividades.forEach(a=>{
     (Array.isArray(a.estimativasPessoas)?a.estimativasPessoas:[]).forEach(x=>{
-      const total=parseFloat(x.horasExecutadas);
-      if(!x.colaboradorId || !(total>0) || apont.has(a.id+"|"+x.colaboradorId)) return;
+      if(!x.colaboradorId || !(parseFloat(x.horasExecutadas)>0) || apont.has(a.id+"|"+x.colaboradorId)) return;
+      const partes=partesExecucaoItem(x);
+      partes.log.forEach(e=>{ if(e.data>=semanaIni && e.data<=semanaFim) add(x.colaboradorId,a.projetoId,e.horas); });
+      const total=partes.legado;
+      if(!(total>0.0001)) return;
       const ini=a.dataInicioReal||a.dataInicioPrev||a.dataFimReal||a.dataFimPrev;
       let fim=a.dataFimReal||a.dataFimPrev||ini;
       if(!ini) return;
@@ -1599,15 +1648,22 @@ function ocupacaoSemanalPessoas(semanaIni){
   const ehSemanaCorrente=(semanaIni===limitesSemanaCorrente().ini);
   const pessoas={};
   DB.data.atividades.forEach(a=>{
-    if(a.status==="Cancelada" || a.status==="Concluída" || !a.dataFimPrev) return;
+    if(a.status==="Cancelada" || a.status==="Concluída") return;
     const prog=Math.min(100,Math.max(0,+a.progresso||0));
     if(prog>=100) return;
-    const atrasada=a.dataFimPrev<hoje;
-    const conta = atrasada ? ehSemanaCorrente : (a.dataFimPrev>=semanaIni && a.dataFimPrev<=semanaFim);
-    if(!conta) return;
+    const atrasada=!!a.dataFimPrev && a.dataFimPrev<hoje;
+    const contaPrazo = !!a.dataFimPrev && (atrasada ? ehSemanaCorrente : (a.dataFimPrev>=semanaIni && a.dataFimPrev<=semanaFim));
     const fator=(100-prog)/100;
     (a.estimativasPessoas||[]).forEach(e=>{
-      const h=(+e.horas||0)*fator; if(!e.colaboradorId||h<=0) return;
+      // quem já lançou horas executadas: as executadas ficam na semana em que
+      // foram lançadas (ver horasExecutadasSemanaPorPessoa) e o SALDO
+      // (previstas − executadas) fica na semana corrente da sprint.
+      const execTotal=parseFloat(e.horasExecutadas)||0;
+      const temExec=execTotal>0;
+      const conta=temExec?ehSemanaCorrente:contaPrazo;
+      if(!conta) return;
+      const h=temExec?Math.max(0,(+e.horas||0)-execTotal):(+e.horas||0)*fator;
+      if(!e.colaboradorId||h<=0) return;
       const p=pessoas[e.colaboradorId]||(pessoas[e.colaboradorId]={id:e.colaboradorId,planejado:0,atrasado:0,porProjeto:{}});
       p.planejado+=h; if(atrasada) p.atrasado+=h;
       p.porProjeto[a.projetoId]=(p.porProjeto[a.projetoId]||0)+h;
@@ -1635,8 +1691,8 @@ function ocupacaoSemanalHtml(semanaIni){
     const ratio=p.capacidade>0? carga/p.capacidade : (carga>0?9:0);
     const cor=ratio>1.0001?"var(--danger)":ratio>=0.80?"var(--warn)":"var(--ok)";
     const ajustada=Math.abs(p.capacidade-CAPACIDADE_SEMANAL_PADRAO)>0.001;
-    const tip=Object.entries(p.porProjeto).sort((a,b)=>b[1]-a[1]).map(([pid,h])=>nomeProjeto(pid)+": "+fmtNum(h,1)+" h").join("\n")||"Sem horas previstas";
-    const tipExec=Object.entries(p.execPorProjeto).sort((a,b)=>b[1]-a[1]).map(([pid,h])=>nomeProjeto(pid)+": "+fmtNum(h,1)+" h").join("\n");
+    const tip=Object.entries(p.porProjeto).sort((a,b)=>b[1]-a[1]).map(([pid,h])=>nomeProjetoCod(pid)+": "+fmtNum(h,1)+" h").join("\n")||"Sem horas previstas";
+    const tipExec=Object.entries(p.execPorProjeto).sort((a,b)=>b[1]-a[1]).map(([pid,h])=>nomeProjetoCod(pid)+": "+fmtNum(h,1)+" h").join("\n");
     const tipFull=(tipExec?"EXECUTADAS na semana:\n"+tipExec+"\n\nPLANEJADAS (restantes):\n":"")+tip+(p.atrasado>0.04?"\n— inclui "+fmtNum(p.atrasado,1)+" h de atividades atrasadas":"");
     const atrasTxt=p.atrasado>0.04?` <span style="color:var(--danger)">(inclui ${fmtNum(p.atrasado,1)} h de atividades atrasadas)</span>`:"";
     const execTxt=p.executado>0.04?`<b style="color:var(--info)">${fmtNum(p.executado,1)} h</b> executadas · `:"";
@@ -1689,11 +1745,11 @@ function calcularAlertas(){
     // (ainda dá tempo de entregar). Só vai para "vencidos" quando a semana virar.
     if(d<0) out.push({tipo:"fisico",secao:(a.dataFimPrev>=limitesSemanaCorrente().ini?"sprint":"vencidos"),sev:"danger",dias:d,
       titulo:`Atividade atrasada: ${a.nome}`,
-      desc:`${nomeProjeto(a.projetoId)} · venceu há ${Math.abs(d)} dia(s) · ${a.progresso||0}% concluído`,
+      desc:`${nomeProjetoCod(a.projetoId)} · venceu há ${Math.abs(d)} dia(s) · ${a.progresso||0}% concluído`,
       responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:a.notasProgresso||""});
     else if(d<=diasAteFimSemana) out.push({tipo:"fisico",secao:"sprint",sev:"warn",dias:d,
       titulo:`Prazo próximo: ${a.nome}`,
-      desc:`${nomeProjeto(a.projetoId)} · vence em ${d} dia(s) · ${a.progresso||0}% concluído`,
+      desc:`${nomeProjetoCod(a.projetoId)} · vence em ${d} dia(s) · ${a.progresso||0}% concluído`,
       responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:a.notasProgresso||""});
   });
   DB.data.financeiro.forEach(f=>{
@@ -1704,11 +1760,11 @@ function calcularAlertas(){
     const resp=proj && proj.gerente ? proj.gerente : null;
     if(d<0) out.push({tipo:"financeiro",secao:"vencidos",sev:"danger",dias:d,
       titulo:`${lbl} vencida: ${f.descricao||nomeRubrica(f.rubricaId)}`,
-      desc:`${nomeProjeto(f.projetoId)} · ${fmtBRL(f.valor)} · venceu há ${Math.abs(d)} dia(s)`,
+      desc:`${nomeProjetoCod(f.projetoId)} · ${fmtBRL(f.valor)} · venceu há ${Math.abs(d)} dia(s)`,
       responsavel:resp, projetoId:f.projetoId, financeiroId:f.id});
     else if(d<=diasAteFimSemana) out.push({tipo:"financeiro",secao:"sprint",sev:"warn",dias:d,
       titulo:`${lbl} próxima: ${f.descricao||nomeRubrica(f.rubricaId)}`,
-      desc:`${nomeProjeto(f.projetoId)} · ${fmtBRL(f.valor)} · vence em ${d} dia(s)`,
+      desc:`${nomeProjetoCod(f.projetoId)} · ${fmtBRL(f.valor)} · vence em ${d} dia(s)`,
       responsavel:resp, projetoId:f.projetoId, financeiroId:f.id});
   });
   // reuniões: futuras (até 7 dias à frente, para preparar pauta/providências)
@@ -1732,7 +1788,7 @@ function calcularAlertas(){
       } else if(!r.hora) faltando.push("horário");
       out.push({tipo:"reuniao",secao:"reunioes",faltando,sev:d<0?"danger":d<=2?"warn":"info",dias:d,
         titulo:`Reunião: ${r.titulo||"(sem título)"}`,
-        desc:`${p.nome} · ${quando}${r.hora?" às "+r.hora:""}${parts?" · Participantes: "+parts:""}`,
+        desc:`${rotuloProjeto(p)} · ${quando}${r.hora?" às "+r.hora:""}${parts?" · Participantes: "+parts:""}`,
         responsavel:null, projetoId:p.id, reuniaoId:r.id});
     });
   });
@@ -1755,7 +1811,7 @@ function calcularAlertas(){
     grupo.forEach(a=>{
       const outras=grupo.filter(x=>x.id!==a.id);
       const noMesmoProjeto=outras.filter(x=>x.projetoId===a.projetoId).length;
-      const outrosProjetosNomes=[...new Set(outras.filter(x=>x.projetoId!==a.projetoId).map(x=>nomeProjeto(x.projetoId)))];
+      const outrosProjetosNomes=[...new Set(outras.filter(x=>x.projetoId!==a.projetoId).map(x=>nomeProjetoCod(x.projetoId)))];
       const partes=[];
       if(noMesmoProjeto) partes.push(`${noMesmoProjeto} vez(es) no mesmo cronograma`);
       if(outrosProjetosNomes.length) partes.push("em: "+outrosProjetosNomes.join(", "));
@@ -1763,7 +1819,7 @@ function calcularAlertas(){
       const resp=nomesResponsaveisAtividade(a,proj).join(", ");
       out.push({tipo:"duplicada",secao:"duplicidades",sev:"warn",dias:9999, // não é baseado em prazo; sempre aparece por último
         titulo:`Atividade duplicada: ${a.nome}`,
-        desc:`${nomeProjeto(a.projetoId)} · também aparece ${partes.join(" · ")}`,
+        desc:`${nomeProjetoCod(a.projetoId)} · também aparece ${partes.join(" · ")}`,
         responsavel:resp, projetoId:a.projetoId, atividadeId:a.id});
     });
   });
@@ -1833,11 +1889,23 @@ function responsaveisRaciIds(proj,atividadeId){
    "Horas previstas por colaborador" ou na própria Matriz RACI. Por isso, para
    projetos com RACI, ignoramos esse campo aqui e vamos direto para o fallback. */
 function responsaveisIdsAtividade(a,proj){
-  const semRaci = !!(proj && (cfgSessao(proj.sessaoId).abasOcultas||[]).includes("raci"));
-  if(semRaci && Array.isArray(a.responsaveisIds) && a.responsaveisIds.length) return a.responsaveisIds.slice();
+  const usaCampo=sessaoUsaCampoResponsaveis(proj);
+  if(usaCampo && Array.isArray(a.responsaveisIds) && a.responsaveisIds.length) return a.responsaveisIds.slice();
   const alocados=pessoasAlocadasAtividade(a);
   if(alocados.length) return alocados;
+  // sessões sem RACI e sem o campo (Captação, Rotinas, Articulação): se ainda não
+  // há horas por colaborador, mostra o responsável antigo já gravado, se houver
+  const semRaci=!!(proj && (cfgSessao(proj.sessaoId).abasOcultas||[]).includes("raci"));
+  if(semRaci && !usaCampo && Array.isArray(a.responsaveisIds) && a.responsaveisIds.length) return a.responsaveisIds.slice();
   return responsaveisRaciIds(proj,a.id);
+}
+/* true quando a sessão do projeto NÃO tem Matriz RACI e usa o campo direto
+   "Responsável(is)" na atividade (ex.: Rotinas). Captação não tem RACI, mas
+   também não usa esse campo: o responsável vem das horas por colaborador. */
+function sessaoUsaCampoResponsaveis(proj){
+  if(!proj) return false;
+  const cfg=cfgSessao(proj.sessaoId);
+  return (cfg.abasOcultas||[]).includes("raci") && !cfg.semCampoResponsaveis;
 }
 /* nomes dos responsáveis de uma atividade, prontos para exibição */
 function nomesResponsaveisAtividade(a,proj){
@@ -2208,6 +2276,9 @@ const SESSAO_CONFIG={
         options:STATUS_CAPTACAO.map(s=>({value:s,label:s}))}
     ],
     abasOcultas:["financeiro","raci"],
+    // Captação não tem o campo "Responsável(is)" no formulário da atividade:
+    // quem responde é quem tem horas previstas em "Horas previstas por colaborador".
+    semCampoResponsaveis:true,
     linhaDoTempo:false,
     // em Captação o "Status da captação" já é o status do projeto; o Status
     // automático do resumo seria redundante
@@ -2260,6 +2331,9 @@ const SESSAO_CONFIG={
   rotinas:{
     camposOcultosForm:["receita","cliente"],
     abasOcultas:["financeiro","raci","stakeholders"],
+    // sem o campo "Responsável(is)": quem responde é quem tem horas previstas
+    // em "Horas previstas por colaborador" (Articulação herda esta config)
+    semCampoResponsaveis:true,
     linhaDoTempo:false,
     dataFimIndeterminada:true,
     ocultarKpisResumo:true,
@@ -2734,7 +2808,7 @@ function viewPainel(v){
   // isso é separado para virar opções individuais no filtro.
   const projetosComAlerta=[...new Set(alertas.map(a=>a.projetoId))]
     .map(getProjeto).filter(Boolean)
-    .sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"}));
+    .sort((a,b)=>rotuloProjeto(a).localeCompare(rotuloProjeto(b),"pt-BR",{sensitivity:"base",numeric:true}));
   const responsaveisComAlerta=[...new Set(
     alertas.flatMap(a=>a.responsavel?a.responsavel.split(",").map(s=>s.trim()).filter(Boolean):[])
   )].sort((a,b)=>a.localeCompare(b,"pt-BR",{sensitivity:"base"}));
@@ -2795,7 +2869,7 @@ function viewPainel(v){
   /* horas por projeto */
   const projMap={};
   dadosHoras.forEach(h=>{ projMap[h.projetoId]=(projMap[h.projetoId]||0)+(+h.horas||0); });
-  const projData=Object.keys(projMap).map((pid,i)=>({label:nomeProjeto(pid),value:projMap[pid],color:PALETTE[i%PALETTE.length]}))
+  const projData=Object.keys(projMap).map((pid,i)=>({label:nomeProjetoCod(pid),value:projMap[pid],color:PALETTE[i%PALETTE.length]}))
     .sort((a,b)=>b.value-a.value).slice(0,8);
   /* série temporal por categoria (para as barras empilhadas) */
   const serieCat=serieHorasPorCategoria();
@@ -2867,7 +2941,7 @@ function viewPainel(v){
       <div class="field-inline">Projeto
         <select class="select" id="painel-alerta-proj">
           <option value="">Todos</option>
-          ${projetosComAlerta.map(p=>`<option value="${p.id}" ${p.id===ST.painelAlertaProjeto?"selected":""}>${esc(p.nome)}</option>`).join("")}
+          ${projetosComAlerta.map(p=>`<option value="${p.id}" ${p.id===ST.painelAlertaProjeto?"selected":""}>${esc(rotuloProjeto(p))}</option>`).join("")}
         </select>
       </div>
       <div class="field-inline">Responsável
@@ -3056,7 +3130,7 @@ function abrirDetalheReceitaPortfolio(ps,titulo,descricao){
   const total=ordenado.reduce((s,p)=>s+(+p.receita||0),0);
   const linhas=ordenado.map(p=>`
     <tr class="clickable" data-abrir-proj="${p.id}">
-      <td>${esc(p.nome)}<div style="font-size:11.5px;color:var(--ink-faint)">${esc(nomeSessao(p.sessaoId)||"")}</div></td>
+      <td>${esc(rotuloProjeto(p))}<div style="font-size:11.5px;color:var(--ink-faint)">${esc(nomeSessao(p.sessaoId)||"")}</div></td>
       <td class="num" style="${(+p.receita||0)===0?"color:var(--ink-faint)":""}">${fmtBRL(p.receita)}</td>
     </tr>`).join("");
   $("#modal-root").innerHTML=`
@@ -3237,7 +3311,8 @@ async function marcarAtividadeConcluidaRapido(atividadeId){
     const novasEstimativas=pessoas.map((item,idx)=>{
       const inp=$("#modal-root").querySelector(`[data-erole="horasExec"][data-idx="${idx}"]`);
       const val=inp?inp.value:"";
-      return Object.assign({},item,{horasExecutadas:(val===""?null:parseFloat(val))});
+      const novoTotal=(val===""?null:parseFloat(val));
+      return Object.assign({},item,{horasExecutadas:novoTotal,horasExecLog:atualizarLogExecucao(item,novoTotal)});
     });
     const erro=erroConclusaoAtividade({dataInicioReal:dIni,dataFimReal:dFim,estimativasPessoas:novasEstimativas});
     if(erro){
@@ -6884,6 +6959,7 @@ function montarPlanoPendencias(wb){
       usados.add(idx);
       const atual=pessoas[idx].horasExecutadas;
       if(atual!==null&&atual!==undefined&&atual!==""&&+atual===hv.val) return;
+      pessoas[idx].horasExecLog=atualizarLogExecucao(pessoas[idx],hv.val);
       pessoas[idx].horasExecutadas=hv.val; nh++;
     });
     if(nh) patch.estimativasPessoas=pessoas;
@@ -7675,6 +7751,7 @@ function formAtividade(projetoId,a,opts){
   // para isso. Nessas sessões, o campo abaixo aparece no próprio formulário
   // da atividade e aceita mais de uma pessoa.
   const semRaci = !!(proj && (cfgSessao(proj.sessaoId).abasOcultas||[]).includes("raci"));
+  const usaCampoResp = sessaoUsaCampoResponsaveis(proj);
   const campoResponsaveis = {
     key:"responsaveisIds",label:"Responsável(is)",type:"checklist",full:true,dynamic:true,
     optionsFn:()=>[...getInternos(),...getParceirosDoProjeto(proj)]
@@ -7689,7 +7766,7 @@ function formAtividade(projetoId,a,opts){
       {key:"nome",label:"Nome da atividade",required:true,full:true,placeholder:"Ex.: Levantamento de requisitos"},
       {key:"categoriaId",label:"Categoria",type:"select",required:true,
         options:DB.data.categorias.map(c=>({value:c.id,label:c.nome}))},
-      ...(semRaci?[campoResponsaveis]:[]),
+      ...(usaCampoResp?[campoResponsaveis]:[]),
       ...(semPred?[]:[{key:"predecessorasIds",label:"Depende de (atividades predecessoras)",type:"checklist",full:true,dynamic:true,
         optionsFn:()=>{
           // exclui a própria atividade e quem já depende dela (evita dependência circular)
@@ -7724,7 +7801,7 @@ function formAtividade(projetoId,a,opts){
         optionsFn:()=>[...getInternos(),...getParceirosDoProjeto(getProjeto(projetoId))]
           .map(co=>({value:co.id,label:co.nome+(co.tipo==="parceiro"?" (parceiro)":"")})),
         help:"Escolha cada colaborador (interno ou parceiro vinculado a este projeto) e a quantidade de horas previstas para ele nesta atividade. Usado para calcular a ocupação da equipe no calendário, distribuída ao longo dos dias úteis entre início e término previstos. Clique em \"OK\" para confirmar que a pessoa cumpriu exatamente as horas previstas (preenche \"Executada\" com o mesmo valor), ou informe manualmente as horas executadas se o tempo gasto tiver sido diferente do previsto.",
-        prefillButton: a ? {
+        prefillButton: (a && !semRaci) ? {
           label:"↺ Puxar quem está em \"R\" na RACI",
           msgVazio:"Ninguém novo marcado como \"R\" na RACI desta atividade (ou já foram todos adicionados aqui).",
           getIds:()=>{
@@ -7776,9 +7853,15 @@ function formAtividade(projetoId,a,opts){
           // "OK" — igual à prevista — ou digitadas manualmente quando o tempo
           // gasto foi diferente do previsto). Fica null enquanto não informado.
           horasExecutadas:(x.horasExecutadas===""||x.horasExecutadas==null)?null:parseFloat(x.horasExecutadas)
-        }));
-      if(semRaci) v.responsaveisIds=Array.isArray(v.responsaveisIds)?v.responsaveisIds:[];
-      else delete v.responsaveisIds;
+        }))
+        .map(x=>{
+          // registra na data de hoje o que foi acrescentado às horas executadas
+          const antigo=(edit&&a&&Array.isArray(a.estimativasPessoas))?a.estimativasPessoas.find(o=>o.colaboradorId===x.colaboradorId):null;
+          x.horasExecLog=atualizarLogExecucao(antigo,x.horasExecutadas);
+          return x;
+        });
+      if(usaCampoResp) v.responsaveisIds=Array.isArray(v.responsaveisIds)?v.responsaveisIds:[];
+      else delete v.responsaveisIds; // sem o campo no formulário: não mexe no valor antigo
       v.predecessorasIds=Array.isArray(v.predecessorasIds)?v.predecessorasIds:[];
       if(v.status==="Concluída") v.progresso=100;
       else if(v.progresso>=100) v.status="Concluída";
