@@ -1391,20 +1391,40 @@ function statusBadge(s){
    continua distribuído pelos dias úteis da atividade, como antes. */
 function atualizarLogExecucao(itemAnterior,novoTotal){
   const log=(itemAnterior&&Array.isArray(itemAnterior.horasExecLog)?itemAnterior.horasExecLog:[])
-    .filter(e=>e&&e.data).map(e=>({data:e.data,horas:+e.horas||0}));
+    .filter(e=>e).map(e=>({data:e.data||"",horas:+e.horas||0,nota:e.nota||""}));
   const a0=itemAnterior?parseFloat(itemAnterior.horasExecutadas):0;
   const antes=a0>0?a0:0;
   const n0=parseFloat(novoTotal);
   const depois=n0>0?n0:0;
   const delta=depois-antes;
   if(delta>0.0001){
-    const hoje=todayStr(), ult=log.find(e=>e.data===hoje);
-    if(ult) ult.horas+=delta; else log.push({data:hoje,horas:delta});
+    const hoje=todayStr(), ult=log.find(e=>e.data===hoje && !e.nota);
+    if(ult) ult.horas+=delta; else log.push({data:hoje,horas:delta,nota:""});
   } else if(delta<-0.0001){
     let resta=-delta;
     for(let i=log.length-1;i>=0&&resta>0.0001;i--){ const t=Math.min(log[i].horas,resta); log[i].horas-=t; resta-=t; }
   }
-  return log.filter(e=>e.horas>0.0001);
+  return log.filter(e=>e.horas>0.0001 || e.nota);
+}
+/* texto curto com as anotações de progresso lançadas pelos colaboradores
+   (as 3 mais recentes) + o texto único antigo, se ainda existir — usado no
+   alerta do Painel Geral e nos relatórios */
+function textoAnotacoesAtividade(a){
+  const partes=[];
+  if(a.notasProgresso && String(a.notasProgresso).trim()) partes.push(String(a.notasProgresso).trim());
+  const reg=[];
+  (a.estimativasPessoas||[]).forEach(x=>{
+    const c=getColab(x.colaboradorId);
+    (Array.isArray(x.horasExecLog)?x.horasExecLog:[]).forEach(e=>{
+      if(e && e.nota && String(e.nota).trim()) reg.push({data:e.data||"",nome:c?String(c.nome).split(" ")[0]:"",nota:String(e.nota).trim(),horas:+e.horas||0});
+    });
+  });
+  reg.sort((p,q)=>(q.data||"").localeCompare(p.data||""));
+  reg.slice(0,3).reverse().forEach(r=>{
+    const d=r.data?r.data.slice(8,10)+"/"+r.data.slice(5,7)+" · ":"";
+    partes.push(`${d}${r.nome?r.nome+": ":""}${r.nota}${r.horas>0?` (${fmtNum(r.horas,1)}h)`:""}`);
+  });
+  return partes.join("\n");
 }
 /* separa o total executado de um item em {log:[{data,horas}], legado:horas sem data} */
 function partesExecucaoItem(x){
@@ -1664,17 +1684,34 @@ function ocupacaoSemanalPessoas(semanaIni){
     const prog=Math.min(100,Math.max(0,+a.progresso||0));
     if(prog>=100) return;
     const atrasada=!!a.dataFimPrev && a.dataFimPrev<hoje;
-    const contaPrazo = !!a.dataFimPrev && (atrasada ? ehSemanaCorrente : (a.dataFimPrev>=semanaIni && a.dataFimPrev<=semanaFim));
     const fator=(100-prog)/100;
+    // SALDO (horas ainda não executadas) dividido igualmente pelos dias úteis
+    // de hoje (ou do início previsto, se for futuro) até o término previsto;
+    // cada semana mostra só a fatia dos seus dias úteis. Sem prazo, ou já
+    // atrasada, o saldo todo fica na semana corrente.
+    let fracaoSemana=0;
+    if(!a.dataFimPrev || atrasada){
+      fracaoSemana=ehSemanaCorrente?1:0;
+    } else {
+      let ini=(a.dataInicioPrev && a.dataInicioPrev>hoje)?a.dataInicioPrev:hoje;
+      if(ini>a.dataFimPrev) ini=a.dataFimPrev;
+      const dias=diasUteisEntre(ini,a.dataFimPrev);
+      if(dias.length){
+        fracaoSemana=dias.filter(d=>d>=semanaIni&&d<=semanaFim).length/dias.length;
+      } else {
+        // intervalo sem dia útil (ex.: só fim de semana): tudo na semana do término
+        fracaoSemana=(a.dataFimPrev>=semanaIni&&a.dataFimPrev<=semanaFim)?1:0;
+      }
+    }
+    if(fracaoSemana<=0) return;
     (a.estimativasPessoas||[]).forEach(e=>{
-      // quem já lançou horas executadas: as executadas ficam na semana em que
-      // foram lançadas (ver horasExecutadasSemanaPorPessoa) e o SALDO
-      // (previstas − executadas) fica na semana corrente da sprint.
+      // as horas já executadas ficam na semana em que foram lançadas (ver
+      // horasExecutadasSemanaPorPessoa); aqui entra só o que falta executar.
       const execTotal=parseFloat(e.horasExecutadas)||0;
       const temExec=execTotal>0;
-      const conta=temExec?ehSemanaCorrente:contaPrazo;
-      if(!conta) return;
-      const h=temExec?Math.max(0,(+e.horas||0)-execTotal):(+e.horas||0)*fator;
+      if(!a.dataFimPrev && !temExec) return; // sem prazo e sem execução: nada a distribuir
+      const restante=temExec?Math.max(0,(+e.horas||0)-execTotal):(+e.horas||0)*fator;
+      const h=restante*fracaoSemana;
       if(!e.colaboradorId||h<=0) return;
       const p=pessoas[e.colaboradorId]||(pessoas[e.colaboradorId]={id:e.colaboradorId,planejado:0,atrasado:0,porProjeto:{}});
       p.planejado+=h; if(atrasada) p.atrasado+=h;
@@ -1758,11 +1795,11 @@ function calcularAlertas(){
     if(d<0) out.push({tipo:"fisico",secao:(a.dataFimPrev>=limitesSemanaCorrente().ini?"sprint":"vencidos"),sev:"danger",dias:d,
       rotulo:"Atividade atrasada", titulo:`Atividade atrasada: ${a.nome}`,
       desc:`${nomeProjetoCod(a.projetoId)} · venceu há ${Math.abs(d)} dia(s) · ${a.progresso||0}% concluído`,
-      responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:a.notasProgresso||""});
+      responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:textoAnotacoesAtividade(a)});
     else if(d<=diasAteFimSemana) out.push({tipo:"fisico",secao:"sprint",sev:"warn",dias:d,
       rotulo:"Prazo próximo", titulo:`Prazo próximo: ${a.nome}`,
       desc:`${nomeProjetoCod(a.projetoId)} · vence em ${d} dia(s) · ${a.progresso||0}% concluído`,
-      responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:a.notasProgresso||""});
+      responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:textoAnotacoesAtividade(a)});
   });
   DB.data.financeiro.forEach(f=>{
     if(f.status!=="previsto" || !f.data) return;
@@ -2888,7 +2925,7 @@ function viewPainel(v){
       ? `<div class="alert-acoes"><button class="btn-icon ${mcsAtiva?"mcs-on":""}" data-alerta-mcs="${a.atividadeId}"
            title="${mcsAtiva?"Já é uma MCS desta semana — clique para remover do quadro de MCS":"Escolher esta atividade como MCS (aparece no quadro de MCS)"}">📍</button></div>` : "";
     const notasHtml=(a.tipo==="fisico" && a.notasProgresso)
-      ? `<div class="alert-resp"><span class="rl">Anotações:</span> ${esc(a.notasProgresso)}</div>`
+      ? `<div class="alert-resp" style="white-space:pre-line"><span class="rl">Anotações:</span> ${esc(a.notasProgresso)}</div>`
       : "";
     // ações rápidas: permitem concluir/marcar como realizado ou editar o
     // item (atividade/lançamento) direto a partir do alerta, sem precisar
@@ -2981,7 +3018,7 @@ function viewPainel(v){
         ${ST.sprintSemanaOffset?`<button class="btn ghost sm" id="sprint-sem-hoje">Semana atual</button>`:""}
       </div>
       <div style="font-size:12px;color:var(--ink-faint);margin-bottom:8px">
-        Horas <b>restantes</b> (previstas × % ainda não realizado) das atividades que vencem na semana, mais as <b>atrasadas</b> (levadas para a semana atual), mais as horas <b>já executadas</b> na semana (barra azul), em todos os projetos, contra o limite de ${CAPACIDADE_SEMANAL_PADRAO}h.
+        Horas <b>restantes</b> (ainda não executadas) de cada atividade, <b>divididas pelos dias úteis</b> de hoje até o término previsto — cada semana mostra só a parte dos seus dias; as <b>atrasadas</b> entram inteiras na semana atual — mais as horas <b>já executadas</b> na semana (barra azul), em todos os projetos, contra o limite de ${CAPACIDADE_SEMANAL_PADRAO}h.
         ${isGestor()?"Edite o campo à direita para ajustar o limite de uma pessoa (feriado, licença, férias).":""}
         ${CAPSEM.remoto?"":"<br><span style='color:var(--warn)'>⚠ Tabela <b>capacidade_semanal</b> não encontrada no Supabase: os ajustes ficam salvos só neste navegador.</span>"}
       </div>
@@ -6691,7 +6728,7 @@ async function exportarCronogramaExcel(p,ats,totalProjeto){
       const horasAp=horasAtividade(a);
       const vals=[k+1,a.nome,a.marco?"Sim":"",nomeCategoria(a.categoriaId),nomesResponsaveisAtividade(a,p).join(", "),preds,
         dt(a.dataInicioPrev),dt(a.dataFimPrev),dt(a.dataInicioReal),dt(a.dataFimReal),sit,prog/100,
-        totalHorasPrevistasAtividade(a)||null,horasAp||null,a.notasProgresso||""];
+        totalHorasPrevistasAtividade(a)||null,horasAp||null,textoAnotacoesAtividade(a)];
       const row=ws.getRow(5+k);
       vals.forEach((v,i)=>{
         const x=row.getCell(i+1); x.value=v;
@@ -7314,7 +7351,7 @@ function openForm(cfg){
           <span style="flex:1;min-width:150px">Colaborador</span>
           <span style="width:90px;flex-shrink:0">Prevista</span>
           <span style="width:76px;flex-shrink:0"></span>
-          <span style="width:100px;flex-shrink:0">Executada</span>
+          <span style="width:100px;flex-shrink:0" title="Soma das horas lançadas nas anotações de cada colaborador">Executada (soma)</span>
           <span style="width:30px;flex-shrink:0"></span>
         </div>
         <div class="estim-rows"></div>
@@ -7385,7 +7422,38 @@ function openForm(cfg){
 
   function wireEstimativasField(f){
     const container=()=>$("#f-grid").querySelector(`[data-k="${f.key}"]`);
-    vals[f.key]=Array.isArray(vals[f.key])?vals[f.key].map(x=>Object.assign({},x)):[];
+    // Cada colaborador tem seu quadro de anotações: [{data,horas,nota}]. A
+    // "Executada" é sempre a SOMA das horas desse quadro. Horas que já existiam
+    // antes deste quadro (sem data) viram uma linha "sem data" editável.
+    function normLog(x){
+      const log=(Array.isArray(x.horasExecLog)?x.horasExecLog:[]).filter(e=>e)
+        .map(e=>({data:e.data||"",horas:(e.horas==null?"":e.horas),nota:e.nota||""}));
+      const total=parseFloat(x.horasExecutadas)||0;
+      const soma=log.reduce((t,e)=>t+(parseFloat(e.horas)||0),0);
+      if(total>soma+0.0001) log.unshift({data:"",horas:Math.round((total-soma)*100)/100,nota:"Horas lançadas antes do quadro de anotações (sem data)"});
+      return log;
+    }
+    const somaLog=it=>(it.horasExecLog||[]).reduce((t,e)=>t+(parseFloat(e.horas)||0),0);
+    function sincronizarTotal(it){ const t=Math.round(somaLog(it)*100)/100; it.horasExecutadas=t>0?t:""; }
+    vals[f.key]=Array.isArray(vals[f.key])?vals[f.key].map(x=>{ const c=Object.assign({},x); c.horasExecLog=normLog(x); return c; }):[];
+    function boardHtml(item,idx){
+      const log=item.horasExecLog||[];
+      const tot=somaLog(item);
+      return `<details class="estim-board" data-idx="${idx}" ${item._open||log.length?"open":""} style="margin:-2px 0 10px 0;padding:6px 10px;background:#f7faf9;border:1px solid var(--line-soft);border-radius:8px">
+        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--ink-soft)">📝 Anotações de progresso <span data-erole="boardinfo">· ${log.length} lançamento(s) · ${fmtNum(tot,1)} h executadas</span></summary>
+        <div style="margin-top:8px">
+          ${log.length?`<div style="display:flex;gap:6px;font-size:10.5px;color:var(--ink-faint);font-weight:600;text-transform:uppercase;margin-bottom:4px">
+            <span style="width:128px;flex-shrink:0">Data</span><span style="flex:1">Anotação</span><span style="width:78px;flex-shrink:0">Horas exec.</span><span style="width:26px;flex-shrink:0"></span></div>`:""}
+          ${log.map((e,j)=>`<div class="estim-log" data-j="${j}" style="display:flex;gap:6px;align-items:flex-start;margin-bottom:6px">
+            <input type="date" data-lrole="data" value="${esc(e.data||"")}" style="width:128px;flex-shrink:0">
+            <textarea data-lrole="nota" rows="2" placeholder="O que foi feito, pendências, próximos passos…" style="flex:1;min-width:0;resize:vertical">${esc(e.nota||"")}</textarea>
+            <input type="number" min="0" step="0.5" data-lrole="horas" placeholder="h" value="${e.horas!==""&&e.horas!=null?e.horas:""}" style="width:78px;flex-shrink:0">
+            <button type="button" class="btn-icon del" data-lrole="rm" title="Remover lançamento" style="width:26px;flex-shrink:0">✕</button>
+          </div>`).join("")}
+          <button type="button" class="btn ghost sm" data-erole="addlog">+ Anotação</button>
+        </div>
+      </details>`;
+    }
     function rowHtml(item,idx){
       const opts=(f.dynamic?f.optionsFn(vals):f.options)||[];
       const horasExec=item.horasExecutadas!=null&&item.horasExecutadas!==""?item.horasExecutadas:"";
@@ -7396,10 +7464,10 @@ function openForm(cfg){
         </select>
         <input type="number" min="0" step="0.5" data-erole="horas" placeholder="Horas" value="${item.horas!=null&&item.horas!==""?item.horas:""}" style="width:90px;flex-shrink:0" title="Horas previstas">
         <button type="button" class="btn ghost sm" data-erole="ok" style="width:76px;flex-shrink:0;justify-content:center"
-          title="Confirmar que foram executadas as horas previstas">✓ OK</button>
-        <input type="number" min="0" step="0.5" data-erole="horasExec" placeholder="Executadas" value="${horasExec}" style="width:100px;flex-shrink:0" title="Horas realmente executadas">
+          title="Lança no quadro as horas que faltam para completar as previstas (hoje)">✓ OK</button>
+        <input type="number" data-erole="horasExec" placeholder="0" value="${horasExec}" readonly tabindex="-1" style="width:100px;flex-shrink:0;background:#f1f5f4" title="Soma das horas lançadas no quadro de anotações abaixo">
         <button type="button" class="btn-icon del" data-erole="rm" title="Remover">✕</button>
-      </div>`;
+      </div>${boardHtml(item,idx)}`;
     }
     function bindRows(){
       const el=container(); if(!el) return;
@@ -7413,15 +7481,38 @@ function openForm(cfg){
         selColab.onchange=()=>{ vals[f.key][idx].colaboradorId=selColab.value; };
         const avisar=()=>{ if(cfg.onEstimativasChange) cfg.onEstimativasChange(vals,$("#f-grid")); };
         inpHoras.oninput=()=>{ vals[f.key][idx].horas=inpHoras.value; avisar(); };
-        inpExec.oninput=()=>{ vals[f.key][idx].horasExecutadas=inpExec.value; avisar(); };
+        const it=vals[f.key][idx];
+        const board=el.querySelector(`.estim-board[data-idx="${idx}"]`);
+        const atualizarTotais=()=>{
+          sincronizarTotal(it);
+          inpExec.value=it.horasExecutadas===""?"":it.horasExecutadas;
+          const info=board&&board.querySelector('[data-erole="boardinfo"]');
+          if(info) info.textContent=`· ${(it.horasExecLog||[]).length} lançamento(s) · ${fmtNum(somaLog(it),1)} h executadas`;
+          avisar();
+        };
+        if(board){
+          board.addEventListener("toggle",()=>{ it._open=board.open; });
+          board.querySelectorAll(".estim-log").forEach(lr=>{
+            const j=+lr.dataset.j;
+            lr.querySelector('[data-lrole="data"]').oninput=ev=>{ it.horasExecLog[j].data=ev.target.value; };
+            lr.querySelector('[data-lrole="nota"]').oninput=ev=>{ it.horasExecLog[j].nota=ev.target.value; };
+            lr.querySelector('[data-lrole="horas"]').oninput=ev=>{ it.horasExecLog[j].horas=ev.target.value; atualizarTotais(); };
+            lr.querySelector('[data-lrole="rm"]').onclick=()=>{ it.horasExecLog.splice(j,1); it._open=true; sincronizarTotal(it); renderRows(); avisar(); };
+          });
+          board.querySelector('[data-erole="addlog"]').onclick=()=>{
+            it.horasExecLog.push({data:todayStr(),horas:"",nota:""}); it._open=true; renderRows();
+            const ult=container().querySelectorAll(`.estim-board[data-idx="${idx}"] .estim-log textarea`); if(ult.length) ult[ult.length-1].focus();
+          };
+        }
         // "OK": entende que a pessoa cumpriu exatamente as horas previstas —
         // copia o valor de "Horas" (previstas) para "Executada". Se depois o
         // tempo realmente gasto for diferente, basta editar o campo
         // "Executada" manualmente (o OK só preenche, não trava o campo).
         btnOk.onclick=()=>{
-          vals[f.key][idx].horasExecutadas=inpHoras.value;
-          inpExec.value=inpHoras.value;
-          avisar();
+          const falta=Math.round(((parseFloat(inpHoras.value)||0)-somaLog(it))*100)/100;
+          if(!(falta>0)){ toast(parseFloat(inpHoras.value)>0?"As horas previstas já foram todas lançadas.":"Informe antes as horas previstas."); return; }
+          it.horasExecLog.push({data:todayStr(),horas:falta,nota:"Conforme previsto"});
+          it._open=true; sincronizarTotal(it); renderRows(); avisar();
         };
         btnRm.onclick=()=>{ vals[f.key].splice(idx,1); renderRows(); avisar(); };
       });
@@ -7436,14 +7527,14 @@ function openForm(cfg){
     }
     const el=container();
     if(el){
-      el.querySelector(".estim-add").onclick=()=>{ vals[f.key].push({colaboradorId:"",horas:"",horasExecutadas:""}); renderRows(); };
+      el.querySelector(".estim-add").onclick=()=>{ vals[f.key].push({colaboradorId:"",horas:"",horasExecutadas:"",horasExecLog:[]}); renderRows(); };
       const btnPrefill=el.querySelector(".estim-prefill");
       if(btnPrefill && f.prefillButton){
         btnPrefill.onclick=()=>{
           const idsExistentes=new Set(vals[f.key].map(x=>x.colaboradorId).filter(Boolean));
           const novosIds=(f.prefillButton.getIds(vals)||[]).filter(id=>id && !idsExistentes.has(id));
           if(!novosIds.length){ toast(f.prefillButton.msgVazio||"Nada novo para adicionar."); return; }
-          novosIds.forEach(id=>vals[f.key].push({colaboradorId:id, horas:"", horasExecutadas:""}));
+          novosIds.forEach(id=>vals[f.key].push({colaboradorId:id, horas:"", horasExecutadas:"", horasExecLog:[]}));
           renderRows();
           toast(`${novosIds.length} pessoa(s) adicionada(s). Falta só informar as horas de cada uma.`);
         };
@@ -7786,14 +7877,13 @@ function formAtividade(projetoId,a,opts){
         help:"Marcar como \"Concluída\" preenche automaticamente 100% em % Concluído."},
       {key:"progresso",label:"% Concluído",type:"number",min:0,
         help:"Valor de 0 a 100. Preenchido automaticamente pelas horas executadas ÷ previstas (você pode ajustar à mão).",placeholder:"0"},
-      {key:"notasProgresso",label:"Anotações de progresso",type:"textarea",full:true,
-        placeholder:"Ex.: o que foi feito, pendências, próximos passos…",
-        help:"Aparece também no alerta desta atividade em Alertas de prazos, no Painel Geral."},
+      ...((a&&a.notasProgresso&&String(a.notasProgresso).trim())?[{key:"notasProgresso",label:"Anotações anteriores (texto único)",type:"textarea",full:true,
+        help:"Texto das anotações feitas antes do quadro por colaborador. Apague o que já não precisar; as novas anotações ficam no quadro de cada colaborador, em \"Horas previstas por colaborador\"."}]:[]),
       {key:"estimativasPessoas",label:"Horas previstas por colaborador (estimativa de esforço)",
         type:"estimativas",full:true,dynamic:true,
         optionsFn:()=>[...getInternos(),...getParceirosDoProjeto(getProjeto(projetoId))]
           .map(co=>({value:co.id,label:co.nome+(co.tipo==="parceiro"?" (parceiro)":"")})),
-        help:"Escolha cada colaborador (interno ou parceiro vinculado a este projeto) e a quantidade de horas previstas para ele nesta atividade. Usado para calcular a ocupação da equipe no calendário, distribuída ao longo dos dias úteis entre início e término previstos. Clique em \"OK\" para confirmar que a pessoa cumpriu exatamente as horas previstas (preenche \"Executada\" com o mesmo valor), ou informe manualmente as horas executadas se o tempo gasto tiver sido diferente do previsto.",
+        help:"Escolha cada colaborador (interno ou parceiro vinculado a este projeto) e a quantidade de horas previstas para ele nesta atividade. Usado para calcular a ocupação da equipe no calendário, distribuída ao longo dos dias úteis entre início e término previstos. Em cada colaborador, abra \"Anotações de progresso\" e lance data, anotação e horas executadas: a \"Executada\" é a soma desses lançamentos. O botão \"OK\" lança de uma vez as horas que faltam para completar as previstas.",
         prefillButton: (a && !semRaci) ? {
           label:"↺ Puxar quem está em \"R\" na RACI",
           msgVazio:"Ninguém novo marcado como \"R\" na RACI desta atividade (ou já foram todos adicionados aqui).",
@@ -7845,14 +7935,12 @@ function formAtividade(projetoId,a,opts){
           // horas realmente executadas por esta pessoa (preenchidas pelo botão
           // "OK" — igual à prevista — ou digitadas manualmente quando o tempo
           // gasto foi diferente do previsto). Fica null enquanto não informado.
-          horasExecutadas:(x.horasExecutadas===""||x.horasExecutadas==null)?null:parseFloat(x.horasExecutadas)
-        }))
-        .map(x=>{
-          // registra na data de hoje o que foi acrescentado às horas executadas
-          const antigo=(edit&&a&&Array.isArray(a.estimativasPessoas))?a.estimativasPessoas.find(o=>o.colaboradorId===x.colaboradorId):null;
-          x.horasExecLog=atualizarLogExecucao(antigo,x.horasExecutadas);
-          return x;
-        });
+          // a "Executada" é a soma das horas do quadro de anotações do colaborador
+          horasExecutadas:(()=>{ const t=(Array.isArray(x.horasExecLog)?x.horasExecLog:[]).reduce((s2,e)=>s2+(parseFloat(e.horas)||0),0); return t>0?Math.round(t*100)/100:null; })(),
+          horasExecLog:(Array.isArray(x.horasExecLog)?x.horasExecLog:[])
+            .map(e=>({data:e.data||"",horas:parseFloat(e.horas)||0,nota:String(e.nota||"").trim()}))
+            .filter(e=>e.horas>0 || e.nota)
+        }));
       if(usaCampoResp) v.responsaveisIds=Array.isArray(v.responsaveisIds)?v.responsaveisIds:[];
       else delete v.responsaveisIds; // sem o campo no formulário: não mexe no valor antigo
       v.predecessorasIds=Array.isArray(v.predecessorasIds)?v.predecessorasIds:[];
