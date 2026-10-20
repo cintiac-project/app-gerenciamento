@@ -933,28 +933,47 @@ function getCategoria(id){ return DB.data.categorias.find(c=>c.id===id); }
    sobre o que cada categoria representa.
    ============================================================ */
 const CATEGORIA_LEGENDA=[
-  {nome:"Desenvolvimento SENAI",desc:"Atividades internas relacionadas ao desenvolvimento profissional e relacionamento entre equipes SENAI (Cumbuca, Dia D, treinamentos internos sem certificados)."},
-  {nome:"Treinamentos / Capacitação",desc:"Atividades relacionadas ao desenvolvimento profissional que permitam obtenção de certificados, com objetivo de comprovação de PDI para o RH."},
-  {nome:"Produção técnico-científica",desc:"Atividades relacionadas à produção de artigos e divulgação técnico-científica."},
-  {nome:"Articulação Institucional",desc:"Atividades relacionadas ao processo de conectar diferentes organizações, governos ou setores da sociedade para trabalharem em prol de um objetivo comum, como participação em fóruns, conselhos, reuniões e afins."},
-  {nome:"Captação de Cliente",desc:"Atividades relacionadas à captação direta, como busca e pesquisa de clientes, preparação de material, reunião com clientes, formalização da parceria e confecção de propostas comerciais."},
-  {nome:"Captação de Projeto",desc:"Atividades relacionadas à submissão de projetos em editais ou submissão direta, como pesquisa de editais, estudo de editais, preparação de material, reunião com clientes, preenchimento de proposta nas plataformas e/ou confecção de propostas comerciais."},
-  {nome:"Elaboração de Projeto",desc:"Atividades relacionadas à escrita de projeto para submissão em editais, assim como confecção de cronograma físico e financeiro e ajustes necessários antes da submissão da proposta."},
-  {nome:"Planejamento e inicialização do Projeto",desc:"Atividades relacionadas ao início do projeto, como organização e gestão dos documentos necessários para início e contratação do projeto, organização do plano de trabalho e reunião de kickoff."},
-  {nome:"Execução do Projeto",desc:"Atividades relacionadas à execução do escopo do projeto."},
-  {nome:"Monitoramento e Controle do Projeto",desc:"Atividades relacionadas ao acompanhamento do projeto, como follow-ups, reports, avaliação de riscos e mitigação, acompanhamento do cronograma físico e financeiro."},
-  {nome:"Documentação do Projeto",desc:"Atividade administrativa específica do projeto, que envolve produção de materiais e documentos e organização de dados."},
-  {nome:"Encerramento do Projeto",desc:"Atividades relacionadas ao encaminhamento de encerramento do projeto, como confecção de relatório final, prestação de contas, reunião de finalização/entrega do projeto e atividades administrativas referentes à coleta de assinaturas e organização de documentação para encerramento."},
-  {nome:"Gestão Administrativa",desc:"Toda atividade administrativa feita pela equipe internamente e que não reflete em nenhum projeto especificamente (rotinas administrativas gerais)."}
+  {cod:"A1",nome:"Captação de Cliente",desc:"Atividades relacionadas à captação direta, como busca e pesquisa de clientes, preparação de material, reunião com clientes, formalização da parceria e confecção de propostas comerciais."},
+  {cod:"A2",nome:"Captação de Projeto",desc:"Atividades relacionadas à submissão de projetos em editais ou submissão direta, como pesquisa de editais, estudo de editais, preparação de material, reunião com clientes, preenchimento de proposta nas plataformas e/ou confecção de propostas comerciais."},
+  {cod:"B",nome:"Elaboração de Projeto",desc:"Atividades relacionadas à escrita de projeto para submissão em editais, assim como confecção de cronograma físico e financeiro e ajustes necessários antes da submissão da proposta."},
+  {cod:"C",nome:"Articulação Institucional",desc:"Atividades relacionadas ao processo de conectar diferentes organizações, governos ou setores da sociedade para trabalharem em prol de um objetivo comum, como participação em fóruns, conselhos, reuniões e afins."},
+  {cod:"D",nome:"Planejamento e inicialização do Projeto",desc:"Atividades relacionadas ao início do projeto, como organização e gestão dos documentos necessários para início e contratação do projeto, organização do plano de trabalho e reunião de kickoff."},
+  {cod:"E1",nome:"Execução do Projeto",desc:"Atividades relacionadas à execução do escopo do projeto."},
+  {cod:"E2",nome:"Monitoramento e Controle do Projeto",desc:"Atividades relacionadas ao acompanhamento do projeto, como follow-ups, reports, avaliação de riscos e mitigação, acompanhamento do cronograma físico e financeiro."},
+  {cod:"E3",nome:"Documentação do Projeto",desc:"Atividade administrativa específica do projeto, que envolve produção de materiais e documentos e organização de dados."},
+  {cod:"F",nome:"Encerramento do Projeto",desc:"Atividades relacionadas ao encaminhamento de encerramento do projeto, como confecção de relatório final, prestação de contas, reunião de finalização/entrega do projeto e atividades administrativas referentes à coleta de assinaturas e organização de documentação para encerramento."},
+  {cod:"G",nome:"Gestão Administrativa",desc:"Toda atividade administrativa feita pela equipe internamente e que não reflete em nenhum projeto especificamente (rotinas administrativas gerais)."},
+  {cod:"H",nome:"Produção técnico científica",desc:"Atividades relacionadas à produção de artigos e divulgação técnico-científica."},
+  {cod:"I",nome:"Participação em Eventos / Treinamentos / Capacitação",aliases:["Treinamentos / Capacitação"],desc:"Atividades relacionadas ao desenvolvimento profissional que permitam a criação de novos relacionamentos comerciais, captação de clientes e parceiros, absorção de conhecimentos e/ou obtenção de certificados, com objetivo de comprovação de PDI para o RH."}
 ];
+/* categorias retiradas do fluxo padrão: não aparecem mais para escolha
+   (só aparecem na atividade que ainda estiver usando uma delas) */
+const CATEGORIAS_OCULTAS=["desenvolvimento senai"];
+function normCat(n){ return String(n||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]+/g," ").trim(); }
+/* acha o item do fluxo padrão correspondente a uma categoria do banco (pelo nome) */
+function categoriaPadraoDe(c){
+  const k=normCat(c&&c.nome);
+  return CATEGORIA_LEGENDA.find(i=>normCat(i.nome)===k || (i.aliases||[]).some(al=>normCat(al)===k))||null;
+}
+/* opções do select "Categoria", na ordem do fluxo padrão (A1 → I), com o código na frente */
+function categoriasParaSelect(idAtual){
+  return DB.data.categorias
+    .filter(c=>c.id===idAtual || !CATEGORIAS_OCULTAS.includes(normCat(c.nome)))
+    .map(c=>({c,pad:categoriaPadraoDe(c)}))
+    .sort((x,y)=>{
+      const ix=x.pad?CATEGORIA_LEGENDA.indexOf(x.pad):999, iy=y.pad?CATEGORIA_LEGENDA.indexOf(y.pad):999;
+      return ix-iy || String(x.c.nome).localeCompare(String(y.c.nome),"pt-BR");
+    })
+    .map(({c,pad})=>({value:c.id,label:pad?`${pad.cod}. ${pad.nome}`:c.nome}));
+}
 
 function legendaCategoriasHtml(){
   return CATEGORIA_LEGENDA.map(item=>{
-    const catDb=DB.data.categorias.find(c=>(c.nome||"").trim().toLowerCase()===item.nome.trim().toLowerCase());
+    const catDb=DB.data.categorias.find(c=>{ const pd=categoriaPadraoDe(c); return pd===item; });
     const cor=catDb?catDb.cor:"#8a97a3";
     return `<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
       <span style="width:10px;height:10px;border-radius:50%;background:${cor};flex-shrink:0;margin-top:5px"></span>
-      <div><div style="font-weight:600;font-size:13px;margin-bottom:2px">${esc(item.nome)}</div>
+      <div><div style="font-weight:600;font-size:13px;margin-bottom:2px">${esc(item.cod)}. ${esc(item.nome)}</div>
         <div style="font-size:12.5px;color:var(--ink-soft);line-height:1.5">${esc(item.desc)}</div></div>
     </div>`;
   }).join("");
@@ -7393,7 +7412,7 @@ function openForm(cfg){
         </label>`;
     }else if(f.type==="checkbox"){
       // campo booleano simples (ex.: marcar uma atividade como marco/entrega).
-      input=`<label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;padding:5px 0">
+      input=`<label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;min-height:44px">
           <input type="checkbox" data-k="${f.key}" ${dis} ${v?"checked":""} style="width:auto;margin:0">
           ${esc(f.checkboxLabel||"")}
         </label>`;
@@ -7849,7 +7868,10 @@ function formAtividade(projetoId,a,opts){
     fields:[
       {key:"nome",label:"Nome da atividade",required:true,full:true,placeholder:"Ex.: Levantamento de requisitos"},
       {key:"categoriaId",label:"Categoria",type:"select",required:true,
-        options:DB.data.categorias.map(c=>({value:c.id,label:c.nome}))},
+        options:categoriasParaSelect(a&&a.categoriaId)},
+      {key:"marco",label:"Marco de entrega",type:"checkbox",
+        checkboxLabel:"Esta atividade é um marco (deliverable) do projeto",
+        help:"Marcos aparecem destacados no cronograma e na linha do tempo."},
       ...(usaCampoResp?[campoResponsaveis]:[]),
       ...(semPred?[]:[{key:"predecessorasIds",label:"Depende de (atividades predecessoras)",type:"checklist",full:true,dynamic:true,
         optionsFn:()=>{
@@ -7869,9 +7891,6 @@ function formAtividade(projetoId,a,opts){
       {key:"dataFimReal",label:"Término real",type:"dateSameAs",
         sameAsKey:"dataFimPrev",flagKey:"fimRealMesmo",sameAsLabel:"Mesmo do previsto",
         help:"Data em que a atividade de fato terminou. Marque \"Mesmo do previsto\" para replicar automaticamente o Término previsto."},
-      {key:"marco",label:"Marco de entrega",type:"checkbox",full:true,
-        checkboxLabel:"Esta atividade é um marco (deliverable) do projeto",
-        help:"Marcos aparecem destacados no cronograma e na linha do tempo, para dar visão rápida dos pontos críticos do projeto."},
       {key:"status",label:"Situação",type:"select",
         options:STATUS_ATIV.map(s=>({value:s,label:s})),
         help:"Marcar como \"Concluída\" preenche automaticamente 100% em % Concluído."},
