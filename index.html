@@ -282,6 +282,11 @@
   .alert-row .ab{width:4px;align-self:stretch;border-radius:4px;flex-shrink:0}
   .alert-row .at{flex:1;min-width:0}
   .alert-row .at .t{font-weight:600;font-size:13px}
+  .alert-row .at .alert-tag{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:5px;margin-bottom:5px}
+  .alert-row .at .alert-tag.danger{background:var(--danger-bg);color:var(--danger)}
+  .alert-row .at .alert-tag.warn{background:var(--warn-bg);color:var(--warn)}
+  .alert-row .at .alert-tag.info{background:var(--info-bg);color:var(--info)}
   .alert-row .at .d{font-size:11.5px;color:var(--ink-soft);margin-top:1px}
   .alert-row .alert-resp{font-size:11.5px;margin-top:4px;color:var(--ink);
     background:#f4f7f8;padding:3px 9px;border-radius:5px;display:inline-block}
@@ -1192,19 +1197,17 @@ function avaliarRecalculoCronograma(proj, atividadeBase, atrasoDias){
   const dependentes=sucessorasTransitivas(atividadeBase.id, proj.id);
   const elegivel=x=>x.projetoId===proj.id && x.id!==atividadeBase.id &&
     x.status!=="Concluída" && x.status!=="Cancelada" && !x.dataInicioReal;
-  // afetadas = quem vem depois pela data OU depende da atividade base
-  const afetadas=DB.data.atividades.filter(x=>elegivel(x) && (
-    dependentes.has(x.id) ||
-    (x.dataInicioPrev && atividadeBase.dataInicioPrev && x.dataInicioPrev>=atividadeBase.dataInicioPrev)
-  )).sort((a,b)=>(a.dataInicioPrev||"9999").localeCompare(b.dataInicioPrev||"9999"));
+  // afetadas = SOMENTE as sucessoras (diretas ou indiretas) da atividade base,
+  // pela rede de predecessoras/sucessoras. Atividades sem vínculo não entram,
+  // mesmo que tenham data posterior. Sem sucessoras, o quadro nem abre.
+  const afetadas=DB.data.atividades.filter(x=>elegivel(x) && dependentes.has(x.id)).sort((a,b)=>(a.dataInicioPrev||"9999").localeCompare(b.dataInicioPrev||"9999"));
   if(!afetadas.length) return;
 
-  const temDependentes=afetadas.some(x=>dependentes.has(x.id));
+  const temDependentes=true;
   const propostas=afetadas.map(x=>({
     ativ:x,
-    dependente:dependentes.has(x.id),
-    // padrão: se há dependentes, marca só eles; senão, marca todas (comportamento antigo)
-    marcada:temDependentes?dependentes.has(x.id):true,
+    dependente:true,
+    marcada:true,
     novoInicio:x.dataInicioPrev?addDays(x.dataInicioPrev,atrasoDias):null,
     novoFim:x.dataFimPrev?addDays(x.dataFimPrev,atrasoDias):null
   }));
@@ -1232,13 +1235,12 @@ function avaliarRecalculoCronograma(proj, atividadeBase, atrasoDias){
     <div class="modal-head"><h3>Recalcular cronograma?</h3></div>
     <div class="modal-body">
       <p style="color:var(--ink-soft);font-size:13px">"${esc(atividadeBase.nome)}" começou <b>${atrasoDias}
-        dia(s)</b> depois do previsto. Escolha quais das ${afetadas.length} atividade(s) seguintes
-        (que ainda não começaram) devem receber esse mesmo atraso.${temDependentes?
-        " As que dependem desta atividade já vêm marcadas.":""}</p>
+        dia(s)</b> depois do previsto. Escolha quais das ${afetadas.length} atividade(s) sucessora(s)
+        (que ainda não começaram) devem receber esse mesmo atraso.
+        São as <b>sucessoras</b> desta atividade (direta ou indiretamente), conforme as predecessoras cadastradas.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
         <button type="button" class="btn ghost sm" id="rc-todas">Marcar todas</button>
         <button type="button" class="btn ghost sm" id="rc-nenhuma">Desmarcar todas</button>
-        ${temDependentes?`<button type="button" class="btn ghost sm" id="rc-dep">Só as dependentes</button>`:""}
         <span id="rc-cont" style="margin-left:auto;font-size:12px;color:var(--ink-soft)"></span>
       </div>
       <div style="margin-top:10px;max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:0 12px">
@@ -1280,7 +1282,6 @@ function avaliarRecalculoCronograma(proj, atividadeBase, atrasoDias){
   chks().forEach(c=>c.onchange=atualizar);
   $("#rc-todas").onclick=()=>{ chks().forEach(c=>c.checked=true); atualizar(); };
   $("#rc-nenhuma").onclick=()=>{ chks().forEach(c=>c.checked=false); atualizar(); };
-  if(temDependentes) $("#rc-dep").onclick=()=>{ chks().forEach(c=>c.checked=propostas[+c.dataset.i].dependente); atualizar(); };
   atualizar();
 
   $("#c-no").onclick=closeModal;
@@ -1317,12 +1318,23 @@ function mciHistorico(){
   return (DB.data.mci||[]).filter(m=>m.concluido)
     .sort((a,b)=>(b.concluidoEm||"").localeCompare(a.concluidoEm||""));
 }
+/* MCS = atividade da sprint "fixada" no quadro (📍). A linha da tabela mds só
+   guarda o vínculo (atividadeId) e a data em que foi fixada (semana de
+   referência); título, projeto e responsáveis são lidos da atividade ao vivo.
+   Se a atividade for concluída por outro caminho, a MCS sai do quadro sozinha. */
+function mcsAtividadeConcluida(m){
+  const at=m.atividadeId?getAtividade(m.atividadeId):null;
+  return !!(at && (at.status==="Concluída" || (+at.progresso||0)>=100));
+}
 function mdsAtivas(){
-  return (DB.data.mds||[]).filter(m=>!m.concluido)
+  return (DB.data.mds||[]).filter(m=>!m.concluido && !mcsAtividadeConcluida(m))
     .sort((a,b)=>(a.criadoEm||"").localeCompare(b.criadoEm||""));
 }
 function mdsHistorico(){
-  return (DB.data.mds||[]).filter(m=>m.concluido)
+  const dataConc=m=>{ if(m.concluidoEm) return m.concluidoEm; const at=m.atividadeId?getAtividade(m.atividadeId):null;
+    return (at&&at.dataFimReal)||m.criadoEm||""; };
+  return (DB.data.mds||[]).filter(m=>m.concluido || mcsAtividadeConcluida(m))
+    .map(m=>m.concluidoEm?m:Object.assign({},m,{concluidoEm:dataConc(m)}))
     .sort((a,b)=>(b.concluidoEm||"").localeCompare(a.concluidoEm||""));
 }
 function getReuniao(rid){
@@ -1744,11 +1756,11 @@ function calcularAlertas(){
     // atrasada, mas com prazo DENTRO da semana corrente: permanece na SPRINT
     // (ainda dá tempo de entregar). Só vai para "vencidos" quando a semana virar.
     if(d<0) out.push({tipo:"fisico",secao:(a.dataFimPrev>=limitesSemanaCorrente().ini?"sprint":"vencidos"),sev:"danger",dias:d,
-      titulo:`Atividade atrasada: ${a.nome}`,
+      rotulo:"Atividade atrasada", titulo:`Atividade atrasada: ${a.nome}`,
       desc:`${nomeProjetoCod(a.projetoId)} · venceu há ${Math.abs(d)} dia(s) · ${a.progresso||0}% concluído`,
       responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:a.notasProgresso||""});
     else if(d<=diasAteFimSemana) out.push({tipo:"fisico",secao:"sprint",sev:"warn",dias:d,
-      titulo:`Prazo próximo: ${a.nome}`,
+      rotulo:"Prazo próximo", titulo:`Prazo próximo: ${a.nome}`,
       desc:`${nomeProjetoCod(a.projetoId)} · vence em ${d} dia(s) · ${a.progresso||0}% concluído`,
       responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:a.notasProgresso||""});
   });
@@ -1759,11 +1771,11 @@ function calcularAlertas(){
     const proj=getProjeto(f.projetoId);
     const resp=proj && proj.gerente ? proj.gerente : null;
     if(d<0) out.push({tipo:"financeiro",secao:"vencidos",sev:"danger",dias:d,
-      titulo:`${lbl} vencida: ${f.descricao||nomeRubrica(f.rubricaId)}`,
+      rotulo:`${lbl} vencida`, titulo:`${lbl} vencida: ${f.descricao||nomeRubrica(f.rubricaId)}`,
       desc:`${nomeProjetoCod(f.projetoId)} · ${fmtBRL(f.valor)} · venceu há ${Math.abs(d)} dia(s)`,
       responsavel:resp, projetoId:f.projetoId, financeiroId:f.id});
     else if(d<=diasAteFimSemana) out.push({tipo:"financeiro",secao:"sprint",sev:"warn",dias:d,
-      titulo:`${lbl} próxima: ${f.descricao||nomeRubrica(f.rubricaId)}`,
+      rotulo:`${lbl} próxima`, titulo:`${lbl} próxima: ${f.descricao||nomeRubrica(f.rubricaId)}`,
       desc:`${nomeProjetoCod(f.projetoId)} · ${fmtBRL(f.valor)} · vence em ${d} dia(s)`,
       responsavel:resp, projetoId:f.projetoId, financeiroId:f.id});
   });
@@ -1787,7 +1799,7 @@ function calcularAlertas(){
         if(!(ata.saidas||[]).some(x=>x&&x.descricao)) faltando.push("encaminhamentos");
       } else if(!r.hora) faltando.push("horário");
       out.push({tipo:"reuniao",secao:"reunioes",faltando,sev:d<0?"danger":d<=2?"warn":"info",dias:d,
-        titulo:`Reunião: ${r.titulo||"(sem título)"}`,
+        rotulo:"Reunião", titulo:`Reunião: ${r.titulo||"(sem título)"}`,
         desc:`${rotuloProjeto(p)} · ${quando}${r.hora?" às "+r.hora:""}${parts?" · Participantes: "+parts:""}`,
         responsavel:null, projetoId:p.id, reuniaoId:r.id});
     });
@@ -1818,7 +1830,7 @@ function calcularAlertas(){
       const proj=getProjeto(a.projetoId);
       const resp=nomesResponsaveisAtividade(a,proj).join(", ");
       out.push({tipo:"duplicada",secao:"duplicidades",sev:"warn",dias:9999, // não é baseado em prazo; sempre aparece por último
-        titulo:`Atividade duplicada: ${a.nome}`,
+        rotulo:"Atividade duplicada", titulo:`Atividade duplicada: ${a.nome}`,
         desc:`${nomeProjetoCod(a.projetoId)} · também aparece ${partes.join(" · ")}`,
         responsavel:resp, projetoId:a.projetoId, atividadeId:a.id});
     });
@@ -2586,35 +2598,36 @@ function mciMdsPainelHtml(){
        </div>`;
 
   const semAtualMcs=limitesSemanaCorrente();
-  const mdsRows = mdsList.length ? mdsList.map(m=>`
+  const mdsRows = mdsList.length ? mdsList.map(m=>{
+      const at=m.atividadeId?getAtividade(m.atividadeId):null;
+      const proj=at?getProjeto(at.projetoId):null;
+      // espelho da atividade da sprint (sem campos para preencher)
+      const titulo=at?at.nome:(m.texto||"(MCS sem descrição)");
+      const nomes=at?nomesResponsaveisAtividade(at,proj):(m.responsavelId&&getColab(m.responsavelId)?[getColab(m.responsavelId).nome]:[]);
+      const info=at?`${esc(rotuloProjeto(proj))} · ${at.dataFimPrev?"prazo "+fmtDate(at.dataFimPrev)+" · ":""}${at.progresso||0}% concluído`:"";
+      const ref=semanaDaData(m.criadoEm||todayStr());
+      const antiga=ref.ini<semAtualMcs.ini;
+      return `
     <div class="mds-row" data-id="${m.id}" style="display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line-soft);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fafbfc">
-      <input type="checkbox" class="mds-check" data-id="${m.id}" title="Marcar como concluída" style="margin-top:10px;width:16px;height:16px;flex-shrink:0">
+      <input type="checkbox" class="mds-check" data-id="${m.id}" title="Marcar como concluída (conclui também a atividade da sprint)" style="margin-top:3px;width:16px;height:16px;flex-shrink:0">
       <div style="flex:1;min-width:0">
-        <textarea class="mds-texto" data-id="${m.id}" placeholder="Descreva a medida de direção semanal…"
-          style="width:100%;min-height:44px;padding:8px 9px;border:1px solid var(--line);border-radius:6px;font-family:inherit;font-size:13px;background:#fff;resize:vertical">${esc(m.texto||"")}</textarea>
+        <div style="font-weight:600;font-size:13.5px;line-height:1.35">${esc(titulo)}</div>
+        ${info?`<div style="font-size:11.5px;color:var(--ink-soft);margin-top:2px">${info}</div>`:""}
         <div style="display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap;margin-top:6px;min-width:0;max-width:100%">
-          <select class="mds-resp select" data-id="${m.id}" style="max-width:min(240px,100%)">
-            <option value="">Responsável…</option>
-            ${getInternos().map(cIt=>`<option value="${cIt.id}" ${String(m.responsavelId||"")===String(cIt.id)?"selected":""}>${esc(cIt.nome)}</option>`).join("")}
-          </select>
-          ${(()=>{
-            const ref=semanaDaData(m.criadoEm||todayStr());
-            const antiga=ref.ini<semAtualMcs.ini;
-            return `<span class="mds-semana" title="Semana (segunda a domingo) em que esta MCS foi definida${antiga?" — ainda não concluída, vem de semana anterior":""}"
-              style="box-sizing:border-box;max-width:100%;font-size:11.5px;line-height:1.35;font-weight:600;padding:4px 10px;border-radius:12px;white-space:normal;background:${antiga?"var(--warn-bg)":"var(--info-bg)"};color:${antiga?"var(--warn)":"var(--info)"}">
-              📅 Semana de referência: ${fmtDate(ref.ini)} a ${fmtDate(ref.fim)}${antiga?" · semana anterior":""}</span>`;
-          })()}
+          <span style="font-size:11.5px;background:#f4f7f8;padding:3px 9px;border-radius:5px"><span style="color:var(--ink-faint)">Responsável:</span> <b>${nomes.length?esc(nomes.join(", ")):"<i>não atribuído</i>"}</b></span>
+          <span class="mds-semana" title="Semana (segunda a domingo) em que esta atividade foi fixada como MCS${antiga?" — ainda não concluída, vem de semana anterior":""}"
+            style="box-sizing:border-box;max-width:100%;font-size:11.5px;line-height:1.35;font-weight:600;padding:4px 10px;border-radius:12px;white-space:normal;background:${antiga?"var(--warn-bg)":"var(--info-bg)"};color:${antiga?"var(--warn)":"var(--info)"}">
+            📅 Semana de referência: ${fmtDate(ref.ini)} a ${fmtDate(ref.fim)}${antiga?" · semana anterior":""}</span>
         </div>
       </div>
-      <button class="btn-icon del mds-rm" data-id="${m.id}" title="Remover">🗑</button>
-    </div>`).join("")
-    : `<div class="empty" style="padding:16px 10px"><span class="ic">📌</span><p>Nenhuma MCS ativa esta semana.</p></div>`;
+      <button class="btn-icon del mds-rm" data-id="${m.id}" title="Tirar do quadro de MCS (a atividade continua na sprint)">📍✕</button>
+    </div>`;}).join("")
+    : `<div class="empty" style="padding:16px 10px"><span class="ic">📌</span><p>Nenhuma MCS ativa esta semana.</p><p class="hint">Clique no 📍 de uma atividade da Sprint para trazê-la para cá.</p></div>`;
 
   const mdsHtml = `
     ${mdsRows}
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;flex-wrap:wrap;gap:8px">
+    <div style="display:flex;justify-content:flex-start;align-items:center;margin-top:6px;flex-wrap:wrap;gap:8px">
       <button class="btn ghost sm" id="mds-hist">🕘 Histórico${histMds.length?` (${histMds.length})`:""}</button>
-      <button class="btn sm" id="mds-add">+ Nova MCS</button>
     </div>`;
 
   return `
@@ -2626,7 +2639,7 @@ function mciMdsPainelHtml(){
     <div class="card">
       <div class="card-head" style="flex-wrap:wrap;row-gap:4px"><h3>📍 MCS — Medidas de Direção Semanal</h3>
         <span class="hint">semana corrente · ${fmtDate(semAtualMcs.ini)} a ${fmtDate(semAtualMcs.fim)}</span>
-        <span class="hint" style="flex-basis:100%">Concluída → sai da lista e vai pro histórico</span></div>
+        <span class="hint" style="flex-basis:100%">Espelho das atividades da Sprint marcadas com 📍 · concluída → sai da lista e vai pro histórico</span></div>
       <div class="card-pad">${mdsHtml}</div>
     </div>
   </div>`;
@@ -2647,7 +2660,7 @@ async function alternarAtividadeComoMcs(atividadeId){
   // se houver um único responsável interno identificável, já preenche
   const nomes=nomesResponsaveisAtividade(at,getProjeto(at.projetoId));
   const interno=nomes.length===1? getInternos().find(c=>c.nome===nomes[0]) : null;
-  const novo={id:uid(), texto:`${at.nome} (${nomeProjeto(at.projetoId)})`, responsavelId:interno?interno.id:null,
+  const novo={id:uid(), texto:at.nome, responsavelId:interno?interno.id:null,
     criadoEm:todayStr(), concluido:false, concluidoEm:null, atividadeId:at.id, projetoId:at.projetoId};
   DB.data.mds.push(novo);
   try{ await sbInsert("mds", toSnake(novo)); toast("Atividade adicionada ao quadro de MCS. 📍"); }
@@ -2682,10 +2695,12 @@ function abrirHistoricoMds(){
     <div class="modal-head"><h3>🕘 Histórico de MCS concluídas</h3><button class="btn-icon" id="hd-x">✕</button></div>
     <div class="modal-body" style="max-height:60vh;overflow:auto">
       ${lista.length? lista.map(m=>{
+        const atH=m.atividadeId?getAtividade(m.atividadeId):null;
         const resp=getColab(m.responsavelId);
+        const nomesH=atH?nomesResponsaveisAtividade(atH,getProjeto(atH.projetoId)):(resp?[resp.nome]:[]);
         return `<div style="border-bottom:1px solid var(--line-soft);padding:10px 0">
-          <div style="font-weight:600">${esc(m.texto||"(sem descrição)")}</div>
-          <div class="hint">Responsável: ${resp?esc(resp.nome):"—"} · semana de referência: ${(()=>{const r=semanaDaData(m.criadoEm||m.concluidoEm||todayStr());return fmtDate(r.ini)+" a "+fmtDate(r.fim);})()} · concluída em ${fmtDate(m.concluidoEm)}</div>
+          <div style="font-weight:600">${esc(atH?atH.nome:(m.texto||"(sem descrição)"))}</div>
+          <div class="hint">Responsável: ${nomesH.length?esc(nomesH.join(", ")):"—"} · semana de referência: ${(()=>{const r=semanaDaData(m.criadoEm||m.concluidoEm||todayStr());return fmtDate(r.ini)+" a "+fmtDate(r.fim);})()} · concluída em ${fmtDate(m.concluidoEm)}</div>
         </div>`;
       }).join("") : `<div class="empty"><span class="ic">📍</span><p>Nenhuma MCS concluída ainda.</p></div>`}
     </div>
@@ -2723,30 +2738,7 @@ function wirePainelMciMds(v){
   };
   if($("#mci-hist")) $("#mci-hist").onclick=abrirHistoricoMci;
 
-  if($("#mds-add")) $("#mds-add").onclick=async()=>{
-    const novo={id:uid(), texto:"", responsavelId:null, criadoEm:todayStr(), concluido:false, concluidoEm:null};
-    DB.data.mds.push(novo);
-    try{ await sbInsert("mds", toSnake(novo)); }
-    catch(e){ toast("Erro ao criar MCS: "+e.message); }
-    render();
-  };
   if($("#mds-hist")) $("#mds-hist").onclick=abrirHistoricoMds;
-  v.querySelectorAll(".mds-texto").forEach(t=>{
-    t.onblur=async()=>{
-      const item=DB.data.mds.find(m=>m.id===t.dataset.id); if(!item) return;
-      item.texto=t.value;
-      try{ await sbUpdate("mds", item.id, {texto:item.texto}); }
-      catch(e){ toast("Erro ao salvar MCS: "+e.message); }
-    };
-  });
-  v.querySelectorAll(".mds-resp").forEach(s=>{
-    s.onchange=async()=>{
-      const item=DB.data.mds.find(m=>m.id===s.dataset.id); if(!item) return;
-      item.responsavelId=s.value||null;
-      try{ await sbUpdate("mds", item.id, {responsavel_id:item.responsavelId}); }
-      catch(e){ toast("Erro ao salvar responsável: "+e.message); }
-    };
-  });
   v.querySelectorAll(".mds-check").forEach(chk=>{
     chk.onchange=async()=>{
       if(!chk.checked) return;
@@ -2765,7 +2757,7 @@ function wirePainelMciMds(v){
   });
   v.querySelectorAll(".mds-rm").forEach(b=>{
     b.onclick=()=>{
-      confirmar("Remover esta MCS?","Essa ação não pode ser desfeita (não vai para o histórico).", async()=>{
+      confirmar("Tirar do quadro de MCS?","A atividade continua na Sprint; só deixa de ser uma MCS (não vai para o histórico).", async()=>{
         const id=b.dataset.id;
         DB.data.mds=DB.data.mds.filter(m=>m.id!==id);
         try{ await sbDelete("mds", id); }
@@ -2929,7 +2921,8 @@ function viewPainel(v){
     const faltaHtml=(a.faltando&&a.faltando.length)
       ? `<div class="alert-resp sem"><span class="rl">Faltam dados:</span> ${esc(a.faltando.join(", "))}</div>` : "";
     return `<div class="alert-row"><div class="ab" style="background:${col}"></div>
-      <div class="at"><div class="t">${esc(a.titulo)}</div>
+      <div class="at">${a.rotulo?`<div class="alert-tag ${a.sev==="danger"?"danger":a.sev==="info"?"info":"warn"}">${esc(a.rotulo)}</div>`:""}
+        <div class="t">${esc(a.rotulo&&String(a.titulo).startsWith(a.rotulo+": ")?String(a.titulo).slice(a.rotulo.length+2):a.titulo)}</div>
         <div class="d">${esc(a.desc)}</div>
         ${respHtml}${notasHtml}${faltaHtml}</div>
       <span class="badge ${a.sev==="danger"?"b-danger":a.sev==="info"?"b-info":"b-warn"}">${a.tipo==="fisico"?"Físico":a.tipo==="financeiro"?"Financeiro":a.tipo==="duplicada"?"Duplicada":"Reunião"}</span>
