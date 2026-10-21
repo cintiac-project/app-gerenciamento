@@ -1089,7 +1089,7 @@ function moverAtividadesProjeto(lista){
       options:[{value:"pular",label:"Não mover as duplicadas"}],
       help:"Um mesmo projeto não pode ter duas atividades com o mesmo nome."}
   ];
-  if(nHoras) fields.push({key:"moverHoras",label:"Horas apontadas",checkboxLabel:`Mover também ${nHoras} apontamento(s) de horas ${n>1?"destas atividades":"desta atividade"} (${Math.round(totalH*10)/10} h)`,type:"checkbox",full:true,
+  if(nHoras) fields.push({key:"moverHoras",label:"Horas executadas",checkboxLabel:`Mover também ${nHoras} apontamento(s) de horas ${n>1?"destas atividades":"desta atividade"} (${Math.round(totalH*10)/10} h)`,type:"checkbox",full:true,
     help:"Desmarcado, as horas continuam no projeto de origem, apenas sem vínculo com a atividade."});
   const msgErro=e=>{ const m=String((e&&e.message)||e); return /atividades_projeto_nome_unq|23505/.test(m)?"já existe uma atividade com este nome no projeto de destino":m; };
   openForm({
@@ -1465,15 +1465,33 @@ function partesExecucaoItem(x){
      as horas são distribuídas pelos dias úteis, indo para o mês de cada dia;
    - sem dupla contagem: se a pessoa JÁ tem apontamento nessa atividade, o
      apontamento prevalece e a horasExecutadas dela é ignorada. */
+/* Quando a pessoa tem apontamentos antigos (tabela horas) E "Executada" na
+   atividade, vale o MAIOR dos dois, sem somar (evita dupla contagem):
+   - Executada > apontado  → a Executada substitui os apontamentos
+     (ex.: 1 h apontada e 12 h executadas → 12 h);
+   - Executada ≤ apontado  → os apontamentos continuam valendo.
+   Devolve as chaves "atividadeId|colaboradorId" cujos apontamentos são substituídos. */
+function chavesApontamentoSubstituidas(){
+  const apontado={};
+  DB.data.horas.forEach(h=>{ if(h.atividadeId && h.colaboradorId){ const k=h.atividadeId+"|"+h.colaboradorId; apontado[k]=(apontado[k]||0)+(+h.horas||0); } });
+  const subst=new Set();
+  DB.data.atividades.forEach(a=>{
+    (Array.isArray(a.estimativasPessoas)?a.estimativasPessoas:[]).forEach(x=>{
+      const k=a.id+"|"+x.colaboradorId;
+      if(x.colaboradorId && k in apontado && (parseFloat(x.horasExecutadas)||0) > apontado[k]+0.0001) subst.add(k);
+    });
+  });
+  return subst;
+}
 function horasExecutadasAtividades(projetoId){
-  const apont=new Set();
+  const apont=new Set(), subst=chavesApontamentoSubstituidas();
   DB.data.horas.forEach(h=>{ if(h.atividadeId && h.colaboradorId) apont.add(h.atividadeId+"|"+h.colaboradorId); });
   const out=[];
   DB.data.atividades.forEach(a=>{
     if(projetoId && a.projetoId!==projetoId) return;
     (Array.isArray(a.estimativasPessoas)?a.estimativasPessoas:[]).forEach(x=>{
       if(!x.colaboradorId || !(parseFloat(x.horasExecutadas)>0)) return;
-      if(apont.has(a.id+"|"+x.colaboradorId)) return;
+      if(apont.has(a.id+"|"+x.colaboradorId) && !subst.has(a.id+"|"+x.colaboradorId)) return;
       const partes=partesExecucaoItem(x);
       partes.log.forEach((e,i)=>out.push({id:"execlog-"+a.id+"-"+x.colaboradorId+"-"+i, projetoId:a.projetoId, atividadeId:a.id,
         colaboradorId:x.colaboradorId, categoriaId:a.categoriaId||"", data:e.data, horas:e.horas, sintetico:true}));
@@ -1499,7 +1517,9 @@ function horasExecutadasAtividades(projetoId){
 }
 /* apontamentos + horas executadas das atividades (use em totais e gráficos) */
 function horasConsolidadas(projetoId){
-  const base=projetoId?DB.data.horas.filter(h=>h.projetoId===projetoId):DB.data.horas;
+  const subst=chavesApontamentoSubstituidas();
+  let base=projetoId?DB.data.horas.filter(h=>h.projetoId===projetoId):DB.data.horas;
+  if(subst.size) base=base.filter(h=>!(h.atividadeId && h.colaboradorId && subst.has(h.atividadeId+"|"+h.colaboradorId)));
   return base.concat(horasExecutadasAtividades(projetoId));
 }
 function horasAtividade(a){
@@ -1593,7 +1613,7 @@ function motivoStatusCalculado(p){
     if(p.dataFim && daysBetween(hoje,p.dataFim)<0) motivos.push("prazo geral do projeto vencido");
     return motivos.length? motivos.join(", ")+"." : "Sinal de atraso detectado.";
   }
-  if(s==="Em andamento") return "Atividades em progresso ou horas já apontadas no projeto.";
+  if(s==="Em andamento") return "Atividades em progresso ou horas já executadas no projeto.";
   return "Ainda não há atividades, horas ou datas indicando início dos trabalhos.";
 }
 /* semana (segunda a domingo) em que uma data cai — usada na "semana de referência" das MCS */
@@ -1670,14 +1690,15 @@ function horasExecutadasSemanaPorPessoa(semanaIni){
   const semanaFim=addDays(semanaIni,6), out={};
   const add=(cid,pid,h)=>{ if(!cid||!(h>0)) return;
     const p=out[cid]||(out[cid]={h:0,porProjeto:{}}); p.h+=h; p.porProjeto[pid]=(p.porProjeto[pid]||0)+h; };
-  const apont=new Set();
+  const apont=new Set(), subst=chavesApontamentoSubstituidas();
   DB.data.horas.forEach(h=>{
     if(h.atividadeId && h.colaboradorId) apont.add(h.atividadeId+"|"+h.colaboradorId);
+    if(h.atividadeId && h.colaboradorId && subst.has(h.atividadeId+"|"+h.colaboradorId)) return; // substituído pela "Executada"
     if(h.data>=semanaIni && h.data<=semanaFim) add(h.colaboradorId,h.projetoId,+h.horas||0);
   });
   DB.data.atividades.forEach(a=>{
     (Array.isArray(a.estimativasPessoas)?a.estimativasPessoas:[]).forEach(x=>{
-      if(!x.colaboradorId || !(parseFloat(x.horasExecutadas)>0) || apont.has(a.id+"|"+x.colaboradorId)) return;
+      if(!x.colaboradorId || !(parseFloat(x.horasExecutadas)>0) || (apont.has(a.id+"|"+x.colaboradorId) && !subst.has(a.id+"|"+x.colaboradorId))) return;
       const partes=partesExecucaoItem(x);
       partes.log.forEach(e=>{ if(e.data>=semanaIni && e.data<=semanaFim) add(x.colaboradorId,a.projetoId,e.horas); });
       const total=partes.legado;
@@ -4030,7 +4051,7 @@ function projCronograma(c,p){
     return `<tr${a.marco?' style="box-shadow:inset 3px 0 0 var(--gold)"':""}>
       ${podeEditar?`<td style="width:34px;text-align:center"><input type="checkbox" data-sel="${a.id}" ${ST.cronoSelecionadas.has(a.id)?"checked":""} title="Selecionar para mover"></td>`:""}
       <td><div style="font-weight:600;display:flex;align-items:center;gap:6px">${esc(a.nome)}${a.marco?`<span class="badge b-marco" title="Marco de entrega deste projeto">🚩 Marco</span>`:""}${selosDependenciaHtml(a)}</div>
-        <div style="font-size:11px;color:var(--ink-faint)">${atividadeSemCampo(p.sessaoId,"categoriaId")?"":esc(nomeCategoria(a.categoriaId))+" · "}Resp.: ${responsaveis.join(", ")||"—"}${horasAtiv?` · ${horasAtiv}h apontadas`:""}${totalHorasPrevistasAtividade(a)>0?` · ${fmtNum(totalHorasPrevistasAtividade(a),1)}h previstas (${pessoasAlocadasAtividade(a).length} pessoa(s))`:""}</div></td>
+        <div style="font-size:11px;color:var(--ink-faint)">${atividadeSemCampo(p.sessaoId,"categoriaId")?"":esc(nomeCategoria(a.categoriaId))+" · "}Resp.: ${responsaveis.join(", ")||"—"}${horasAtiv?` · ${fmtNum(horasAtiv,1)}h executadas`:""}${totalHorasPrevistasAtividade(a)>0?` · ${fmtNum(totalHorasPrevistasAtividade(a),1)}h previstas (${pessoasAlocadasAtividade(a).length} pessoa(s))`:""}</div></td>
       <td style="font-size:12px">${dIni} → ${dFim}${temReal?`<div style="color:var(--ink-faint);margin-top:2px">Real: ${dIniReal} → ${dFimReal}</div>`:""}</td>
       <td>${atrasada?`<span class="badge b-danger">Atrasada</span>`:statusBadge(a.status||"Não iniciada")}</td>
       <td><div style="display:flex;align-items:center;gap:8px">
@@ -6762,7 +6783,7 @@ async function exportarCronogramaExcel(p,ats,totalProjeto){
       pageSetup:{orientation:"landscape",fitToPage:true,fitToWidth:1,fitToHeight:0,paperSize:9}});
     const cols=[["Nº",5],["Atividade",46],["Marco",8],["Categoria",24],["Responsável(is)",28],["Depende de",32],
       ["Início previsto",13],["Término previsto",13],["Início real",13],["Término real",13],["Situação",14],["% Concluído",12],
-      ["Horas previstas",12],["Horas apontadas",12],["Anotações de progresso",50]];
+      ["Horas previstas",12],["Horas executadas",12],["Anotações de progresso",50]];
     ws.columns=cols.map(c=>({width:c[1]}));
     const n=cols.length;
     // título
