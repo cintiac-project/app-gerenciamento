@@ -2201,6 +2201,7 @@ const ST = {
   cronoStatusVisiveis:new Set(["Não iniciada","Em andamento","Atrasada","Cancelada"]),
   // filtro de período do cronograma físico (aplicado junto com o de status)
   cronoFiltroData:{de:"",ate:""},
+  cronoFiltroColab:"",   // "" = todos · id do colaborador · "__nenhum" = sem responsável
   cronoSelecionadas:new Set(),
   // projetos "Concluído" somem da lista do Portfólio por padrão e só voltam
   // a aparecer quando esse botão-filtro é acionado (mesmo padrão do filtro
@@ -3967,7 +3968,21 @@ function projCronograma(c,p){
     const atrasada=a.status!=="Cancelada" && a.dataFimPrev && daysBetween(todayStr(),a.dataFimPrev)<0 && prog<100;
     return atrasada ? "Atrasada" : (a.status||"Não iniciada");
   };
-  const ats=todasAts.filter(a=>ST.cronoStatusVisiveis.has(statusEfetivo(a)) && cronoDataOk(a));
+  // filtro por colaborador: usa o mesmo critério do "Resp.:" mostrado na lista
+  // (horas previstas por colaborador, RACI ou campo de responsáveis da sessão)
+  const respIdsDe=a=>responsaveisIdsAtividade(a,p);
+  const idsNoProjeto=new Set(); let haSemResp=false;
+  todasAts.forEach(a=>{ const r=respIdsDe(a); if(!r.length) haSemResp=true; r.forEach(id=>idsNoProjeto.add(id)); });
+  const colabOpcoes=[...idsNoProjeto].map(id=>({id,nome:nomeColab(id)}))
+    .sort((x,y)=>String(x.nome).localeCompare(String(y.nome),"pt-BR"));
+  let fColab=ST.cronoFiltroColab||"";
+  if(fColab && fColab!=="__nenhum" && !idsNoProjeto.has(fColab)) fColab="";   // não existe neste projeto
+  const cronoColabOk=a=>{
+    if(!fColab) return true;
+    const r=respIdsDe(a);
+    return fColab==="__nenhum" ? r.length===0 : r.includes(fColab);
+  };
+  const ats=todasAts.filter(a=>ST.cronoStatusVisiveis.has(statusEfetivo(a)) && cronoDataOk(a) && cronoColabOk(a));
   const ocultas=todasAts.length-ats.length;
   // seleção para mover em lote: mantém só as atividades visíveis neste cronograma
   ST.cronoSelecionadas=new Set([...ST.cronoSelecionadas].filter(id=>ats.some(a=>a.id===id)));
@@ -3988,6 +4003,13 @@ function projCronograma(c,p){
     <span style="color:var(--ink-faint)">até</span>
     <input type="date" id="crono-data-ate" value="${esc(fd.ate||"")}" style="width:auto" title="Até (mostra atividades que começam até esta data)">
     ${filtroDataAtivo?`<button class="btn ghost sm" id="crono-data-limpar">✕ Limpar período</button>`:""}
+    <span class="field-inline" style="font-weight:600;color:var(--ink);margin-left:14px">Colaborador:</span>
+    <select id="crono-colab" style="width:auto;min-width:190px" title="Mostra só as atividades em que a pessoa é responsável (tem horas previstas ou consta como responsável)">
+      <option value="">Todos</option>
+      ${colabOpcoes.map(o=>`<option value="${esc(o.id)}" ${fColab===o.id?"selected":""}>${esc(o.nome)}</option>`).join("")}
+      ${haSemResp?`<option value="__nenhum" ${fColab==="__nenhum"?"selected":""}>— Sem responsável —</option>`:""}
+    </select>
+    ${fColab?`<button class="btn ghost sm" id="crono-colab-limpar">✕ Limpar</button>`:""}
     <div class="spacer"></div>
     ${ocultas>0?`<span class="hint">${ocultas} atividade(s) oculta(s) pelo filtro</span>`:""}
   </div>`;
@@ -4069,6 +4091,8 @@ function projCronograma(c,p){
         render();
       };
     });
+    $("#crono-colab").onchange=(e)=>{ ST.cronoFiltroColab=e.target.value; render(); };
+    if($("#crono-colab-limpar")) $("#crono-colab-limpar").onclick=()=>{ ST.cronoFiltroColab=""; render(); };
     $("#crono-data-de").onchange=(e)=>{ ST.cronoFiltroData.de=e.target.value; render(); };
     $("#crono-data-ate").onchange=(e)=>{ ST.cronoFiltroData.ate=e.target.value; render(); };
     if($("#crono-data-limpar")) $("#crono-data-limpar").onclick=()=>{
