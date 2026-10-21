@@ -2420,8 +2420,22 @@ const SESSAO_CONFIG={
 // mudarem de aparência. Ajuste aqui se quiser outro layout para esta sessão.
 SESSAO_CONFIG.articulacao=Object.assign({},SESSAO_CONFIG.rotinas,{
   // abas que não fazem sentido para Articulação Institucional
-  abasOcultas:["ocupacao","financeiro","raci","riscos"]
+  abasOcultas:["ocupacao","financeiro","raci","riscos"],
+  // cada atividade já É Articulação Institucional: não há seletor de projetos.
+  // Ao abrir a sessão (havendo um único projeto), vai direto ao Cronograma Físico.
+  abrirDireto:true,
+  // campos que não fazem sentido no registro das atividades desta sessão
+  camposOcultosAtividade:["categoriaId","marco","predecessorasIds"]
 });
+function atividadeSemCampo(sessaoId,key){
+  return (cfgSessao(sessaoId).camposOcultosAtividade||[]).includes(key);
+}
+/* sessão que abre direto no projeto (sem lista de projetos): devolve o projeto, ou null */
+function projetoAberturaDireta(sessaoId){
+  if(!sessaoId || !cfgSessao(sessaoId).abrirDireto) return null;
+  const ps=DB.data.projetos.filter(p=>p.sessaoId===sessaoId);
+  return ps.length===1?ps[0]:null;
+}
 function cfgSessao(id){ return SESSAO_CONFIG[id]||{}; }
 
 // campo foi removido do formulário desta sessão (ex.: "cliente" em Rotinas
@@ -3536,6 +3550,11 @@ function ordenarProjetos(lista, criterio){
 }
 function viewPortfolio(v){
   const sessaoId=ST.sessaoAtiva||null;
+  const direto=projetoAberturaDireta(sessaoId);
+  if(direto){
+    ST.view="projeto"; ST.projetoId=direto.id; ST.projTab="cronograma";
+    render(); return;
+  }
   const ps=DB.data.projetos.filter(p=> sessaoId ? p.sessaoId===sessaoId : !projetoSessaoValida(p));
   if(isGestor()) setTopAction(`<button class="btn">+ Novo projeto</button>`,()=>formProjeto(null,sessaoId));
   if(!ps.length){
@@ -3674,10 +3693,10 @@ function viewProjeto(v){
   const p=getProjeto(ST.projetoId);
   if(!p){ ST.view="portfolio"; render(); return; }
   $("#topbar-actions").innerHTML=`
-    <button class="btn ghost" id="proj-back">← Voltar ao portfólio</button>
+    ${projetoAberturaDireta(p.sessaoId)?"":`<button class="btn ghost" id="proj-back">← Voltar ao portfólio</button>`}
     ${isGestor()?`<button class="btn ghost" id="proj-move" style="margin-left:8px">⇄ Mover de sessão</button>`:""}
     <button class="btn ghost" id="proj-export" style="margin-left:8px">📤 Exportar relatório</button>`;
-  $("#proj-back").onclick=()=>{ ST.view="portfolio"; render(); };
+  if($("#proj-back")) $("#proj-back").onclick=()=>{ ST.view="portfolio"; render(); };
   if($("#proj-move")) $("#proj-move").onclick=()=>moverSessao(p);
   $("#proj-export").onclick=()=>exportarRelatorioProjeto(p);
 
@@ -3989,7 +4008,7 @@ function projCronograma(c,p){
     return `<tr${a.marco?' style="box-shadow:inset 3px 0 0 var(--gold)"':""}>
       ${podeEditar?`<td style="width:34px;text-align:center"><input type="checkbox" data-sel="${a.id}" ${ST.cronoSelecionadas.has(a.id)?"checked":""} title="Selecionar para mover"></td>`:""}
       <td><div style="font-weight:600;display:flex;align-items:center;gap:6px">${esc(a.nome)}${a.marco?`<span class="badge b-marco" title="Marco de entrega deste projeto">🚩 Marco</span>`:""}${selosDependenciaHtml(a)}</div>
-        <div style="font-size:11px;color:var(--ink-faint)">${esc(nomeCategoria(a.categoriaId))} · Resp.: ${responsaveis.join(", ")||"—"}${horasAtiv?` · ${horasAtiv}h apontadas`:""}${totalHorasPrevistasAtividade(a)>0?` · ${fmtNum(totalHorasPrevistasAtividade(a),1)}h previstas (${pessoasAlocadasAtividade(a).length} pessoa(s))`:""}</div></td>
+        <div style="font-size:11px;color:var(--ink-faint)">${atividadeSemCampo(p.sessaoId,"categoriaId")?"":esc(nomeCategoria(a.categoriaId))+" · "}Resp.: ${responsaveis.join(", ")||"—"}${horasAtiv?` · ${horasAtiv}h apontadas`:""}${totalHorasPrevistasAtividade(a)>0?` · ${fmtNum(totalHorasPrevistasAtividade(a),1)}h previstas (${pessoasAlocadasAtividade(a).length} pessoa(s))`:""}</div></td>
       <td style="font-size:12px">${dIni} → ${dFim}${temReal?`<div style="color:var(--ink-faint);margin-top:2px">Real: ${dIniReal} → ${dFimReal}</div>`:""}</td>
       <td>${atrasada?`<span class="badge b-danger">Atrasada</span>`:statusBadge(a.status||"Não iniciada")}</td>
       <td><div style="display:flex;align-items:center;gap:8px">
@@ -7847,8 +7866,10 @@ function formAtividade(projetoId,a,opts){
   // opts.semPredecessoras: usado quando o formulário abre pelo Painel Geral,
   // onde não faz sentido definir "Depende de" (isso fica só no cronograma do
   // projeto). As predecessoras já salvas são preservadas.
-  const semPred=!!(opts&&opts.semPredecessoras);
   const proj=getProjeto(projetoId);
+  const semPred=!!(opts&&opts.semPredecessoras) || (proj&&atividadeSemCampo(proj.sessaoId,"predecessorasIds"));
+  const semCat=!!(proj&&atividadeSemCampo(proj.sessaoId,"categoriaId"));
+  const semMarco=!!(proj&&atividadeSemCampo(proj.sessaoId,"marco"));
   // sessões sem Matriz RACI (ex.: Rotinas) precisam de um jeito direto de
   // marcar quem é responsável pela atividade, já que não têm a aba RACI
   // para isso. Nessas sessões, o campo abaixo aparece no próprio formulário
@@ -7867,11 +7888,11 @@ function formAtividade(projetoId,a,opts){
     values:a||{projetoId,status:"Não iniciada",progresso:0,dataInicioPrev:todayStr(),marco:false},
     fields:[
       {key:"nome",label:"Nome da atividade",required:true,full:true,placeholder:"Ex.: Levantamento de requisitos"},
-      {key:"categoriaId",label:"Categoria",type:"select",required:true,
-        options:categoriasParaSelect(a&&a.categoriaId)},
-      {key:"marco",label:"Marco de entrega",type:"checkbox",
+      ...(semCat?[]:[{key:"categoriaId",label:"Categoria",type:"select",required:true,
+        options:categoriasParaSelect(a&&a.categoriaId)}]),
+      ...(semMarco?[]:[{key:"marco",label:"Marco de entrega",type:"checkbox",
         checkboxLabel:"Esta atividade é um marco (deliverable) do projeto",
-        help:"Marcos aparecem destacados no cronograma e na linha do tempo."},
+        help:"Marcos aparecem destacados no cronograma e na linha do tempo."}]),
       ...(usaCampoResp?[campoResponsaveis]:[]),
       ...(semPred?[]:[{key:"predecessorasIds",label:"Depende de (atividades predecessoras)",type:"checklist",full:true,dynamic:true,
         optionsFn:()=>{
@@ -7936,7 +7957,12 @@ function formAtividade(projetoId,a,opts){
       }
     },
     onSave:async(v)=>{
-      v.marco=!!v.marco;
+      v.marco=semMarco?!!(a&&a.marco):!!v.marco;
+      if(semCat && !v.categoriaId){
+        // sem classificação no formulário: usa a categoria "C. Articulação Institucional" (se existir)
+        const catC=DB.data.categorias.find(c=>{ const pd=categoriaPadraoDe(c); return pd&&pd.cod==="C"; });
+        v.categoriaId=catC?catC.id:null;
+      }
       v.inicioRealMesmo=!!v.inicioRealMesmo;
       v.fimRealMesmo=!!v.fimRealMesmo;
       if(v.inicioRealMesmo) v.dataInicioReal=v.dataInicioPrev||null;
