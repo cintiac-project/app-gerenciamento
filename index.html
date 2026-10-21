@@ -282,12 +282,15 @@
   .alert-row .ab{width:4px;align-self:stretch;border-radius:4px;flex-shrink:0}
   .alert-row .at{flex:1;min-width:0}
   .alert-row .at .t{font-weight:600;font-size:13px}
+  .alert-row .at .alert-head{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin-bottom:5px}
+  .alert-row .at .alert-meta{font-size:12px;font-weight:600;color:var(--ink-soft)}
   .alert-row .at .alert-tag{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
-    padding:2px 8px;border-radius:5px;margin-bottom:5px}
+    padding:2px 8px;border-radius:5px}
   .alert-row .at .alert-tag.danger{background:var(--danger-bg);color:var(--danger)}
   .alert-row .at .alert-tag.warn{background:var(--warn-bg);color:var(--warn)}
   .alert-row .at .alert-tag.info{background:var(--info-bg);color:var(--info)}
   .alert-row .at .d{font-size:11.5px;color:var(--ink-soft);margin-top:1px}
+  .alert-row .at .d b{color:var(--ink);font-weight:700}
   .alert-row .alert-resp{font-size:11.5px;margin-top:4px;color:var(--ink);
     background:#f4f7f8;padding:3px 9px;border-radius:5px;display:inline-block}
   .alert-row .alert-resp .rl{color:var(--ink-faint);font-weight:500}
@@ -1371,6 +1374,28 @@ function rotuloProjeto(p){
   return cod?`${cod} — ${p.nome}`:p.nome;
 }
 function nomeProjetoCod(id){ return rotuloProjeto(getProjeto(id)); }
+/* versão em HTML: a sigla/código do projeto em negrito ("<b>SIGLA</b> — Nome") */
+function rotuloProjetoHtml(p){
+  if(!p) return "—";
+  const cod=p.codigo?String(p.codigo).trim():"";
+  return cod?`<b>${esc(cod)}</b> — ${esc(p.nome)}`:esc(p.nome);
+}
+/* texto em negrito Unicode (𝗔𝗕𝗖…): único jeito de destacar parte do texto de uma
+   opção de lista suspensa (<option> não aceita HTML). Acentos são preservados. */
+function negritoUnicode(str){
+  return String(str||"").normalize("NFD").replace(/[A-Za-z0-9]/g,ch=>{
+    const c=ch.charCodeAt(0);
+    if(c>=65&&c<=90) return String.fromCodePoint(0x1D5D4+c-65);
+    if(c>=97&&c<=122) return String.fromCodePoint(0x1D5EE+c-97);
+    return String.fromCodePoint(0x1D7EC+c-48);
+  }).normalize("NFC");
+}
+/* rótulo para listas suspensas: sigla em negrito + nome */
+function rotuloProjetoSelect(p){
+  if(!p) return "—";
+  const cod=p.codigo?String(p.codigo).trim():"";
+  return cod?`${negritoUnicode(cod)} — ${p.nome}`:p.nome;
+}
 function nomeColab(id){ const c=getColab(id); return c?c.nome:"—"; }
 function colabBadge(c){ return c && c.tipo==="parceiro" ? ' <span class="tag" style="background:#f3ead7;color:#b8852a;font-size:10px;padding:1px 6px">Parceiro</span>' : ""; }
 function nomeCategoria(id){ const c=getCategoria(id); return c?c.nome:"—"; }
@@ -1834,11 +1859,13 @@ function calcularAlertas(){
     // (ainda dá tempo de entregar). Só vai para "vencidos" quando a semana virar.
     if(d<0) out.push({tipo:"fisico",secao:(a.dataFimPrev>=limitesSemanaCorrente().ini?"sprint":"vencidos"),sev:"danger",dias:d,
       rotulo:"Atividade atrasada", titulo:`Atividade atrasada: ${a.nome}`,
-      desc:`${nomeProjetoCod(a.projetoId)} · venceu há ${Math.abs(d)} dia(s) · ${a.progresso||0}% concluído`,
+      desc:nomeProjetoCod(a.projetoId), descHtml:rotuloProjetoHtml(proj),
+      meta:`venceu há ${Math.abs(d)} dia(s) · ${a.progresso||0}% concluído`,
       responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:textoAnotacoesAtividade(a)});
     else if(d<=diasAteFimSemana) out.push({tipo:"fisico",secao:"sprint",sev:"warn",dias:d,
       rotulo:"Prazo próximo", titulo:`Prazo próximo: ${a.nome}`,
-      desc:`${nomeProjetoCod(a.projetoId)} · vence em ${d} dia(s) · ${a.progresso||0}% concluído`,
+      desc:nomeProjetoCod(a.projetoId), descHtml:rotuloProjetoHtml(proj),
+      meta:`vence em ${d} dia(s) · ${a.progresso||0}% concluído`,
       responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:textoAnotacoesAtividade(a)});
   });
   DB.data.financeiro.forEach(f=>{
@@ -1849,11 +1876,13 @@ function calcularAlertas(){
     const resp=proj && proj.gerente ? proj.gerente : null;
     if(d<0) out.push({tipo:"financeiro",secao:"vencidos",sev:"danger",dias:d,
       rotulo:`${lbl} vencida`, titulo:`${lbl} vencida: ${f.descricao||nomeRubrica(f.rubricaId)}`,
-      desc:`${nomeProjetoCod(f.projetoId)} · ${fmtBRL(f.valor)} · venceu há ${Math.abs(d)} dia(s)`,
+      desc:nomeProjetoCod(f.projetoId), descHtml:rotuloProjetoHtml(proj),
+      meta:`${fmtBRL(f.valor)} · venceu há ${Math.abs(d)} dia(s)`,
       responsavel:resp, projetoId:f.projetoId, financeiroId:f.id});
     else if(d<=diasAteFimSemana) out.push({tipo:"financeiro",secao:"sprint",sev:"warn",dias:d,
       rotulo:`${lbl} próxima`, titulo:`${lbl} próxima: ${f.descricao||nomeRubrica(f.rubricaId)}`,
-      desc:`${nomeProjetoCod(f.projetoId)} · ${fmtBRL(f.valor)} · vence em ${d} dia(s)`,
+      desc:nomeProjetoCod(f.projetoId), descHtml:rotuloProjetoHtml(proj),
+      meta:`${fmtBRL(f.valor)} · vence em ${d} dia(s)`,
       responsavel:resp, projetoId:f.projetoId, financeiroId:f.id});
   });
   // reuniões: futuras (até 7 dias à frente, para preparar pauta/providências)
@@ -1877,7 +1906,9 @@ function calcularAlertas(){
       } else if(!r.hora) faltando.push("horário");
       out.push({tipo:"reuniao",secao:"reunioes",faltando,sev:d<0?"danger":d<=2?"warn":"info",dias:d,
         rotulo:"Reunião", titulo:`Reunião: ${r.titulo||"(sem título)"}`,
-        desc:`${rotuloProjeto(p)} · ${quando}${r.hora?" às "+r.hora:""}${parts?" · Participantes: "+parts:""}`,
+        desc:`${rotuloProjeto(p)}${parts?" · Participantes: "+parts:""}`,
+        descHtml:`${rotuloProjetoHtml(p)}${parts?" · Participantes: "+esc(parts):""}`,
+        meta:`${quando}${r.hora?" às "+r.hora:""}`,
         responsavel:null, projetoId:p.id, reuniaoId:r.id});
     });
   });
@@ -1909,6 +1940,7 @@ function calcularAlertas(){
       out.push({tipo:"duplicada",secao:"duplicidades",sev:"warn",dias:9999, // não é baseado em prazo; sempre aparece por último
         rotulo:"Atividade duplicada", titulo:`Atividade duplicada: ${a.nome}`,
         desc:`${nomeProjetoCod(a.projetoId)} · também aparece ${partes.join(" · ")}`,
+        descHtml:`${rotuloProjetoHtml(proj)} · também aparece ${esc(partes.join(" · "))}`,
         responsavel:resp, projetoId:a.projetoId, atividadeId:a.id});
     });
   });
@@ -2288,11 +2320,11 @@ function opcoesProjetosAgrupadasPorSessao(lista){
   const opts=[];
   SESSOES.forEach(s=>{
     porSessao[s.id].slice().sort(alfabetica)
-      .forEach(p=>opts.push({value:p.id,label:p.nome,group:s.label}));
+      .forEach(p=>opts.push({value:p.id,label:rotuloProjetoSelect(p),nome:p.nome,group:s.label}));
   });
   if(semSessao.length){
     semSessao.slice().sort(alfabetica)
-      .forEach(p=>opts.push({value:p.id,label:p.nome,group:"Não classificados"}));
+      .forEach(p=>opts.push({value:p.id,label:rotuloProjetoSelect(p),nome:p.nome,group:"Não classificados"}));
   }
   return opts;
 }
@@ -2306,11 +2338,12 @@ function opcoesProjetosBusca(){
   return opcoesProjetosAgrupadasPorSessao().map(o=>{
     const p=getProjeto(o.value);
     const codigo=(p&&p.codigo)?String(p.codigo).trim():"";
+    const nomeP=o.nome||o.label;
     return {
       value:o.value,
-      label: codigo?`${codigo} — ${o.label}`:o.label,
-      busca: codigo?`${codigo} ${o.label}`:o.label,
-      html: `${codigo?`<b>${esc(codigo)}</b> — `:""}${esc(o.label)}`+
+      label: codigo?`${codigo} — ${nomeP}`:nomeP,
+      busca: codigo?`${codigo} ${nomeP}`:nomeP,
+      html: `${codigo?`<b>${esc(codigo)}</b> — `:""}${esc(nomeP)}`+
         `<div style="font-size:11px;color:var(--ink-faint)">${esc(o.group||"")}</div>`,
       group:o.group
     };
@@ -2696,7 +2729,7 @@ function mciMdsPainelHtml(){
       // espelho da atividade da sprint (sem campos para preencher)
       const titulo=at?at.nome:(m.texto||"(MCS sem descrição)");
       const nomes=at?nomesResponsaveisAtividade(at,proj):(m.responsavelId&&getColab(m.responsavelId)?[getColab(m.responsavelId).nome]:[]);
-      const info=at?`${esc(rotuloProjeto(proj))} · ${at.dataFimPrev?"prazo "+fmtDate(at.dataFimPrev)+" · ":""}${at.progresso||0}% concluído`:"";
+      const info=at?`${rotuloProjetoHtml(proj)} · ${at.dataFimPrev?"prazo "+fmtDate(at.dataFimPrev)+" · ":""}${at.progresso||0}% concluído`:"";
       const ref=semanaDaData(m.criadoEm||todayStr());
       const antiga=ref.ini<semAtualMcs.ini;
       return `
@@ -3013,9 +3046,9 @@ function viewPainel(v){
     const faltaHtml=(a.faltando&&a.faltando.length)
       ? `<div class="alert-resp sem"><span class="rl">Faltam dados:</span> ${esc(a.faltando.join(", "))}</div>` : "";
     return `<div class="alert-row"><div class="ab" style="background:${col}"></div>
-      <div class="at">${a.rotulo?`<div class="alert-tag ${a.sev==="danger"?"danger":a.sev==="info"?"info":"warn"}">${esc(a.rotulo)}</div>`:""}
+      <div class="at">${a.rotulo?`<div class="alert-head"><span class="alert-tag ${a.sev==="danger"?"danger":a.sev==="info"?"info":"warn"}">${esc(a.rotulo)}</span>${a.meta?`<span class="alert-meta">${esc(a.meta)}</span>`:""}</div>`:""}
         <div class="t">${esc(a.rotulo&&String(a.titulo).startsWith(a.rotulo+": ")?String(a.titulo).slice(a.rotulo.length+2):a.titulo)}</div>
-        <div class="d">${esc(a.desc)}</div>
+        <div class="d">${a.descHtml||esc(a.desc)}</div>
         ${respHtml}${notasHtml}${faltaHtml}</div>
       <span class="badge ${a.sev==="danger"?"b-danger":a.sev==="info"?"b-info":"b-warn"}">${a.tipo==="fisico"?"Físico":a.tipo==="financeiro"?"Financeiro":a.tipo==="duplicada"?"Duplicada":"Reunião"}</span>
       ${mcsBtnHtml}${acoesHtml}</div>`;
@@ -3026,7 +3059,7 @@ function viewPainel(v){
       <div class="field-inline">Projeto
         <select class="select" id="painel-alerta-proj">
           <option value="">Todos</option>
-          ${projetosComAlerta.map(p=>`<option value="${p.id}" ${p.id===ST.painelAlertaProjeto?"selected":""}>${esc(rotuloProjeto(p))}</option>`).join("")}
+          ${projetosComAlerta.map(p=>`<option value="${p.id}" ${p.id===ST.painelAlertaProjeto?"selected":""}>${esc(rotuloProjetoSelect(p))}</option>`).join("")}
         </select>
       </div>
       <div class="field-inline">Responsável
@@ -3215,7 +3248,7 @@ function abrirDetalheReceitaPortfolio(ps,titulo,descricao){
   const total=ordenado.reduce((s,p)=>s+(+p.receita||0),0);
   const linhas=ordenado.map(p=>`
     <tr class="clickable" data-abrir-proj="${p.id}">
-      <td>${esc(rotuloProjeto(p))}<div style="font-size:11.5px;color:var(--ink-faint)">${esc(nomeSessao(p.sessaoId)||"")}</div></td>
+      <td>${rotuloProjetoHtml(p)}<div style="font-size:11.5px;color:var(--ink-faint)">${esc(nomeSessao(p.sessaoId)||"")}</div></td>
       <td class="num" style="${(+p.receita||0)===0?"color:var(--ink-faint)":""}">${fmtBRL(p.receita)}</td>
     </tr>`).join("");
   $("#modal-root").innerHTML=`
@@ -3604,7 +3637,7 @@ function viewPortfolio(v){
     const pcls=prog>=100?"ok":prog<35?"danger":prog<70?"warn":"";
     return `<tr class="clickable" data-pid="${p.id}">
       <td><div style="font-weight:600">${esc(p.nome)}</div>
-        <div style="font-size:11.5px;color:var(--ink-faint)">${esc(p.codigo||"")}${p.cliente?" · "+esc(p.cliente):""}</div></td>
+        <div style="font-size:11.5px;color:var(--ink-faint)">${p.codigo?`<b style="color:var(--ink)">${esc(p.codigo)}</b>`:""}${p.cliente?(p.codigo?" · ":"")+esc(p.cliente):""}</div></td>
       <td>${statusBadge(statusCalculado(p))}</td>
       <td style="font-size:12px;color:var(--ink-soft)">${fmtDate(p.dataInicio)}<br>↓ ${fmtDate(p.dataFim)}</td>
       <td class="num">${fmtBRL(p.receita)}</td>
@@ -3826,7 +3859,7 @@ function projResumo(c,p){
     <div class="card-head"><h3>${esc(cfgAtual.tituloCardInformacoes||"Informações")}</h3>
       ${isGestor()?'<button class="btn ghost sm" id="edit-p">✎ Editar</button>':""}</div>
     <div class="card-pad">
-      <div class="mini-stat"><span>Código</span><span class="v">${esc(p.codigo||"—")}</span></div>
+      <div class="mini-stat"><span>Código</span><span class="v"><b>${esc(p.codigo||"—")}</b></span></div>
       ${cfgAtual.ocultarStatusResumo?"":`<div class="mini-stat"><span>Status</span><span title="${esc(motivoStatusCalculado(p))}">${statusBadge(statusCalculado(p))}
         ${isGestor()?`<button class="btn-icon" id="btn-cancelar-proj" title="${statusCalculado(p)==='Cancelado'?'Reativar projeto':'Marcar como cancelado'}" style="margin-left:6px;font-size:11px">${statusCalculado(p)==='Cancelado'?'↺':'✕'}</button>`:""}</span></div>
       <div class="mini-stat" style="font-size:11px;color:var(--ink-faint)"><span></span><span>${esc(motivoStatusCalculado(p))}</span></div>`}
@@ -5607,7 +5640,7 @@ function viewFinanceiro(v){
   <div style="height:18px"></div>
   <div class="toolbar">
     <div class="field-inline">Projeto<select class="select" id="ff-proj"><option value="">Todos</option>
-      ${DB.data.projetos.map(p=>`<option value="${p.id}" ${f.proj===p.id?"selected":""}>${esc(p.nome)}</option>`).join("")}</select></div>
+      ${DB.data.projetos.map(p=>`<option value="${p.id}" ${f.proj===p.id?"selected":""}>${esc(rotuloProjetoSelect(p))}</option>`).join("")}</select></div>
     <div class="field-inline">Tipo<select class="select" id="ff-tipo"><option value="">Todos</option>
       <option value="receita" ${f.tipo==="receita"?"selected":""}>Receita</option>
       <option value="despesa" ${f.tipo==="despesa"?"selected":""}>Despesa</option></select></div>
@@ -6646,7 +6679,7 @@ function gerarHtmlRelatorioProjeto(p){
 
   return `${style}<div class="rpt">
     <h1>Relatório do projeto</h1>
-    <div class="sub"><b>${esc(p.nome)}</b>${p.codigo?` · Código ${esc(p.codigo)}`:""}</div>
+    <div class="sub"><b>${esc(p.nome)}</b>${p.codigo?` · Código <b>${esc(p.codigo)}</b>`:""}</div>
 
     <h2>Identificação</h2>
     <dl class="meta">
@@ -8135,7 +8168,7 @@ function formFinanceiro(projetoId,f){
     values:initial,
     fields:[
       {key:"projetoId",label:"Projeto",type:"select",required:true,
-        options:DB.data.projetos.map(p=>({value:p.id,label:p.nome}))},
+        options:DB.data.projetos.map(p=>({value:p.id,label:rotuloProjetoSelect(p)}))},
       {key:"tipo",label:"Tipo",type:"select",required:true,
         options:[{value:"receita",label:"Receita"},{value:"despesa",label:"Despesa"}]},
       {key:"rubricaId",label:"Rubrica",type:"select",required:true,
