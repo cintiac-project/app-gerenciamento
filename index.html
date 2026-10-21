@@ -587,6 +587,10 @@ async function sbWrite(path, {method="POST", body, prefer="return=representation
         "migração pendente e recarregar o schema (NOTIFY pgrst, 'reload schema'). "+
         "Detalhe técnico: "+txt);
     }
+    if(txt.includes("atividades_projeto_nome_unq")){
+      throw new Error("Já existe uma atividade com este nome neste projeto — o banco só aceita um nome por projeto. "+
+        "Use um nome diferente (ex.: acrescente a data ou o número da rodada). [atividades_projeto_nome_unq]");
+    }
     throw new Error("Falha ao salvar ("+resp.status+"): "+(txt||resp.statusText));
   }
   if(method==="DELETE" || resp.status===204) return null;
@@ -8035,6 +8039,11 @@ function formAtividade(projetoId,a,opts){
       }
     },
     onSave:async(v)=>{
+      // o banco aceita só UM nome de atividade por projeto: avisa antes de tentar gravar
+      const nomeNovo=String(v.nome||"").trim();
+      const colide=DB.data.atividades.find(x=>x.projetoId===projetoId && (!a||x.id!==a.id) && String(x.nome||"").trim()===nomeNovo);
+      if(colide){ const eDup=new Error(`Já existe uma atividade chamada "${nomeNovo}" neste projeto — o banco só aceita um nome por projeto. `+
+        `Use um nome diferente (ex.: "${nomeNovo} – 2" ou com a data/rodada) ou edite a atividade que já existe.`); eDup.validacao=true; throw eDup; }
       v.marco=semMarco?!!(a&&a.marco):!!v.marco;
       if(semCat && !v.categoriaId){
         // sem classificação no formulário: usa a categoria "C. Articulação Institucional" (se existir)
