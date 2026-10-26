@@ -1761,6 +1761,10 @@ function ocupacaoSemanalPessoas(semanaIni){
     const prog=Math.min(100,Math.max(0,+a.progresso||0));
     if(prog>=100) return;
     const atrasada=!!a.dataFimPrev && a.dataFimPrev<hoje;
+    // atrasada que NÃO está na sprint (não foi retornada para a sprint desta
+    // semana e o prazo venceu antes da semana corrente): o saldo dela não entra
+    // na carga da semana — aparece à parte, como "atrasadas fora da sprint".
+    const foraSprint=atrasada && !atividadeNaSprint(a) && a.dataFimPrev<limitesSemanaCorrente().ini;
     const fator=(100-prog)/100;
     // SALDO (horas ainda não executadas) dividido igualmente pelos dias úteis
     // de hoje (ou do início previsto, se for futuro) até o término previsto;
@@ -1790,7 +1794,9 @@ function ocupacaoSemanalPessoas(semanaIni){
       const restante=temExec?Math.max(0,(+e.horas||0)-execTotal):(+e.horas||0)*fator;
       const h=restante*fracaoSemana;
       if(!e.colaboradorId||h<=0) return;
-      const p=pessoas[e.colaboradorId]||(pessoas[e.colaboradorId]={id:e.colaboradorId,planejado:0,atrasado:0,porProjeto:{}});
+      const p=pessoas[e.colaboradorId]||(pessoas[e.colaboradorId]={id:e.colaboradorId,planejado:0,atrasado:0,foraSprint:0,porProjeto:{},porAtividade:[]});
+      p.porAtividade.push({atividadeId:a.id,projetoId:a.projetoId,horas:h,atrasada,foraSprint});
+      if(foraSprint){ p.foraSprint+=h; return; }
       p.planejado+=h; if(atrasada) p.atrasado+=h;
       p.porProjeto[a.projetoId]=(p.porProjeto[a.projetoId]||0)+h;
     });
@@ -1798,10 +1804,10 @@ function ocupacaoSemanalPessoas(semanaIni){
   // acrescenta as horas já executadas na semana (inclui quem só tem executadas)
   const exec=horasExecutadasSemanaPorPessoa(semanaIni);
   Object.keys(exec).forEach(cid=>{
-    const p=pessoas[cid]||(pessoas[cid]={id:cid,planejado:0,atrasado:0,porProjeto:{}});
+    const p=pessoas[cid]||(pessoas[cid]={id:cid,planejado:0,atrasado:0,foraSprint:0,porProjeto:{},porAtividade:[]});
     p.executado=exec[cid].h; p.execPorProjeto=exec[cid].porProjeto;
   });
-  return Object.values(pessoas).map(p=>({executado:0,execPorProjeto:{},...p,nome:nomeColab(p.id),capacidade:capacidadeSemanalPessoa(p.id,semanaIni)}))
+  return Object.values(pessoas).filter(p=>p.planejado>0.0001||p.executado>0.0001||p.foraSprint>0.0001).map(p=>({executado:0,execPorProjeto:{},...p,nome:nomeColab(p.id),capacidade:capacidadeSemanalPessoa(p.id,semanaIni)}))
     .sort((a,b)=>((b.planejado+b.executado)-b.capacidade)-((a.planejado+a.executado)-a.capacidade)||a.nome.localeCompare(b.nome,"pt-BR"));
 }
 /* HTML do gráfico (barras horizontais: planejado + em aberto + marcador da capacidade) */
@@ -1817,10 +1823,16 @@ function ocupacaoSemanalHtml(semanaIni){
     const ratio=p.capacidade>0? carga/p.capacidade : (carga>0?9:0);
     const cor=ratio>1.0001?"var(--danger)":ratio>=0.80?"var(--warn)":"var(--ok)";
     const ajustada=Math.abs(p.capacidade-CAPACIDADE_SEMANAL_PADRAO)>0.001;
-    const tip=Object.entries(p.porProjeto).sort((a,b)=>b[1]-a[1]).map(([pid,h])=>nomeProjetoCod(pid)+": "+fmtNum(h,1)+" h").join("\n")||"Sem horas previstas";
+    // saldo detalhado por atividade (para conferir de onde vem cada hora)
+    const linhaAtiv=x=>"• "+nomeAtividade(x.atividadeId)+" ("+((getProjeto(x.projetoId)||{}).codigo||nomeProjeto(x.projetoId))+"): "+fmtNum(x.horas,1)+" h"+(x.atrasada?" — atrasada":"");
+    const naCarga=p.porAtividade.filter(x=>!x.foraSprint).sort((a,b)=>b.horas-a.horas);
+    const fora=p.porAtividade.filter(x=>x.foraSprint).sort((a,b)=>b.horas-a.horas);
+    const tip=(naCarga.map(linhaAtiv).join("\n")||"Sem horas previstas")
+      +(fora.length?"\n\nATRASADAS FORA DA SPRINT (não somadas na carga):\n"+fora.map(linhaAtiv).join("\n"):"");
     const tipExec=Object.entries(p.execPorProjeto).sort((a,b)=>b[1]-a[1]).map(([pid,h])=>nomeProjetoCod(pid)+": "+fmtNum(h,1)+" h").join("\n");
     const tipFull=(tipExec?"EXECUTADAS na semana:\n"+tipExec+"\n\nPLANEJADAS (restantes):\n":"")+tip+(p.atrasado>0.04?"\n— inclui "+fmtNum(p.atrasado,1)+" h de atividades atrasadas":"");
-    const atrasTxt=p.atrasado>0.04?` <span style="color:var(--danger)">(inclui ${fmtNum(p.atrasado,1)} h de atividades atrasadas)</span>`:"";
+    const atrasTxt=(p.atrasado>0.04?` <span style="color:var(--danger)">(inclui ${fmtNum(p.atrasado,1)} h de atividades atrasadas)</span>`:"")
+      +(p.foraSprint>0.04?` <span style="color:var(--ink-faint)">· + ${fmtNum(p.foraSprint,1)} h atrasadas fora da sprint (não somadas)</span>`:"");
     const execTxt=p.executado>0.04?`<b style="color:var(--info)">${fmtNum(p.executado,1)} h</b> executadas · `:"";
     const txt=execTxt+(exc>0
       ? `<b style="color:var(--danger)">${fmtNum(p.planejado,1)} h</b> planejadas · <b style="color:var(--danger)">${fmtNum(exc,1)} h acima do limite</b>`
@@ -1841,6 +1853,9 @@ function ocupacaoSemanalHtml(semanaIni){
           <div style="position:absolute;top:0;bottom:0;left:calc(${pct(p.capacidade)}% - 1px);width:2px;background:var(--ink)"></div>
         </div>
         <div style="font-size:11.5px;color:var(--ink-soft);margin-top:2px">${txt}</div>
+        ${p.porAtividade.length?`<details style="font-size:11.5px;color:var(--ink-soft);margin-top:2px">
+          <summary style="cursor:pointer;color:var(--ink-faint)">ver saldo por atividade (${p.porAtividade.length})</summary>
+          <div style="white-space:pre-line;margin-top:3px">${esc(tip)}</div></details>`:""}
       </div>
       <div style="display:flex;align-items:center;gap:4px;justify-content:flex-end">${campo}</div>
     </div>`;
