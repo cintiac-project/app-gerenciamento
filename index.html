@@ -1486,9 +1486,9 @@ function textoAnotacoesAtividade(a){
 function partesExecucaoItem(x){
   const total=parseFloat(x.horasExecutadas);
   if(!(total>0)) return {log:[],legado:0};
-  let log=(Array.isArray(x.horasExecLog)?x.horasExecLog:[]).filter(e=>e&&e.data&&+e.horas>0).map(e=>({data:e.data,horas:+e.horas}));
+  let log=(Array.isArray(x.horasExecLog)?x.horasExecLog:[]).filter(e=>e&&e.data&&+e.horas>0).map(e=>({data:e.data,horas:+e.horas,nota:e.nota||""}));
   const soma=log.reduce((t,e)=>t+e.horas,0);
-  if(soma>total+0.0001){ const f=total/soma; log=log.map(e=>({data:e.data,horas:e.horas*f})); return {log,legado:0}; }
+  if(soma>total+0.0001){ const f=total/soma; log=log.map(e=>({data:e.data,horas:e.horas*f,nota:e.nota})); return {log,legado:0}; }
   return {log,legado:Math.max(0,total-soma)};
 }
 
@@ -1520,6 +1520,20 @@ function chavesApontamentoSubstituidas(){
   });
   return subst;
 }
+/* período em que as horas executadas SEM data de uma atividade são
+   distribuídas: Início real → Término real (na falta, os previstos). Hora
+   executada não pode estar no futuro: sem Término real, o período é cortado
+   em HOJE (e, se a atividade ainda nem começou, tudo cai em hoje). */
+function periodoExecDistribuida(a){
+  let ini=a.dataInicioReal||a.dataInicioPrev||a.dataFimReal||a.dataFimPrev;
+  let fim=a.dataFimReal||a.dataFimPrev||ini;
+  if(!ini) return null;
+  if(fim<ini) fim=ini;
+  const hoje=todayStr();
+  if(!a.dataFimReal && fim>hoje) fim=hoje;
+  if(ini>fim) ini=fim;
+  return {ini,fim};
+}
 function horasExecutadasAtividades(projetoId){
   const apont=new Set(), subst=chavesApontamentoSubstituidas();
   DB.data.horas.forEach(h=>{ if(h.atividadeId && h.colaboradorId) apont.add(h.atividadeId+"|"+h.colaboradorId); });
@@ -1531,13 +1545,12 @@ function horasExecutadasAtividades(projetoId){
       if(apont.has(a.id+"|"+x.colaboradorId) && !subst.has(a.id+"|"+x.colaboradorId)) return;
       const partes=partesExecucaoItem(x);
       partes.log.forEach((e,i)=>out.push({id:"execlog-"+a.id+"-"+x.colaboradorId+"-"+i, projetoId:a.projetoId, atividadeId:a.id,
-        colaboradorId:x.colaboradorId, categoriaId:a.categoriaId||"", data:e.data, horas:e.horas, sintetico:true}));
+        colaboradorId:x.colaboradorId, categoriaId:a.categoriaId||"", data:e.data, horas:e.horas, sintetico:true, origem:"anotacao", nota:e.nota||""}));
       const total=partes.legado;
       if(!(total>0.0001)) return;
-      const ini=a.dataInicioReal||a.dataInicioPrev||a.dataFimReal||a.dataFimPrev;
-      let fim=a.dataFimReal||a.dataFimPrev||ini;
-      if(!ini) return;
-      if(fim<ini) fim=ini;
+      const per=periodoExecDistribuida(a);
+      if(!per) return;
+      const {ini,fim}=per;
       let dias=diasUteisEntre(ini,fim);
       if(!dias.length) dias=[fim];
       const porMes={};
@@ -1546,7 +1559,8 @@ function horasExecutadasAtividades(projetoId){
         const ds=porMes[ym];
         out.push({id:"exec-"+a.id+"-"+x.colaboradorId+"-"+ym, projetoId:a.projetoId, atividadeId:a.id,
           colaboradorId:x.colaboradorId, categoriaId:a.categoriaId||"", data:ds[ds.length-1],
-          horas:total*ds.length/dias.length, sintetico:true});
+          horas:total*ds.length/dias.length, sintetico:true, origem:"distribuida",
+          periodo:fmtDate(dias[0])+" a "+fmtDate(dias[dias.length-1])});
       });
     });
   });
@@ -1740,10 +1754,9 @@ function horasExecutadasSemanaPorPessoa(semanaIni){
       partes.log.forEach(e=>{ if(e.data>=semanaIni && e.data<=semanaFim) add(x.colaboradorId,a.projetoId,e.horas); });
       const total=partes.legado;
       if(!(total>0.0001)) return;
-      const ini=a.dataInicioReal||a.dataInicioPrev||a.dataFimReal||a.dataFimPrev;
-      let fim=a.dataFimReal||a.dataFimPrev||ini;
-      if(!ini) return;
-      if(fim<ini) fim=ini;
+      const per=periodoExecDistribuida(a);
+      if(!per) return;
+      const {ini,fim}=per;
       let dias=diasUteisEntre(ini,fim); if(!dias.length) dias=[fim];
       const naSemana=dias.filter(d=>d>=semanaIni && d<=semanaFim).length;
       if(naSemana) add(x.colaboradorId,a.projetoId,total*naSemana/dias.length);
@@ -3185,6 +3198,7 @@ function viewPainel(v){
 
   <div class="card" style="margin-bottom:18px">
     <div class="card-head"><h3>Horas executadas — visão ${ST.dashMode}</h3>
+      <button class="btn ghost sm" id="btn-origem-horas" title="Lista cada lançamento que compõe as horas executadas: de onde veio, atividade, pessoa e data">🔍 Ver origem das horas</button>
       <span class="hint">${ST.dashMode==="anual"?"Todos os anos":"Ano "+ST.dashYear} · total ${fmtH(serieCat.reduce((s,d)=>s+d.total,0))}</span></div>
     <div class="card-pad">${stackedBarChart(serieCat,{fmt:v=>fmtNum(v,0)+"h",legend:legendDeBuckets(serieCat)})}</div>
   </div>
@@ -3202,6 +3216,7 @@ function viewPainel(v){
 
   if(isGestor()) setTopAction(`<button class="btn">+ Novo projeto</button>`,()=>formProjeto());
   wirePainelMciMds(v);
+  $("#btn-origem-horas").onclick=()=>abrirOrigemHoras();
   $("#painel-alerta-proj").onchange=e=>{ ST.painelAlertaProjeto=e.target.value; render(); };
   $("#painel-alerta-resp").onchange=e=>{ ST.painelAlertaResp=e.target.value; render(); };
   $("#dash-year").onchange=e=>{ ST.dashYear=e.target.value; render(); };
@@ -3571,16 +3586,87 @@ function anosDisponiveis(){
   horasConsolidadas().forEach(h=>{ if(h.data) set.add(yearOf(h.data)); });
   return [...set].sort();
 }
+/* horas executadas que entram nos dashboards: hora executada não existe no
+   futuro, então registros com data depois de hoje (ex.: apontamentos antigos
+   criados com "Repetir em vários dias" até o fim do ano) ficam de fora — e
+   aparecem em "Ver origem das horas" como "data futura (não contada)". */
+function horasExecutadasDashboard(){
+  const hoje=todayStr();
+  return horasConsolidadas().filter(h=>h.data && h.data<=hoje);
+}
 function horasDoPeriodo(){
-  if(ST.dashMode==="anual") return horasConsolidadas();
-  return horasConsolidadas().filter(h=>yearOf(h.data)===ST.dashYear);
+  if(ST.dashMode==="anual") return horasExecutadasDashboard();
+  return horasExecutadasDashboard().filter(h=>yearOf(h.data)===ST.dashYear);
+}
+/* "Ver origem das horas": lista cada registro que compõe as horas executadas
+   do dashboard, com a FONTE de cada um — para auditar horas inesperadas:
+   - Apontamento antigo: linha da tabela "horas" (recurso de Apontamento de
+     Horas, já retirado do app; inclui os criados com "Repetir em vários dias");
+   - Anotação de progresso: lançamento com data no quadro do colaborador,
+     dentro da atividade (inclui o botão "✓ OK" = "Conforme previsto");
+   - Executada sem data: total "Executada" sem data, distribuído pelos dias
+     úteis do Início ao Término real (ou previstos, cortado em hoje). */
+function abrirOrigemHoras(){
+  const hoje=todayStr();
+  const ORIG={apontamento:"Apontamento antigo",anotacao:"Anotação de progresso",distribuida:"Executada sem data (distribuída)"};
+  const todas=horasConsolidadas().map(h=>Object.assign({},h,{origem:h.origem||"apontamento"}));
+  const ano=ST.dashYear;
+  const cats=[...new Set(todas.map(h=>h.categoriaId||""))];
+  const estado={mes:"",cat:"",origem:""};
+  $("#modal-root").innerHTML=`
+  <div class="overlay"><div class="modal wide" style="max-width:1000px">
+    <div class="modal-head"><h3>Origem das horas executadas — ${ano}</h3></div>
+    <div class="modal-body">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <select class="select" id="oh-mes"><option value="">Todos os meses</option>${MONTHS.map((m,i)=>`<option value="${i+1}">${m}</option>`).join("")}</select>
+        <select class="select" id="oh-cat"><option value="">Todas as categorias</option>${cats.map(c=>`<option value="${esc(c)}">${esc(c?nomeCategoria(c):"Sem categoria")}</option>`).join("")}</select>
+        <select class="select" id="oh-orig"><option value="">Todas as origens</option>${Object.entries(ORIG).map(([k,l])=>`<option value="${k}">${l}</option>`).join("")}</select>
+      </div>
+      <div id="oh-resumo" style="font-size:12.5px;color:var(--ink-soft);margin-bottom:8px"></div>
+      <div id="oh-lista" style="max-height:55vh;overflow:auto"></div>
+    </div>
+    <div class="modal-foot"><button class="btn" id="oh-fechar">Fechar</button></div>
+  </div></div>`;
+  function desenhar(){
+    const lista=todas.filter(h=>yearOf(h.data)===ano
+      && (!estado.mes || parseInt((h.data||"").slice(5,7),10)===+estado.mes)
+      && (!estado.cat || (h.categoriaId||"")===estado.cat)
+      && (!estado.origem || h.origem===estado.origem))
+      .sort((a,b)=>(a.data||"").localeCompare(b.data||"")||(b.horas-a.horas));
+    const tot={}; let futuro=0;
+    lista.forEach(h=>{ if(h.data>hoje) futuro+=(+h.horas||0); else tot[h.origem]=(tot[h.origem]||0)+(+h.horas||0); });
+    $("#oh-resumo").innerHTML=Object.entries(ORIG).filter(([k])=>tot[k]).map(([k,l])=>`${l}: <b>${fmtNum(tot[k],1)} h</b>`).join(" · ")
+      +(futuro>0.04?` · <span style="color:var(--danger)">com data futura (NÃO contadas no gráfico): <b>${fmtNum(futuro,1)} h</b></span>`:"")
+      ||"Nenhum registro para o filtro.";
+    $("#oh-lista").innerHTML=lista.length?`<table class="tbl" style="width:100%;font-size:12px;border-collapse:collapse">
+      <thead><tr style="text-align:left;color:var(--ink-faint)"><th>Data</th><th>Origem</th><th>Projeto</th><th>Atividade</th><th>Colaborador</th><th style="text-align:right">Horas</th><th>Detalhe</th></tr></thead>
+      <tbody>${lista.map(h=>{
+        const fut=h.data>hoje;
+        const det=h.origem==="distribuida"?"período "+(h.periodo||"")
+          :h.origem==="anotacao"?(h.nota||"")
+          :(h.descricao||"");
+        return `<tr style="border-top:1px solid var(--line-soft);${fut?"color:var(--danger)":""}">
+          <td style="white-space:nowrap">${fmtDate(h.data)}${fut?" ⚠":""}</td>
+          <td>${ORIG[h.origem]||h.origem}</td>
+          <td>${esc(nomeProjetoCod(h.projetoId))}</td>
+          <td>${esc(h.atividadeId?nomeAtividade(h.atividadeId):"(sem atividade)")}</td>
+          <td>${esc(h.colaboradorId?nomeColab(h.colaboradorId):"—")}</td>
+          <td style="text-align:right">${fmtNum(+h.horas||0,1)}</td>
+          <td>${esc(det)}${fut?" — data futura, não contada":""}</td></tr>`;}).join("")}</tbody></table>`
+      :`<div class="empty" style="padding:16px">Nenhum registro.</div>`;
+  }
+  $("#oh-mes").onchange=e=>{ estado.mes=e.target.value; desenhar(); };
+  $("#oh-cat").onchange=e=>{ estado.cat=e.target.value; desenhar(); };
+  $("#oh-orig").onchange=e=>{ estado.origem=e.target.value; desenhar(); };
+  $("#oh-fechar").onclick=closeModal;
+  desenhar();
 }
 function serieHorasPorCategoria(){
   function catColor(cid){ const c=getCategoria(cid); return c?c.cor:"#c7cfd6"; }
   function catNome(cid){ return cid?nomeCategoria(cid):"Sem categoria"; }
   function buildBuckets(labels, bucketOfFn){
     const buckets=labels.map(l=>({label:l,total:0,map:{}}));
-    horasConsolidadas().forEach(h=>{
+    horasExecutadasDashboard().forEach(h=>{
       const idx=bucketOfFn(h);
       if(idx==null||idx<0||idx>=buckets.length) return;
       const cid=h.categoriaId||"";
