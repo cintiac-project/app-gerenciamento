@@ -2235,6 +2235,11 @@ function stackedBarChart(data,opts){
       // sem apontamentos neste período: nenhuma barra desenhada, só o eixo
     }
     const topY=top+chartH-(d.total/max)*chartH;
+    if(opts.clicavel){
+      // área clicável da coluna inteira (seleciona o período nos gráficos de baixo)
+      if(i===opts.selecionado) bars=`<rect x="${x-5}" y="0" width="${bw+10}" height="${top+chartH+24}" rx="6" fill="#0d5c4b" opacity=".08"/>`+bars;
+      bars+=`<rect data-bucket="${i}" x="${x-5}" y="0" width="${bw+10}" height="${top+chartH+24}" fill="transparent" style="cursor:pointer"><title>${esc(d.label)}: ${fmtNum(d.total,1)}h — clique para ver este período abaixo</title></rect>`;
+    }
     bars+=`<text x="${x+bw/2}" y="${topY-6}" text-anchor="middle" font-size="11" font-weight="700" fill="#1c2b39">${esc(opts.fmt?opts.fmt(d.total):fmtNum(d.total,0))}</text>`;
     const lbl=esc(d.label);
     bars+=`<text x="${x+bw/2}" y="${top+chartH+16}" text-anchor="middle" font-size="10.5" fill="#0d5c4b">${lbl.length>10?lbl.slice(0,9)+"…":lbl}</text>`;
@@ -2248,7 +2253,8 @@ function stackedBarChart(data,opts){
     <line x1="0" y1="${top+chartH}" x2="${W}" y2="${top+chartH}" stroke="#dde3ea" stroke-width="1"/>
     ${bars}</svg>${legendHtml}`;
 }
-function donutChart(data){
+function donutChart(data,opts){
+  opts=opts||{};
   const total=data.reduce((s,d)=>s+d.value,0);
   if(total<=0) return `<div class="empty" style="padding:30px"><span class="ic">◔</span><p>Sem dados para exibir.</p></div>`;
   const cx=90,cy=90,r=70,sw=30;
@@ -2262,13 +2268,13 @@ function donutChart(data){
     const x1=cx+r*Math.cos(a1), y1=cy+r*Math.sin(a1);
     const large=frac>0.5?1:0;
     const col=d.color||PALETTE[i%PALETTE.length];
-    segs+=`<path d="M${x0} ${y0} A${r} ${r} 0 ${large} 1 ${x1} ${y1}" fill="none" stroke="${col}" stroke-width="${sw}"/>`;
+    segs+=`<path d="M${x0} ${y0} A${r} ${r} 0 ${large} 1 ${x1} ${y1}" fill="none" stroke="${col}" stroke-width="${sw}"><title>${esc(d.title||(d.label+": "+fmtNum(d.value,1)))}</title></path>`;
   });
   let leg='<div class="legend">';
   data.forEach((d,i)=>{
     if(d.value<=0) return;
     const pc=Math.round(d.value/total*100);
-    leg+=`<div class="it"><span class="sw" style="background:${d.color||PALETTE[i%PALETTE.length]}"></span>${esc(d.label)} · ${pc}%</div>`;
+    leg+=`<div class="it" ${d.title?`title="${esc(d.title)}"`:""}><span class="sw" style="background:${d.color||PALETTE[i%PALETTE.length]}"></span>${esc(d.label)} · ${opts.horas?fmtNum(d.value,1)+" h · ":""}${pc}%</div>`;
   });
   leg+="</div>";
   return `<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap">
@@ -2288,6 +2294,9 @@ const ST = {
   sessaoAtiva:null,      // sessão do portfólio selecionada no menu (null = "Não classificados")
   dashYear:String(new Date().getFullYear()),
   dashMode:"mensal",
+  dashMes:new Date().getMonth()+1,                 // mês dos gráficos de categoria/projeto/colaborador (visão mensal)
+  dashSem:new Date().getMonth()<6?1:2,             // semestre (visão semestral)
+  dashColab:"",                                    // "" = todos os colaboradores
   search:{},
   painelAlertaProjeto:"",   // filtro de projeto dos Alertas de prazo (Painel Geral)
   sprintSemanaOffset:0,     // semana do gráfico de ocupação do SPRINT (0 = corrente, -1 anterior, +1 próxima)
@@ -3019,18 +3028,17 @@ function viewPainel(v){
       <div class="val">${alertas.filter(a=>a.tipo==="fisico"||a.tipo==="financeiro").length}</div><div class="sub">${alertas.filter(a=>a.sev==="danger").length} vencido(s)</div></div>
   </div>`;
 
-  /* dados dos gráficos por período */
+  /* dados dos gráficos por período (mês / semestre / ano escolhido) e colaborador */
+  const perDash=periodoDash();
   const dadosHoras=horasDoPeriodo();
-  /* horas por categoria */
-  const catMap={};
-  dadosHoras.forEach(h=>{ catMap[h.categoriaId]=(catMap[h.categoriaId]||0)+(+h.horas||0); });
-  const catData=DB.data.categorias.map(c=>({label:c.nome,value:catMap[c.id]||0,color:c.cor}))
+  const planPer=horasPlanejadasPeriodo(perDash.ini,perDash.fim);
+  /* horas por categoria (executadas e planejadas no período) */
+  const catMap={}, catPlan={};
+  dadosHoras.forEach(h=>{ catMap[h.categoriaId||""]=(catMap[h.categoriaId||""]||0)+(+h.horas||0); });
+  planPer.filter(x=>!ST.dashColab||x.colaboradorId===ST.dashColab).forEach(x=>{ catPlan[x.categoriaId||""]=(catPlan[x.categoriaId||""]||0)+x.horas; });
+  const catData=DB.data.categorias.map(c=>({label:c.nome,value:catMap[c.id]||0,color:c.cor,
+      title:`${c.nome}\nExecutadas: ${fmtH(catMap[c.id]||0)}\nPlanejadas no período: ${fmtH(catPlan[c.id]||0)}`}))
     .filter(d=>d.value>0);
-  /* horas por projeto */
-  const projMap={};
-  dadosHoras.forEach(h=>{ projMap[h.projetoId]=(projMap[h.projetoId]||0)+(+h.horas||0); });
-  const projData=Object.keys(projMap).map((pid,i)=>({label:nomeProjetoCod(pid),value:projMap[pid],color:PALETTE[i%PALETTE.length]}))
-    .sort((a,b)=>b.value-a.value).slice(0,8);
   /* série temporal por categoria (para as barras empilhadas) */
   const serieCat=serieHorasPorCategoria();
 
@@ -3194,24 +3202,36 @@ function viewPainel(v){
       <button data-m="semestral" class="${ST.dashMode==="semestral"?"on":""}">Semestral</button>
       <button data-m="anual" class="${ST.dashMode==="anual"?"on":""}">Anual</button>
     </div>
+    ${ST.dashMode==="mensal"?`<div class="field-inline">Mês
+      <select class="select" id="dash-mes">${MONTHS.map((m,i)=>`<option value="${i+1}" ${i+1===+ST.dashMes?"selected":""}>${m}</option>`).join("")}</select></div>`
+    :ST.dashMode==="semestral"?`<div class="field-inline">Semestre
+      <select class="select" id="dash-sem"><option value="1" ${+ST.dashSem===1?"selected":""}>1º</option><option value="2" ${+ST.dashSem===2?"selected":""}>2º</option></select></div>`:""}
+    <div class="field-inline">Colaborador
+      <select class="select" id="dash-colab"><option value="">Todos</option>${colaboradoresDash().map(c=>`<option value="${esc(c.id)}" ${c.id===ST.dashColab?"selected":""}>${esc(c.nome)}</option>`).join("")}</select>
+    </div>
   </div>
 
   <div class="card" style="margin-bottom:18px">
     <div class="card-head"><h3>Horas executadas — visão ${ST.dashMode}</h3>
       <button class="btn ghost sm" id="btn-origem-horas" title="Lista cada lançamento que compõe as horas executadas: de onde veio, atividade, pessoa e data">🔍 Ver origem das horas</button>
-      <span class="hint">${ST.dashMode==="anual"?"Todos os anos":"Ano "+ST.dashYear} · total ${fmtH(serieCat.reduce((s,d)=>s+d.total,0))}</span></div>
-    <div class="card-pad">${stackedBarChart(serieCat,{fmt:v=>fmtNum(v,0)+"h",legend:legendDeBuckets(serieCat)})}</div>
+      <span class="hint">${ST.dashMode==="anual"?"Todos os anos":"Ano "+ST.dashYear}${ST.dashColab?" · "+esc(nomeColab(ST.dashColab)):""} · total ${fmtH(serieCat.reduce((s,d)=>s+d.total,0))}${ST.dashMode!=="anual"?" · clique numa coluna para ver o período nos gráficos abaixo":""}</span></div>
+    <div class="card-pad">${stackedBarChart(serieCat,{fmt:v=>fmtNum(v,0)+"h",legend:legendDeBuckets(serieCat),clicavel:ST.dashMode!=="anual",selecionado:ST.dashMode==="mensal"?+ST.dashMes-1:ST.dashMode==="semestral"?+ST.dashSem-1:-1})}</div>
   </div>
 
   <div class="grid g2">
     <div class="card">
-      <div class="card-head"><h3>Horas por categoria de atividade</h3></div>
-      <div class="card-pad">${donutChart(catData)}</div>
+      <div class="card-head"><h3>Horas por categoria de atividade</h3><span class="hint">${esc(perDash.label)}${ST.dashColab?" · "+esc(nomeColab(ST.dashColab)):""}</span></div>
+      <div class="card-pad">${donutChart(catData,{horas:true})}</div>
     </div>
     <div class="card">
-      <div class="card-head"><h3>Horas por projeto</h3></div>
-      <div class="card-pad">${barChart(projData,{fmt:v=>fmtNum(v,0)+"h"})}</div>
+      <div class="card-head"><h3>Horas por projeto</h3><span class="hint">${esc(perDash.label)}${ST.dashColab?" · "+esc(nomeColab(ST.dashColab)):""}</span></div>
+      <div class="card-pad">${horasPorProjetoHtml(dadosHoras,planPer)}</div>
     </div>
+  </div>
+
+  <div class="card" style="margin-top:18px">
+    <div class="card-head"><h3>Ocupação por colaborador</h3><span class="hint">${esc(perDash.label)} · executado × planejado × capacidade (${CAPACIDADE_DIARIA_PADRAO} h por dia útil) · clique no nome para filtrar os gráficos</span></div>
+    <div class="card-pad">${ocupacaoColabPeriodoHtml(perDash,planPer)}</div>
   </div>`;
 
   if(isGestor()) setTopAction(`<button class="btn">+ Novo projeto</button>`,()=>formProjeto());
@@ -3220,6 +3240,16 @@ function viewPainel(v){
   $("#painel-alerta-proj").onchange=e=>{ ST.painelAlertaProjeto=e.target.value; render(); };
   $("#painel-alerta-resp").onchange=e=>{ ST.painelAlertaResp=e.target.value; render(); };
   $("#dash-year").onchange=e=>{ ST.dashYear=e.target.value; render(); };
+  if($("#dash-mes")) $("#dash-mes").onchange=e=>{ ST.dashMes=+e.target.value; render(); };
+  if($("#dash-sem")) $("#dash-sem").onchange=e=>{ ST.dashSem=+e.target.value; render(); };
+  $("#dash-colab").onchange=e=>{ ST.dashColab=e.target.value; render(); };
+  v.querySelectorAll("[data-bucket]").forEach(el=>{
+    el.onclick=()=>{ const i=+el.dataset.bucket; if(ST.dashMode==="mensal") ST.dashMes=i+1; else if(ST.dashMode==="semestral") ST.dashSem=i+1; render(); };
+  });
+  v.querySelectorAll("[data-dash-proj]").forEach(el=>{ el.onclick=()=>abrirDetalheProjetoDash(el.dataset.dashProj); });
+  v.querySelectorAll("[data-dash-colab]").forEach(el=>{
+    el.onclick=()=>{ ST.dashColab=(ST.dashColab===el.dataset.dashColab?"":el.dataset.dashColab); render(); };
+  });
   // gráfico de ocupação semanal (SPRINT): navegação de semana e ajuste de horas por pessoa
   $("#sprint-sem-prev").onclick=()=>{ ST.sprintSemanaOffset=(ST.sprintSemanaOffset||0)-1; render(); };
   $("#sprint-sem-next").onclick=()=>{ ST.sprintSemanaOffset=(ST.sprintSemanaOffset||0)+1; render(); };
@@ -3594,9 +3624,159 @@ function horasExecutadasDashboard(){
   const hoje=todayStr();
   return horasConsolidadas().filter(h=>h.data && h.data<=hoje);
 }
+/* período dos gráficos de categoria, projeto e colaborador:
+   mensal → mês escolhido; semestral → semestre escolhido; anual → ano escolhido */
+function periodoDash(){
+  const y=ST.dashYear;
+  if(ST.dashMode==="mensal"){
+    const m=pad(+ST.dashMes||1), ult=new Date(+y,+ST.dashMes,0).getDate();
+    return {ini:`${y}-${m}-01`,fim:`${y}-${m}-${pad(ult)}`,label:MONTHS[(+ST.dashMes||1)-1]+"/"+y};
+  }
+  if(ST.dashMode==="semestral")
+    return +ST.dashSem===2?{ini:`${y}-07-01`,fim:`${y}-12-31`,label:"2º semestre/"+y}:{ini:`${y}-01-01`,fim:`${y}-06-30`,label:"1º semestre/"+y};
+  return {ini:`${y}-01-01`,fim:`${y}-12-31`,label:"Ano "+y};
+}
+/* horas executadas do período escolhido, filtradas pelo colaborador (se houver) */
 function horasDoPeriodo(){
-  if(ST.dashMode==="anual") return horasExecutadasDashboard();
-  return horasExecutadasDashboard().filter(h=>yearOf(h.data)===ST.dashYear);
+  const per=periodoDash();
+  return horasExecutadasDashboard().filter(h=>h.data>=per.ini && h.data<=per.fim && (!ST.dashColab || h.colaboradorId===ST.dashColab));
+}
+/* horas PLANEJADAS que caem no período: as horas previstas de cada pessoa em
+   cada atividade (não cancelada) são distribuídas igualmente pelos dias úteis
+   entre o Início e o Término previstos; entra a fatia dos dias do período. */
+function horasPlanejadasPeriodo(ini,fim){
+  const out=[];
+  DB.data.atividades.forEach(a=>{
+    if(a.status==="Cancelada") return;
+    const di=a.dataInicioPrev||a.dataFimPrev, df=a.dataFimPrev||a.dataInicioPrev;
+    if(!di||!df) return;
+    let dias=diasUteisEntre(di<=df?di:df,df>=di?df:di); if(!dias.length) dias=[df];
+    const n=dias.filter(d=>d>=ini&&d<=fim).length;
+    if(!n) return;
+    (a.estimativasPessoas||[]).forEach(e=>{
+      const h=(+e.horas||0)*n/dias.length;
+      if(e.colaboradorId && h>0) out.push({atividadeId:a.id,projetoId:a.projetoId,categoriaId:a.categoriaId||"",colaboradorId:e.colaboradorId,horas:h});
+    });
+  });
+  return out;
+}
+/* colaboradores que aparecem nos dashboards (com horas executadas ou previstas) */
+function colaboradoresDash(){
+  const ids=new Set();
+  horasConsolidadas().forEach(h=>{ if(h.colaboradorId) ids.add(h.colaboradorId); });
+  DB.data.atividades.forEach(a=>(a.estimativasPessoas||[]).forEach(e=>{ if(e.colaboradorId) ids.add(e.colaboradorId); }));
+  return [...ids].map(getColab).filter(Boolean).sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR"));
+}
+/* horas planejadas (total, todas as datas) de um projeto, opcionalmente de um colaborador */
+function horasPlanejadasProjeto(pid,colabId){
+  let t=0;
+  DB.data.atividades.forEach(a=>{ if(a.projetoId!==pid||a.status==="Cancelada") return;
+    (a.estimativasPessoas||[]).forEach(e=>{ if(!colabId||e.colaboradorId===colabId) t+=(+e.horas||0); }); });
+  return t;
+}
+/* "Horas por projeto": barras horizontais com o NOME COMPLETO, executado no
+   período e planejado no período; passar o cursor mostra status, datas e
+   horas; clicar abre o detalhe do projeto (por colaborador e categoria). */
+function horasPorProjetoHtml(dadosHoras,planPer){
+  const exec={}, plan={};
+  dadosHoras.forEach(h=>{ exec[h.projetoId]=(exec[h.projetoId]||0)+(+h.horas||0); });
+  planPer.filter(x=>!ST.dashColab||x.colaboradorId===ST.dashColab).forEach(x=>{ plan[x.projetoId]=(plan[x.projetoId]||0)+x.horas; });
+  const ids=[...new Set([...Object.keys(exec),...Object.keys(plan)])].filter(pid=>(exec[pid]||0)>0.04||(plan[pid]||0)>0.04)
+    .sort((a,b)=>(exec[b]||0)-(exec[a]||0)||(plan[b]||0)-(plan[a]||0));
+  if(!ids.length) return `<div class="empty" style="padding:30px"><span class="ic">▱</span><p>Sem horas no período.</p></div>`;
+  const max=Math.max(...ids.map(pid=>Math.max(exec[pid]||0,plan[pid]||0)))||1;
+  return `<div style="max-height:420px;overflow:auto;padding-right:4px">`+ids.map((pid,i)=>{
+    const p=getProjeto(pid), e=exec[pid]||0, pl=plan[pid]||0;
+    const st=p?statusCalculado(p):"—";
+    const tip=[nomeProjetoCod(pid),"Status: "+st,
+      p?"Início: "+fmtDate(p.dataInicio)+" · Fim: "+fmtDate(p.dataFim):"",
+      "Executadas no período: "+fmtH(e),"Planejadas no período: "+fmtH(pl),
+      "Planejadas no projeto (total): "+fmtH(horasPlanejadasProjeto(pid,ST.dashColab)),
+      "Executadas no projeto (total): "+fmtH(horasConsolidadas(pid).filter(h=>!ST.dashColab||h.colaboradorId===ST.dashColab).reduce((s,h)=>s+(+h.horas||0),0)),
+      "Clique para ver o detalhe"].filter(Boolean).join("\n");
+    const cor=PALETTE[i%PALETTE.length];
+    return `<div data-dash-proj="${esc(pid)}" title="${esc(tip)}" style="cursor:pointer;padding:6px 2px;border-bottom:1px solid var(--line-soft)">
+      <div style="display:flex;justify-content:space-between;gap:10px;font-size:12.5px">
+        <span style="font-weight:600;min-width:0">${p?rotuloProjetoHtml(p):"(sem projeto)"} ${statusBadge(st)}</span>
+        <span style="white-space:nowrap;color:var(--ink-soft)"><b style="color:var(--ink)">${fmtNum(e,1)} h</b> exec. · ${fmtNum(pl,1)} h plan.</span></div>
+      <div style="position:relative;height:9px;margin-top:4px;background:var(--line-soft);border-radius:4px;overflow:hidden">
+        <div style="position:absolute;left:0;top:0;bottom:0;width:${pl/max*100}%;background:${cor};opacity:.25"></div>
+        <div style="position:absolute;left:0;top:2px;bottom:2px;width:${e/max*100}%;background:${cor};border-radius:3px"></div>
+      </div></div>`;
+  }).join("")+`</div>
+  <div style="font-size:11.5px;color:var(--ink-faint);margin-top:8px">Barra cheia = executado · barra clara = planejado no período</div>`;
+}
+/* "Ocupação por colaborador": no período, executado e planejado de cada pessoa
+   contra a capacidade (dias úteis do período × 8 h). Para períodos futuros
+   ou o mês corrente, o planejado mostra a carga prevista. */
+function ocupacaoColabPeriodoHtml(per,planPer){
+  const cap=diasUteisEntre(per.ini,per.fim).length*CAPACIDADE_DIARIA_PADRAO;
+  const execTodos=horasExecutadasDashboard().filter(h=>h.data>=per.ini&&h.data<=per.fim);
+  const ex={}, pl={};
+  execTodos.forEach(h=>{ if(h.colaboradorId) ex[h.colaboradorId]=(ex[h.colaboradorId]||0)+(+h.horas||0); });
+  planPer.forEach(x=>{ pl[x.colaboradorId]=(pl[x.colaboradorId]||0)+x.horas; });
+  const ids=[...new Set([...Object.keys(ex),...Object.keys(pl)])].filter(id=>getColab(id))
+    .sort((a,b)=>Math.max(pl[b]||0,ex[b]||0)-Math.max(pl[a]||0,ex[a]||0));
+  if(!ids.length) return `<div class="empty" style="padding:22px"><p>Sem horas no período.</p></div>`;
+  const escala=Math.max(cap,...ids.map(id=>Math.max(ex[id]||0,pl[id]||0)))||1;
+  return ids.map(id=>{
+    const e=ex[id]||0, p=pl[id]||0, oc=cap?p/cap*100:0;
+    const cor=oc>100.01?"var(--danger)":oc>=80?"var(--warn)":"var(--ok)";
+    const sel=ST.dashColab===id;
+    return `<div style="display:grid;grid-template-columns:minmax(120px,200px) 1fr auto;gap:6px 14px;align-items:center;padding:6px 2px;border-bottom:1px solid var(--line-soft);${sel?"background:var(--accent-soft)":""}">
+      <a data-dash-colab="${esc(id)}" style="cursor:pointer;font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${sel?"Remover o filtro":"Filtrar os gráficos por "+esc(nomeColab(id))}">${sel?"✓ ":""}${esc(nomeColab(id))}</a>
+      <div style="position:relative;height:14px;background:var(--line-soft);border-radius:5px;overflow:hidden" title="Executado: ${fmtH(e)}\nPlanejado: ${fmtH(p)}\nCapacidade: ${fmtH(cap)}">
+        <div style="position:absolute;left:0;top:0;bottom:0;width:${p/escala*100}%;background:${cor};opacity:.35"></div>
+        <div style="position:absolute;left:0;top:3px;bottom:3px;width:${e/escala*100}%;background:var(--info);border-radius:3px"></div>
+        <div style="position:absolute;top:0;bottom:0;left:calc(${cap/escala*100}% - 1px);width:2px;background:var(--ink)"></div>
+      </div>
+      <div style="font-size:11.5px;color:var(--ink-soft);white-space:nowrap"><b style="color:var(--info)">${fmtNum(e,1)} h</b> exec. · ${fmtNum(p,1)} h plan. · <b style="color:${cor}">${fmtNum(oc,0)}%</b> ocupação</div>
+    </div>`;
+  }).join("")+`<div style="font-size:11.5px;color:var(--ink-faint);margin-top:8px">Azul = executado · barra clara = planejado · │ capacidade do período (${fmtH(cap)}) · ocupação = planejado ÷ capacidade</div>`;
+}
+/* detalhe de um projeto a partir do dashboard */
+function abrirDetalheProjetoDash(pid){
+  const p=getProjeto(pid); if(!p) return;
+  const per=periodoDash(), st=statusCalculado(p);
+  const execTot=horasConsolidadas(pid), execPer=horasExecutadasDashboard().filter(h=>h.projetoId===pid&&h.data>=per.ini&&h.data<=per.fim);
+  const planPer=horasPlanejadasPeriodo(per.ini,per.fim).filter(x=>x.projetoId===pid);
+  const linhas={};
+  const L=id=>linhas[id]||(linhas[id]={id,planTot:0,execTot:0,planPer:0,execPer:0});
+  DB.data.atividades.forEach(a=>{ if(a.projetoId!==pid||a.status==="Cancelada") return; (a.estimativasPessoas||[]).forEach(e=>{ if(e.colaboradorId) L(e.colaboradorId).planTot+=(+e.horas||0); }); });
+  execTot.forEach(h=>{ if(h.colaboradorId) L(h.colaboradorId).execTot+=(+h.horas||0); });
+  execPer.forEach(h=>{ if(h.colaboradorId) L(h.colaboradorId).execPer+=(+h.horas||0); });
+  planPer.forEach(x=>{ L(x.colaboradorId).planPer+=x.horas; });
+  const cats={};
+  execPer.forEach(h=>{ cats[h.categoriaId||""]=(cats[h.categoriaId||""]||0)+(+h.horas||0); });
+  const soma=(arr,k)=>arr.reduce((s,x)=>s+(+x[k]||0),0);
+  const ls=Object.values(linhas).sort((a,b)=>b.execTot-a.execTot);
+  const td='style="padding:5px 6px;text-align:right"';
+  $("#modal-root").innerHTML=`
+  <div class="overlay"><div class="modal wide" style="max-width:820px">
+    <div class="modal-head"><h3>${rotuloProjetoHtml(p)}</h3></div>
+    <div class="modal-body">
+      <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px;margin-bottom:12px">
+        <span>Status: ${statusBadge(st)}</span>
+        <span>Início: <b>${fmtDate(p.dataInicio)}</b></span><span>Fim: <b>${fmtDate(p.dataFim)}</b></span>
+        ${p.gerente?`<span>Gerente: <b>${esc(p.gerente)}</b></span>`:""}
+      </div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px;margin-bottom:14px">
+        <span>Planejadas (total): <b>${fmtH(soma(ls,"planTot"))}</b></span>
+        <span>Executadas (total): <b>${fmtH(soma(ls,"execTot"))}</b></span>
+        <span>${esc(per.label)}: <b>${fmtH(soma(ls,"execPer"))}</b> exec. · <b>${fmtH(soma(ls,"planPer"))}</b> plan.</span>
+      </div>
+      <table style="width:100%;font-size:12.5px;border-collapse:collapse">
+        <thead><tr style="color:var(--ink-faint);text-align:left"><th style="padding:5px 6px">Colaborador</th><th ${td}>Planejadas (total)</th><th ${td}>Executadas (total)</th><th ${td}>% exec.</th><th ${td}>Exec. ${esc(per.label)}</th><th ${td}>Plan. ${esc(per.label)}</th></tr></thead>
+        <tbody>${ls.map(x=>`<tr style="border-top:1px solid var(--line-soft)"><td style="padding:5px 6px">${esc(nomeColab(x.id))}</td>
+          <td ${td}>${fmtNum(x.planTot,1)}</td><td ${td}>${fmtNum(x.execTot,1)}</td><td ${td}>${x.planTot?fmtNum(x.execTot/x.planTot*100,0)+"%":"—"}</td>
+          <td ${td}>${fmtNum(x.execPer,1)}</td><td ${td}>${fmtNum(x.planPer,1)}</td></tr>`).join("")||`<tr><td colspan="6" style="padding:10px">Sem horas.</td></tr>`}</tbody>
+      </table>
+      ${Object.keys(cats).length?`<div style="margin-top:14px;font-size:12.5px"><b>Executadas por categoria (${esc(per.label)}):</b> ${Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([c,h])=>esc(c?nomeCategoria(c):"Sem categoria")+" "+fmtH(h)).join(" · ")}</div>`:""}
+    </div>
+    <div class="modal-foot"><button class="btn ghost" id="dp-fechar">Fechar</button><button class="btn" id="dp-abrir">Abrir projeto</button></div>
+  </div></div>`;
+  $("#dp-fechar").onclick=closeModal;
+  $("#dp-abrir").onclick=()=>{ closeModal(); ST.view="projeto"; ST.projetoId=pid; ST.projTab="resumo"; render(); };
 }
 /* "Ver origem das horas": lista cada registro que compõe as horas executadas
    do dashboard, com a FONTE de cada um — para auditar horas inesperadas:
@@ -3667,6 +3847,7 @@ function serieHorasPorCategoria(){
   function buildBuckets(labels, bucketOfFn){
     const buckets=labels.map(l=>({label:l,total:0,map:{}}));
     horasExecutadasDashboard().forEach(h=>{
+      if(ST.dashColab && h.colaboradorId!==ST.dashColab) return;
       const idx=bucketOfFn(h);
       if(idx==null||idx<0||idx>=buckets.length) return;
       const cid=h.categoriaId||"";
