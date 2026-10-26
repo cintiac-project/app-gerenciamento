@@ -1436,8 +1436,13 @@ function statusBadge(s){
    registrada com a data de HOJE; assim as horas ficam na semana em que foram
    atribuídas (e não espalhadas pelo período da atividade). Reduzir o total
    desfaz as entradas mais recentes. O que já existia antes do log ("legado")
-   continua distribuído pelos dias úteis da atividade, como antes. */
-function atualizarLogExecucao(itemAnterior,novoTotal){
+   continua distribuído pelos dias úteis da atividade, como antes.
+   opts.semData: o aumento entra SEM data (com opts.nota), e por isso é
+   distribuído pelos dias úteis entre o Início real e o Término real da
+   atividade — usado ao concluir/importar horas de trabalho já feito, para
+   não empilhar tudo na semana em que a conclusão foi registrada. */
+function atualizarLogExecucao(itemAnterior,novoTotal,opts){
+  opts=opts||{};
   const log=(itemAnterior&&Array.isArray(itemAnterior.horasExecLog)?itemAnterior.horasExecLog:[])
     .filter(e=>e).map(e=>({data:e.data||"",horas:+e.horas||0,nota:e.nota||""}));
   const a0=itemAnterior?parseFloat(itemAnterior.horasExecutadas):0;
@@ -1446,8 +1451,11 @@ function atualizarLogExecucao(itemAnterior,novoTotal){
   const depois=n0>0?n0:0;
   const delta=depois-antes;
   if(delta>0.0001){
-    const hoje=todayStr(), ult=log.find(e=>e.data===hoje && !e.nota);
-    if(ult) ult.horas+=delta; else log.push({data:hoje,horas:delta,nota:""});
+    if(opts.semData) log.push({data:"",horas:delta,nota:opts.nota||""});
+    else {
+      const hoje=todayStr(), ult=log.find(e=>e.data===hoje && !e.nota);
+      if(ult) ult.horas+=delta; else log.push({data:hoje,horas:delta,nota:""});
+    }
   } else if(delta<-0.0001){
     let resta=-delta;
     for(let i=log.length-1;i>=0&&resta>0.0001;i--){ const t=Math.min(log[i].horas,resta); log[i].horas-=t; resta-=t; }
@@ -1861,10 +1869,13 @@ function calcularAlertas(){
     const resp=nomesResponsaveisAtividade(a,proj).join(", ");
     // atrasada, mas com prazo DENTRO da semana corrente: permanece na SPRINT
     // (ainda dá tempo de entregar). Só vai para "vencidos" quando a semana virar.
-    if(d<0) out.push({tipo:"fisico",secao:(a.dataFimPrev>=limitesSemanaCorrente().ini?"sprint":"vencidos"),sev:"danger",dias:d,
-      rotulo:"Atividade atrasada", titulo:`Atividade atrasada: ${a.nome}`,
+    // Atrasada e RETORNADA para a sprint desta semana (sprintSemana): também
+    // fica na SPRINT, com o prazo previsto original preservado.
+    const naSprint=atividadeNaSprint(a);
+    if(d<0) out.push({tipo:"fisico",secao:(a.dataFimPrev>=limitesSemanaCorrente().ini||naSprint?"sprint":"vencidos"),sev:"danger",dias:d,
+      rotulo:naSprint?"Atrasada · retornada à sprint":"Atividade atrasada", titulo:`Atividade atrasada: ${a.nome}`,
       desc:nomeProjetoCod(a.projetoId), descHtml:rotuloProjetoHtml(proj),
-      meta:`venceu há ${Math.abs(d)} dia(s) · ${a.progresso||0}% concluído`,
+      meta:`venceu há ${Math.abs(d)} dia(s)${naSprint?" (prazo previsto mantido)":""} · ${a.progresso||0}% concluído`,
       responsavel:resp, projetoId:a.projetoId, atividadeId:a.id, notasProgresso:textoAnotacoesAtividade(a)});
     else if(d<=diasAteFimSemana) out.push({tipo:"fisico",secao:"sprint",sev:"warn",dias:d,
       rotulo:"Prazo próximo", titulo:`Prazo próximo: ${a.nome}`,
@@ -3037,7 +3048,7 @@ function viewPainel(v){
       : isGestor()? (
       a.tipo==="fisico"
         ? `<div class="alert-acoes">
-            ${a.secao==="vencidos"?`<button class="btn-icon" data-alerta-sprint="${a.atividadeId}" title="Jogar esta atividade para a sprint desta semana (novo prazo dentro da semana corrente)">📅</button>`:""}
+            ${a.secao==="vencidos"?`<button class="btn-icon" data-alerta-sprint="${a.atividadeId}" title="Retornar esta atividade para a sprint desta semana (o prazo previsto não é alterado)">📅</button>`:""}
             <button class="btn-icon" data-alerta-concluir-ativ="${a.atividadeId}" title="Marcar atividade como concluída">✓</button>
             <button class="btn-icon" data-alerta-editar-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Editar atividade (ex.: novo prazo)">✎</button>
             <button class="btn-icon del" data-alerta-excluir-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Excluir atividade">🗑</button>
@@ -3315,54 +3326,60 @@ function erroConclusaoAtividade(d){
   return "";
 }
 
-/* Ação rápida do Painel Geral (Alertas de prazos vencidos): reprograma o
-   Término previsto de uma atividade atrasada para dentro da semana corrente,
-   o que a faz sair de "Alertas de prazos vencidos" e entrar na SPRINT.
-   Sugere a sexta-feira da semana (ou hoje, se já passou da sexta), mas a
-   pessoa pode escolher qualquer dia entre hoje e o fim da semana. */
+/* Ação rápida do Painel Geral (Alertas de prazos vencidos): retorna uma
+   atividade atrasada para a SPRINT da semana corrente SEM recalcular o prazo.
+   O Início/Término PREVISTOS ficam como estavam (rastreabilidade do atraso);
+   a atividade só ganha a marca "sprintSemana" (segunda-feira da semana), que
+   a faz aparecer na SPRINT e puxa o saldo de horas para esta semana. O atraso
+   passa a ser lido no Início real / Término real. Se a semana virar sem a
+   conclusão, ela volta para "Alertas de prazos vencidos".
+   Requer a coluna atividades.sprint_semana (ver SQL_SPRINT_SEMANA). */
+const SQL_SPRINT_SEMANA="alter table atividades add column if not exists sprint_semana date; notify pgrst, 'reload schema';";
+function atividadeNaSprint(a){ return !!a && !!a.sprintSemana && a.sprintSemana===limitesSemanaCorrente().ini; }
 function moverAtividadeParaSprint(atividadeId){
   const a=getAtividade(atividadeId);
   if(!a) return;
   const hoje=todayStr(), sem=limitesSemanaCorrente();
-  const sexta=addDays(sem.ini,4);
-  const sugestao=hoje>sexta?hoje:sexta;
+  const lblStyle="display:block;margin-bottom:5px;font-size:12.5px;font-weight:600;color:var(--ink-soft)";
   $("#modal-root").innerHTML=`
   <div class="overlay"><div class="modal" style="max-width:500px">
-    <div class="modal-head"><h3>Jogar para a sprint desta semana</h3></div>
+    <div class="modal-head"><h3>Retornar para a sprint desta semana</h3></div>
     <div class="modal-body">
-      <p style="color:var(--ink-soft);font-size:13px">"${esc(a.nome)}" está com prazo em ${fmtDate(a.dataFimPrev)}.
-        Escolha o novo Término previsto, dentro da semana corrente (${fmtDate(sem.ini)} a ${fmtDate(sem.fim)}).</p>
+      <p style="color:var(--ink-soft);font-size:13px">"${esc(a.nome)}" venceu em ${fmtDate(a.dataFimPrev)}.
+        Ela entra na sprint da semana (${fmtDate(sem.ini)} a ${fmtDate(sem.fim)}) <b>sem alterar o prazo previsto</b>:
+        o atraso fica registrado no Início real e no Término real.</p>
       <div style="margin-top:12px">
-        <label style="display:block;margin-bottom:5px;font-size:12.5px;font-weight:600;color:var(--ink-soft)">Novo término previsto <span class="req">*</span></label>
-        <input type="date" id="sp-fim" value="${sugestao}" min="${hoje}" max="${sem.fim}">
+        <label style="${lblStyle}">Início real</label>
+        <input type="date" id="sp-ini" value="${esc(a.dataInicioReal||"")}" max="${hoje}">
+        <span class="help" style="display:block;margin-top:4px">Preencha se a atividade já começou (deixe em branco se ainda não começou).</span>
       </div>
       <div id="sp-err" style="display:none;margin-top:12px;padding:9px 12px;border-radius:8px;
-        background:var(--danger-bg);color:var(--danger);font-size:12.5px"></div>
+        background:var(--danger-bg);color:var(--danger);font-size:12.5px;line-height:1.5;word-break:break-word"></div>
     </div>
     <div class="modal-foot">
       <button class="btn ghost" id="sp-no">Cancelar</button>
-      <button class="btn" id="sp-yes">Jogar para a sprint</button>
+      <button class="btn" id="sp-yes">Retornar para a sprint</button>
     </div></div></div>`;
   $("#sp-no").onclick=closeModal;
   $("#sp-yes").onclick=async()=>{
-    const novo=$("#sp-fim").value;
+    const ini=$("#sp-ini").value||null;
     const err=$("#sp-err");
-    if(!novo || novo<hoje || novo>sem.fim){
-      err.textContent="Escolha uma data entre hoje e "+fmtDate(sem.fim)+" (semana corrente).";
-      err.style.display="block"; return;
-    }
-    const antigo=a.dataFimPrev;
-    // registra o histórico do reagendamento nas anotações de progresso
-    const linha=`[${fmtDate(hoje)}] Prazo reprogramado de ${fmtDate(antigo)} para ${fmtDate(novo)} (sprint da semana).`;
-    const notas=a.notasProgresso?(a.notasProgresso+"\n"+linha):linha;
+    if(ini && ini>hoje){ err.textContent="O Início real não pode ser uma data futura."; err.style.display="block"; return; }
+    // registra o histórico nas anotações de progresso
+    const linha=`[${fmtDate(hoje)}] Retornada para a sprint da semana ${fmtDate(sem.ini)} a ${fmtDate(sem.fim)} (prazo previsto mantido: ${fmtDate(a.dataFimPrev)}).`;
+    const patch={sprintSemana:sem.ini,notasProgresso:a.notasProgresso?(a.notasProgresso+"\n"+linha):linha};
+    if(ini!==(a.dataInicioReal||null)){ patch.dataInicioReal=ini; patch.inicioRealMesmo=!!ini && ini===a.dataInicioPrev; }
     try{
-      await sbUpdate("atividades", a.id, toSnake({dataFimPrev:novo,notasProgresso:notas}));
-      a.dataFimPrev=novo; a.notasProgresso=notas;
+      await sbUpdate("atividades", a.id, toSnake(patch));
+      Object.assign(a,patch);
       closeModal();
-      toast("Atividade movida para a sprint desta semana.");
+      toast("Atividade retornada para a sprint desta semana (prazo previsto mantido).");
       render();
     }catch(e){
-      err.textContent="Erro ao atualizar a atividade: "+(e.message||e);
+      const m=String(e.message||e);
+      err.innerHTML=/sprint_semana|PGRST204/.test(m)
+        ? `O banco ainda não tem a coluna <b>sprint_semana</b>. Peça ao administrador para rodar no SQL Editor do Supabase:<br><code style="user-select:all">${esc(SQL_SPRINT_SEMANA)}</code>`
+        : "Erro ao atualizar a atividade: "+esc(m);
       err.style.display="block";
     }
   };
@@ -3434,7 +3451,9 @@ async function marcarAtividadeConcluidaRapido(atividadeId){
       const inp=$("#modal-root").querySelector(`[data-erole="horasExec"][data-idx="${idx}"]`);
       const val=inp?inp.value:"";
       const novoTotal=(val===""?null:parseFloat(val));
-      return Object.assign({},item,{horasExecutadas:novoTotal,horasExecLog:atualizarLogExecucao(item,novoTotal)});
+      // horas de trabalho já feito: sem data, distribuídas entre o Início e o
+      // Término real (e não todas na semana em que a conclusão foi registrada)
+      return Object.assign({},item,{horasExecutadas:novoTotal,horasExecLog:atualizarLogExecucao(item,novoTotal,{semData:true,nota:"Informado na conclusão"})});
     });
     const erro=erroConclusaoAtividade({dataInicioReal:dIni,dataFimReal:dFim,estimativasPessoas:novasEstimativas});
     if(erro){
@@ -3447,15 +3466,16 @@ async function marcarAtividadeConcluidaRapido(atividadeId){
 }
 async function salvarConclusaoAtividade(a,novasEstimativas,dataInicioReal,dataFimReal){
   try{
-    // Além de status e progresso, grava as datas reais informadas e a data
-    // de término (hoje = data em que a conclusão foi registrada), como já
-    // era feito. Só aplica no objeto em memória depois que o servidor
-    // confirmar (evita a tela mostrar "concluída" sem ter salvado).
-    const hoje=todayStr();
-    const patch={status:"Concluída",progresso:100,dataFimPrev:hoje,
+    // Além de status e progresso, grava as datas reais informadas. O Término
+    // PREVISTO é preservado (antes era trocado pela data de hoje, o que
+    // apagava o atraso); só é preenchido se estiver vazio. O atraso fica
+    // visível comparando previsto × real. Só aplica no objeto em memória
+    // depois que o servidor confirmar (evita a tela mostrar "concluída" sem ter salvado).
+    const prevFim=a.dataFimPrev||dataFimReal||todayStr();
+    const patch={status:"Concluída",progresso:100,dataFimPrev:prevFim,
       dataInicioReal:dataInicioReal||null,dataFimReal:dataFimReal||null,
       inicioRealMesmo:!!dataInicioReal && dataInicioReal===a.dataInicioPrev,
-      fimRealMesmo:!!dataFimReal && dataFimReal===hoje};
+      fimRealMesmo:!!dataFimReal && dataFimReal===prevFim};
     if(novasEstimativas) patch.estimativasPessoas=novasEstimativas;
     await sbUpdate("atividades", a.id, toSnake(patch));
     Object.assign(a,patch);
@@ -7109,7 +7129,7 @@ function montarPlanoPendencias(wb){
       usados.add(idx);
       const atual=pessoas[idx].horasExecutadas;
       if(atual!==null&&atual!==undefined&&atual!==""&&+atual===hv.val) return;
-      pessoas[idx].horasExecLog=atualizarLogExecucao(pessoas[idx],hv.val);
+      pessoas[idx].horasExecLog=atualizarLogExecucao(pessoas[idx],hv.val,{semData:true,nota:"Importado da planilha de pendências"});
       pessoas[idx].horasExecutadas=hv.val; nh++;
     });
     if(nh) patch.estimativasPessoas=pessoas;
