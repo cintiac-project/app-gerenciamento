@@ -1441,10 +1441,16 @@ function statusBadge(s){
    distribuído pelos dias úteis entre o Início real e o Término real da
    atividade — usado ao concluir/importar horas de trabalho já feito, para
    não empilhar tudo na semana em que a conclusão foi registrada. */
+/* anotações de progresso sempre em ordem cronológica (mais antiga → mais
+   nova); lançamentos sem data ficam no topo. Ordenação estável: no mesmo dia,
+   mantém a ordem em que foram lançados. */
+function ordenarLogExecucao(log){
+  return (log||[]).map((e,i)=>({e,i})).sort((a,b)=>(a.e.data||"").localeCompare(b.e.data||"")||a.i-b.i).map(x=>x.e);
+}
 function atualizarLogExecucao(itemAnterior,novoTotal,opts){
   opts=opts||{};
-  const log=(itemAnterior&&Array.isArray(itemAnterior.horasExecLog)?itemAnterior.horasExecLog:[])
-    .filter(e=>e).map(e=>({data:e.data||"",horas:+e.horas||0,nota:e.nota||""}));
+  const log=ordenarLogExecucao((itemAnterior&&Array.isArray(itemAnterior.horasExecLog)?itemAnterior.horasExecLog:[])
+    .filter(e=>e).map(e=>({data:e.data||"",horas:+e.horas||0,nota:e.nota||""})));
   const a0=itemAnterior?parseFloat(itemAnterior.horasExecutadas):0;
   const antes=a0>0?a0:0;
   const n0=parseFloat(novoTotal);
@@ -5216,6 +5222,19 @@ function projReunioes(c,p){
   reunioesLista(c,p);
 }
 
+/* exclui uma reunião (lista ou tela da reunião). Só tira da tela depois que o
+   servidor confirmar a exclusão. */
+function excluirReuniao(p,rid){
+  const r=(p.reunioes||[]).find(x=>x.id===rid);
+  confirmar("Excluir esta reunião?",`"${r&&r.titulo||"(sem título)"}"${r&&r.data?" de "+fmtDate(r.data):""} será excluída, com a ata, a transcrição e a lista de entregas. Atividades já criadas no cronograma a partir dessas entregas continuam lá. Esta ação não pode ser desfeita.`,async()=>{
+    try{
+      await DB.excluir("reunioes", rid);
+      p.reunioes=(p.reunioes||[]).filter(x=>x.id!==rid);
+      if(ST.reuniaoId===rid) ST.reuniaoId=null;
+      toast("Reunião excluída."); render();
+    }catch(e){ toast("Erro ao excluir a reunião: "+(e.message||e)); }
+  });
+}
 function reunioesLista(c,p){
   ST.reunFiltroDe=ST.reunFiltroDe||"";
   ST.reunFiltroAte=ST.reunFiltroAte||"";
@@ -5231,10 +5250,10 @@ function reunioesLista(c,p){
     return `<tr class="clickable" data-r="${r.id}">
       <td style="font-size:12.5px;white-space:nowrap"><b>${fmtDate(r.data)}</b>${r.hora?` <span style="color:var(--ink-faint)">${esc(r.hora)}</span>`:""}</td>
       <td><div style="font-weight:600">${esc(r.titulo||"(sem título)")}</div>
-        <div style="font-size:11.5px;color:var(--ink-faint)">${esc((r.participantes||[]).join(", ")||"Sem participantes")}</div></td>
+        <div style="font-size:11.5px;color:var(--ink-faint);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden" title="${esc((r.participantes||[]).join(", "))}">${esc((r.participantes||[]).join(", ")||"Sem participantes")}</div></td>
       <td>${temAta?'<span class="badge b-ok">Ata pronta</span>':r.transcricao?'<span class="badge b-warn">Transcrição</span>':'<span class="badge b-mute">Pendente</span>'}</td>
       <td class="num">${nSaidas?nSaidas:'<span style="color:var(--ink-faint)">—</span>'}</td>
-      <td class="actions"><button class="btn-icon del" data-dr="${r.id}">🗑</button></td></tr>`;
+      <td class="actions" style="width:44px"><button class="btn-icon del" data-dr="${r.id}" title="Excluir reunião">🗑</button></td></tr>`;
   }).join("");
 
   c.innerHTML=`
@@ -5281,14 +5300,7 @@ function reunioesLista(c,p){
     tr.onclick=e=>{ if(e.target.closest("[data-dr]")) return;
       ST.reuniaoId=tr.dataset.r; projReunioes(c,p); };
   });
-  c.querySelectorAll("[data-dr]").forEach(b=>b.onclick=()=>{
-    confirmar("Excluir esta reunião?","A ata e a transcrição serão removidas.",async()=>{
-      const rid=b.dataset.dr;
-      p.reunioes=p.reunioes.filter(x=>x.id!==rid);
-      await DB.excluir("reunioes", rid);
-      toast("Reunião excluída."); render();
-    });
-  });
+  c.querySelectorAll("[data-dr]").forEach(b=>b.onclick=()=>excluirReuniao(p,b.dataset.dr));
   // clique em dia do calendário filtra a lista
   c.querySelectorAll("[data-cal-day]").forEach(d=>{
     d.onclick=()=>{
@@ -5552,6 +5564,7 @@ function reuniaoDetalhe(c,p,r){
     <button class="btn ghost" id="reu-export">📤 Exportar ata</button>
     <button class="btn ghost" id="reu-ia">✨ Gerar ata com IA</button>
     <button class="btn" id="reu-save">💾 Salvar reunião</button>
+    <button class="btn ghost" id="reu-del" style="color:var(--danger)" title="Excluir esta reunião">🗑 Excluir reunião</button>
   </div>
 
   <div class="card" style="margin-bottom:18px">
@@ -5692,6 +5705,7 @@ function reuniaoDetalhe(c,p,r){
     await ressincronizarResponsaveis();
   }
 
+  $("#reu-del").onclick=()=>excluirReuniao(p,r.id);
   $("#reu-back").onclick=async()=>{ coletarBasico(); await persistirReuniao(); ST.reuniaoId=null; render(); };
   $("#reu-save").onclick=async()=>{ coletarBasico(); await persistirReuniao(); toast("Reunião salva."); reuniaoDetalhe(c,p,r); };
   $("#reu-export").onclick=async()=>{ coletarBasico(); await persistirReuniao(); exportarAta(p,r); };
@@ -7853,7 +7867,7 @@ function openForm(cfg){
       const total=parseFloat(x.horasExecutadas)||0;
       const soma=log.reduce((t,e)=>t+(parseFloat(e.horas)||0),0);
       if(total>soma+0.0001) log.unshift({data:"",horas:Math.round((total-soma)*100)/100,nota:"Horas lançadas antes do quadro de anotações (sem data)"});
-      return log;
+      return ordenarLogExecucao(log);
     }
     const somaLog=it=>(it.horasExecLog||[]).reduce((t,e)=>t+(parseFloat(e.horas)||0),0);
     function sincronizarTotal(it){ const t=Math.round(somaLog(it)*100)/100; it.horasExecutadas=t>0?t:""; }
@@ -7917,6 +7931,12 @@ function openForm(cfg){
           board.querySelectorAll(".estim-log").forEach(lr=>{
             const j=+lr.dataset.j;
             lr.querySelector('[data-lrole="data"]').oninput=ev=>{ it.horasExecLog[j].data=ev.target.value; };
+            // ao sair do campo de data, reposiciona a anotação na ordem cronológica
+            // (só redesenha se a ordem mudou, para não atrapalhar a digitação)
+            lr.querySelector('[data-lrole="data"]').onblur=()=>{
+              const ord=ordenarLogExecucao(it.horasExecLog);
+              if(ord.some((e,k)=>e!==it.horasExecLog[k])){ it.horasExecLog=ord; it._open=true; renderRows(); }
+            };
             lr.querySelector('[data-lrole="nota"]').oninput=ev=>{ it.horasExecLog[j].nota=ev.target.value; };
             lr.querySelector('[data-lrole="horas"]').oninput=ev=>{ it.horasExecLog[j].horas=ev.target.value; atualizarTotais(); };
             lr.querySelector('[data-lrole="rm"]').onclick=()=>{ it.horasExecLog.splice(j,1); it._open=true; sincronizarTotal(it); renderRows(); avisar(); };
@@ -8371,9 +8391,9 @@ function formAtividade(projetoId,a,opts){
           // gasto foi diferente do previsto). Fica null enquanto não informado.
           // a "Executada" é a soma das horas do quadro de anotações do colaborador
           horasExecutadas:(()=>{ const t=(Array.isArray(x.horasExecLog)?x.horasExecLog:[]).reduce((s2,e)=>s2+(parseFloat(e.horas)||0),0); return t>0?Math.round(t*100)/100:null; })(),
-          horasExecLog:(Array.isArray(x.horasExecLog)?x.horasExecLog:[])
+          horasExecLog:ordenarLogExecucao((Array.isArray(x.horasExecLog)?x.horasExecLog:[])
             .map(e=>({data:e.data||"",horas:parseFloat(e.horas)||0,nota:String(e.nota||"").trim()}))
-            .filter(e=>e.horas>0 || e.nota)
+            .filter(e=>e.horas>0 || e.nota))
         }));
       if(usaCampoResp) v.responsaveisIds=Array.isArray(v.responsaveisIds)?v.responsaveisIds:[];
       else delete v.responsaveisIds; // sem o campo no formulário: não mexe no valor antigo
