@@ -1594,7 +1594,8 @@ function receitaRealizadaProjeto(pid){
     .reduce((s,f)=>s+(+f.valor||0),0);
 }
 function progressoProjeto(pid){
-  const ats=DB.data.atividades.filter(a=>a.projetoId===pid);
+  // atividades canceladas não contam no andamento físico
+  const ats=DB.data.atividades.filter(a=>a.projetoId===pid && a.status!=="Cancelada");
   if(!ats.length) return 0;
   return Math.round(ats.reduce((s,a)=>s+(+a.progresso||0),0)/ats.length);
 }
@@ -1607,18 +1608,28 @@ function margemProjeto(p){
 
 /* ============================================================
    STATUS DO PROJETO — calculado automaticamente a partir dos dados reais.
-   A única exceção é "Cancelado": nenhum dado revela que um projeto foi
-   cancelado (é uma decisão de negócio), então esse é o único estado que
-   continua sendo definido manualmente, por uma ação explícita do gestor.
+   "Cancelado" vem de uma ação explícita do gestor (✕ no Resumo) OU é
+   deduzido quando o Status da captação é "11 - Projeto Cancelado" ou
+   quando TODAS as atividades do cronograma foram canceladas.
+   Atividades canceladas não contam para os demais estados.
    Todos os demais estados (Planejado, Em andamento, Em risco, Concluído)
    são recalculados sempre que os dados mudam — nunca ficam desatualizados.
    ============================================================ */
+/* motivo do cancelamento AUTOMÁTICO ("" quando não se aplica) */
+function motivoCancelamentoAuto(p){
+  if(p.statusCaptacao===STATUS_CAPTACAO_CANCELADO) return "Status da captação: "+STATUS_CAPTACAO_CANCELADO+".";
+  const todas=DB.data.atividades.filter(a=>a.projetoId===p.id);
+  if(todas.length && todas.every(a=>a.status==="Cancelada")) return "Todas as atividades do cronograma foram canceladas.";
+  return "";
+}
 function statusCalculado(p){
-  // Cancelado é a única exceção manual — se foi marcado assim, prevalece
+  // Cancelado manualmente prevalece
   if(p.status==="Cancelado") return "Cancelado";
+  if(motivoCancelamentoAuto(p)) return "Cancelado";
 
   const hoje=todayStr();
-  const ats=DB.data.atividades.filter(a=>a.projetoId===p.id);
+  // atividades canceladas não pesam no status (nem atraso, nem conclusão)
+  const ats=DB.data.atividades.filter(a=>a.projetoId===p.id && a.status!=="Cancelada");
   const fin=DB.data.financeiro.filter(f=>f.projetoId===p.id);
 
   // 1) Concluído: existem atividades e todas estão concluídas (status ou 100%)
@@ -1657,9 +1668,9 @@ function statusCalculado(p){
 function motivoStatusCalculado(p){
   const s=statusCalculado(p);
   const hoje=todayStr();
-  const ats=DB.data.atividades.filter(a=>a.projetoId===p.id);
+  const ats=DB.data.atividades.filter(a=>a.projetoId===p.id && a.status!=="Cancelada");
   const fin=DB.data.financeiro.filter(f=>f.projetoId===p.id);
-  if(s==="Cancelado") return "Marcado manualmente como cancelado.";
+  if(s==="Cancelado") return p.status==="Cancelado"?"Marcado manualmente como cancelado.":motivoCancelamentoAuto(p);
   if(s==="Concluído") return "Todas as atividades do cronograma estão concluídas.";
   if(s==="Em risco"){
     const motivos=[];
@@ -2428,10 +2439,13 @@ const STATUS_CAPTACAO=[
   "07 - Projeto Submetido e em Acompanhamento",
   "08 - Projeto Não Aprovado",
   "09 - Projeto Aprovado",
-  "10 - Projeto Contratado"
+  "10 - Projeto Contratado",
+  "11 - Projeto Cancelado"
 ];
 /* status que NÃO contam como captação prevista (perdidos/encerrados) */
-const STATUS_CAPTACAO_FORA_PREVISTO=["05 - Projeto Declinado pelo Cliente","06 - Projeto Não Submetido","08 - Projeto Não Aprovado"];
+const STATUS_CAPTACAO_FORA_PREVISTO=["05 - Projeto Declinado pelo Cliente","06 - Projeto Não Submetido","08 - Projeto Não Aprovado","11 - Projeto Cancelado"];
+/* status da captação que cancela o projeto automaticamente */
+const STATUS_CAPTACAO_CANCELADO="11 - Projeto Cancelado";
 /* status que liberam o botão "converter em projeto" */
 const STATUS_CAPTACAO_GATILHO=["09 - Projeto Aprovado","10 - Projeto Contratado"];
 /* converte os status antigos já salvos no banco para a nova numeração */
@@ -4109,7 +4123,7 @@ function projResumo(c,p){
   const despTotal=despPrev+despReal;
   const receita=+p.receita||0;
   const margem=margemProjeto(p);
-  const ats=DB.data.atividades.filter(a=>a.projetoId===p.id);
+  const ats=DB.data.atividades.filter(a=>a.projetoId===p.id && a.status!=="Cancelada"); // canceladas não contam
   const concl=ats.filter(a=>(+a.progresso||0)>=100).length;
   const riscosAltos=(p.riscos||[]).filter(r=>severidadeRisco(r)==="Alta").length;
   /* horas por categoria neste projeto */
@@ -4173,7 +4187,7 @@ function projResumo(c,p){
     <div class="card-pad">
       <div class="mini-stat"><span>Código</span><span class="v"><b>${esc(p.codigo||"—")}</b></span></div>
       ${cfgAtual.ocultarStatusResumo?"":`<div class="mini-stat"><span>Status</span><span title="${esc(motivoStatusCalculado(p))}">${statusBadge(statusCalculado(p))}
-        ${isGestor()?`<button class="btn-icon" id="btn-cancelar-proj" title="${statusCalculado(p)==='Cancelado'?'Reativar projeto':'Marcar como cancelado'}" style="margin-left:6px;font-size:11px">${statusCalculado(p)==='Cancelado'?'↺':'✕'}</button>`:""}</span></div>
+        ${isGestor()&&!(p.status!=="Cancelado"&&motivoCancelamentoAuto(p))?`<button class="btn-icon" id="btn-cancelar-proj" title="${statusCalculado(p)==='Cancelado'?'Reativar projeto':'Marcar como cancelado'}" style="margin-left:6px;font-size:11px">${statusCalculado(p)==='Cancelado'?'↺':'✕'}</button>`:""}</span></div>
       <div class="mini-stat" style="font-size:11px;color:var(--ink-faint)"><span></span><span>${esc(motivoStatusCalculado(p))}</span></div>`}
       ${campoOcultoSessao(p,"cliente")?"":`<div class="mini-stat"><span>Cliente / Área demandante</span><span class="v">${esc(p.cliente||"—")}</span></div>`}
       ${campoOcultoResumo(p,"dataInicio")?"":`<div class="mini-stat"><span>Início</span><span class="v">${fmtDate(p.dataInicio)}</span></div>`}
