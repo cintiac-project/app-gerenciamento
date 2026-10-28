@@ -587,6 +587,10 @@ async function sbWrite(path, {method="POST", body, prefer="return=representation
         "migração pendente e recarregar o schema (NOTIFY pgrst, 'reload schema'). "+
         "Detalhe técnico: "+txt);
     }
+    if(txt.includes("status_captacao")){
+      throw new Error("O banco ainda não aceita este Status da captação. Peça ao administrador para rodar no "+
+        "SQL Editor do Supabase o arquivo sql/2026-10-27_status_captacao_11.sql do repositório. Detalhe técnico: "+txt);
+    }
     if(txt.includes("atividades_projeto_nome_unq")){
       throw new Error("Já existe uma atividade com este nome neste projeto — o banco só aceita um nome por projeto. "+
         "Use um nome diferente (ex.: acrescente a data ou o número da rodada). [atividades_projeto_nome_unq]");
@@ -5397,8 +5401,9 @@ function miniCalendar(reunioes,mk){
 }
 
 /* ---- RESUMO AUTOMÁTICO DO PERÍODO (entre a última reunião e a próxima) ----
-   "Atividades realizadas": vem do apontamento de horas (campo "descrição"
-   de cada lançamento) no período. "Próximas atividades": vem tanto das
+   "Atividades realizadas": atividades CONCLUÍDAS no período (Término real
+   dentro dele), anotações de progresso lançadas no período (quadro de cada
+   colaborador) e, por compatibilidade, os apontamentos antigos de horas. "Próximas atividades": vem tanto das
    Saídas e entregas combinadas na ata da reunião anterior (que ainda não
    viraram atividade concluída no cronograma) quanto das atividades do
    cronograma do projeto com janela prevista dentro do período. */
@@ -5411,23 +5416,45 @@ function gerarResumoAutomatico(p,dataAte){
   const anterior=ultimaReuniaoAntesDe(p,dataAte);
   const dataDe=(anterior&&anterior.data) ? anterior.data : (p.dataInicio||null);
 
-  /* --- Atividades realizadas: apontamentos de horas no período --- */
-  const horasPeriodo=DB.data.horas.filter(h=>h.projetoId===p.id && h.data &&
-    (!dataDe || h.data>=dataDe) && h.data<=dataAte);
+  /* --- Atividades realizadas --- */
+  const noPeriodo=d=>!!d && (!dataDe || d>=dataDe) && d<=dataAte;
   const porAtividade={};
-  horasPeriodo.forEach(h=>{
-    const key=h.atividadeId||"__sem_atividade__";
-    porAtividade[key]=porAtividade[key]||{horas:0,descricoes:new Set()};
-    porAtividade[key].horas+=(+h.horas||0);
-    if(h.descricao && h.descricao.trim()) porAtividade[key].descricoes.add(h.descricao.trim());
+  const item=key=>porAtividade[key]||(porAtividade[key]={horas:0,descricoes:[],concluidaEm:null,ordem:""});
+  // 1) atividades concluídas no período (Término real dentro do período)
+  DB.data.atividades.forEach(a=>{
+    if(a.projetoId!==p.id || a.status==="Cancelada") return;
+    const concluida=a.status==="Concluída" || (+a.progresso||0)>=100;
+    if(concluida && noPeriodo(a.dataFimReal)){ const it=item(a.id); it.concluidaEm=a.dataFimReal; it.ordem=a.dataFimReal; }
+    // 2) anotações de progresso lançadas no período, com as horas
+    (a.estimativasPessoas||[]).forEach(x=>{
+      ordenarLogExecucao(x.horasExecLog||[]).forEach(e=>{
+        if(!e || !noPeriodo(e.data)) return;
+        const it=item(a.id);
+        it.horas+=(+e.horas||0);
+        if(e.nota && String(e.nota).trim()){
+          const c=getColab(x.colaboradorId);
+          it.descricoes.push(`${fmtDate(e.data).slice(0,5)} ${c?String(c.nome).split(" ")[0]+": ":""}${String(e.nota).trim()}`);
+        }
+        if(!it.ordem || e.data>it.ordem) it.ordem=e.data;
+      });
+    });
+  });
+  // 3) apontamentos antigos de horas (tabela "horas")
+  DB.data.horas.filter(h=>h.projetoId===p.id && noPeriodo(h.data)).forEach(h=>{
+    const it=item(h.atividadeId||"__sem_atividade__");
+    it.horas+=(+h.horas||0);
+    if(h.descricao && h.descricao.trim() && !it.descricoes.includes(h.descricao.trim())) it.descricoes.push(h.descricao.trim());
+    if(!it.ordem || h.data>it.ordem) it.ordem=h.data;
   });
   const realizadas=Object.keys(porAtividade).map(key=>{
     const ativ=key!=="__sem_atividade__"?getAtividade(key):null;
     const info=porAtividade[key];
     const nome=ativ?ativ.nome:"Apontamentos diversos";
-    const descs=[...info.descricoes];
-    return `${nome} (${fmtNum(info.horas,1)}h)${descs.length?": "+descs.join("; "):""}`;
-  }).sort((a,b)=>a.localeCompare(b,"pt-BR",{sensitivity:"base"}));
+    const resp=ativ?nomesResponsaveisAtividade(ativ,p):[];
+    return {ordem:info.ordem, txt:`${info.concluidaEm?"✔ ":""}${nome}${info.concluidaEm?" — concluída em "+fmtDate(info.concluidaEm):""}`
+      +`${info.horas>0.04?" ("+fmtNum(info.horas,1)+"h)":""}${resp.length?" — Responsável: "+resp.join(", "):""}`
+      +`${info.descricoes.length?": "+info.descricoes.join("; "):""}`};
+  }).sort((a,b)=>(a.ordem||"").localeCompare(b.ordem||"")||a.txt.localeCompare(b.txt,"pt-BR",{sensitivity:"base"})).map(x=>x.txt);
 
   /* --- Próximas atividades: entregas pendentes da ata anterior --- */
   const proximas=[];
@@ -5446,8 +5473,8 @@ function gerarResumoAutomatico(p,dataAte){
     a.dataInicioPrev && a.dataInicioPrev<=dataAte &&
     (!a.dataFimPrev || !dataDe || a.dataFimPrev>=dataDe));
   ativsCronograma.forEach(a=>{
-    const resp=a.responsavelId?getColab(a.responsavelId):null;
-    proximas.push(`${a.nome} — previsto de ${fmtDate(a.dataInicioPrev)} a ${a.dataFimPrev?fmtDate(a.dataFimPrev):"—"}${resp?" (Responsável: "+resp.nome+")":""}`);
+    const resp=(a.responsavelId&&getColab(a.responsavelId))?[getColab(a.responsavelId).nome]:nomesResponsaveisAtividade(a,p);
+    proximas.push(`${a.nome} — previsto de ${fmtDate(a.dataInicioPrev)} a ${a.dataFimPrev?fmtDate(a.dataFimPrev):"—"}${resp.length?" (Responsável: "+resp.join(", ")+")":""}`);
   });
 
   return {de:dataDe, ate:dataAte, realizadas, proximas:[...new Set(proximas)]};
