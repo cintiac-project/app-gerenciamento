@@ -132,11 +132,12 @@
   @media(max-width:720px){.g2,.g3,.g4,.g5{grid-template-columns:1fr}}
 
   /* KPI */
-  .kpi{padding:18px 20px}
+  .kpi{padding:18px 16px}
   .kpi .lbl{display:flex;align-items:flex-start;gap:9px;font-family:var(--fh);font-size:11.5px;line-height:1.35;color:var(--ink-soft);
     text-transform:uppercase;letter-spacing:.06em;font-weight:700;min-height:calc(2 * 1.35em)}
-  .kpi .val{font-family:var(--fh);font-size:27px;font-weight:700;letter-spacing:-.02em;margin-top:7px;overflow-wrap:anywhere}
+  .kpi .val{font-family:var(--fh);font-size:27px;font-weight:700;letter-spacing:-.02em;margin-top:7px;white-space:nowrap}
   .kpi .sub{font-size:12px;color:var(--ink-soft);margin-top:3px;overflow-wrap:anywhere}
+  .kpi .lbl{white-space:nowrap}
   .kpi .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;margin-top:calc((1.35em - 9px) / 2)}
 
   /* TABLE */
@@ -278,8 +279,23 @@
   .busca-select .bs-empty{padding:9px 11px;font-size:12.5px;color:var(--ink-faint)}
   /* lista de resultados "em linha": empurra o conteúdo do modal em vez de flutuar por cima
      (evita que a lista seja cortada pela rolagem interna do modal) */
-  .bs-inline .busca-select .bs-results{position:static;margin-top:4px;box-shadow:none;max-height:260px}
-  .bs-inline .busca-select .bs-item{white-space:normal;line-height:1.35;overflow-wrap:anywhere}
+  .busca-select .bs-results{position:static;margin-top:4px;box-shadow:none;max-height:260px}
+  .busca-select .bs-item{white-space:normal;line-height:1.35;overflow-wrap:anywhere}
+
+  /* ---------- LISTA SUSPENSA PERSONALIZADA (substitui a lista nativa dos <select>) ---------- */
+  .sel-pop{position:fixed;z-index:9999;background:var(--surface);border:1px solid var(--line);border-radius:10px;
+    box-shadow:0 12px 32px rgba(16,32,46,.22);overflow:hidden;display:flex;flex-direction:column;font-family:var(--fh)}
+  .sel-pop .sel-q{margin:8px 8px 4px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-size:13.5px;width:calc(100% - 16px);font-family:inherit}
+  .sel-pop .sel-q:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+  .sel-pop .sel-list{overflow-y:auto;padding:4px}
+  .sel-item{padding:8px 11px;border-radius:7px;font-size:13.5px;line-height:1.35;cursor:pointer;white-space:normal;overflow-wrap:anywhere;color:var(--ink)}
+  .sel-item:hover,.sel-item.hl{background:var(--accent-soft)}
+  .sel-item.on{font-weight:700;color:var(--accent)}
+  .sel-item.dis{opacity:.45;cursor:not-allowed}
+  .sel-item.ph{color:var(--ink-faint)}
+  .sel-grp{padding:8px 11px 3px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)}
+  .sel-vazio{padding:10px 12px;font-size:12.5px;color:var(--ink-faint)}
+  select.sel-open{border-color:var(--accent);outline:2px solid var(--accent-soft)}
   .fld select{text-overflow:ellipsis;min-width:0}
 
   /* ---------- BUSCA GLOBAL DE ATIVIDADES (barra superior) ---------- */
@@ -3057,6 +3073,141 @@ function iniciarBuscaGlobal(){
   });
 }
 iniciarBuscaGlobal();
+
+/* ============================================================
+   QUADROS (KPIs) SEM QUEBRA DE LINHA
+   Números, títulos e subtítulos curtos dos quadros ficam sempre numa única
+   linha: se o texto não cabe no tamanho normal, a fonte diminui sozinha até
+   caber (com um mínimo legível). Só se mesmo no mínimo não couber é que o
+   texto volta a quebrar linha. Roda a cada atualização da tela e ao
+   redimensionar a janela.
+   ============================================================ */
+function ajustarQuadros(){
+  const regras=[
+    [".kpi .val",15,true],[".kpi .lbl",9.5,true],[".kpi .sub",10.5,false],
+    [".rp-k .v",14,true],[".rp-k .l",9,true]
+  ];
+  regras.forEach(([sel,min,sempre])=>{
+    document.querySelectorAll(sel).forEach(el=>{
+      el.style.fontSize=""; el.style.whiteSpace=""; el.style.letterSpacing="";
+      // subtítulos longos (frases) continuam quebrando linha normalmente
+      if(!sempre && (el.textContent||"").trim().length>34) return;
+      el.style.whiteSpace="nowrap";
+      if(el.clientWidth===0) return;                       // elemento oculto: não mede
+      // títulos em maiúsculas: primeiro aperta o espaçamento entre letras, depois reduz a fonte
+      if(el.scrollWidth>el.clientWidth+1 && /lbl|\bl\b/.test(el.className)) el.style.letterSpacing=".01em";
+      let px=parseFloat(getComputedStyle(el).fontSize);
+      while(el.scrollWidth>el.clientWidth+1 && px>min){ px-=0.5; el.style.fontSize=px+"px"; }
+      if(el.scrollWidth>el.clientWidth+1) el.style.whiteSpace="normal";   // não coube nem no mínimo
+    });
+  });
+}
+(function(){
+  let t=null; const agendar=()=>{ cancelAnimationFrame(t); t=requestAnimationFrame(ajustarQuadros); };
+  const app=document.getElementById("app");
+  if(app) new MutationObserver(agendar).observe(app,{childList:true,subtree:true});
+  const mr=document.getElementById("modal-root");
+  if(mr) new MutationObserver(agendar).observe(mr,{childList:true,subtree:true});
+  window.addEventListener("resize",agendar);
+  if(document.fonts&&document.fonts.ready) document.fonts.ready.then(agendar);
+})();
+
+/* ============================================================
+   LISTAS SUSPENSAS (<select>) PERSONALIZADAS
+   A lista nativa do navegador aparecia cortada/em branco quando as opções
+   eram longas. Aqui toda lista suspensa do app abre num painel próprio,
+   que quebra linha nos textos longos, nunca sai da tela e, quando tem
+   muitas opções, ganha um campo de busca. Em celular/tablet (toque) continua
+   a lista nativa, que funciona bem. Para um select específico manter a
+   lista nativa, use o atributo data-native.
+   ============================================================ */
+(function iniciarSelectsPersonalizados(){
+  if(!window.matchMedia || !window.matchMedia("(pointer:fine)").matches) return;
+  let pop=null, alvo=null, itens=[], hl=-1, listaEl=null, qEl=null;
+  const norm=t=>String(t||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+  const elegivel=s=>s&&s.tagName==="SELECT"&&!s.disabled&&!s.multiple&&!(s.size>1)&&!s.hasAttribute("data-native");
+  function fechar(){ if(pop){ pop.remove(); pop=null; } if(alvo) alvo.classList.remove("sel-open"); alvo=null; itens=[]; hl=-1; }
+  function escolher(it){
+    if(!alvo||!it||it.dis) return;
+    const sel=alvo; fechar();
+    if(sel.selectedIndex!==it.idx){
+      sel.selectedIndex=it.idx;
+      sel.dispatchEvent(new Event("input",{bubbles:true}));
+      sel.dispatchEvent(new Event("change",{bubbles:true}));
+    }
+    sel.focus();
+  }
+  function marcar(i){
+    const vis=itens.filter(x=>!x.oculto&&!x.dis); if(!vis.length) return;
+    const pos=Math.max(0,Math.min(vis.length-1,i)); hl=itens.indexOf(vis[pos]);
+    itens.forEach(x=>x.el&&x.el.classList.toggle("hl",x===itens[hl]));
+    itens[hl].el.scrollIntoView({block:"nearest"});
+  }
+  function posicionar(sel){
+    const r=sel.getBoundingClientRect(), vw=window.innerWidth, vh=window.innerHeight;
+    pop.style.minWidth=Math.min(r.width,vw-16)+"px"; pop.style.maxWidth=Math.min(680,vw-16)+"px";
+    let left=r.left; const w=pop.offsetWidth;
+    if(left+w>vw-8) left=Math.max(8,vw-8-w);
+    pop.style.left=left+"px";
+    const abaixo=vh-r.bottom-10, acima=r.top-10;
+    const cab=qEl?qEl.offsetHeight+12:0;
+    if(abaixo<220&&acima>abaixo){ pop.style.top="auto"; pop.style.bottom=(vh-r.top+4)+"px"; listaEl.style.maxHeight=Math.min(340,acima-cab)+"px"; }
+    else { pop.style.bottom="auto"; pop.style.top=(r.bottom+4)+"px"; listaEl.style.maxHeight=Math.min(340,abaixo-cab)+"px"; }
+  }
+  function abrir(sel){
+    fechar(); alvo=sel; sel.classList.add("sel-open");
+    pop=document.createElement("div"); pop.className="sel-pop";
+    const total=sel.options.length;
+    if(total>10){ qEl=document.createElement("input"); qEl.type="search"; qEl.className="sel-q"; qEl.placeholder="Buscar…"; qEl.autocomplete="off"; pop.appendChild(qEl); }
+    else qEl=null;
+    listaEl=document.createElement("div"); listaEl.className="sel-list"; pop.appendChild(listaEl);
+    itens=[]; let grupoAtual=null;
+    [...sel.options].forEach((o,idx)=>{
+      const g=o.parentNode&&o.parentNode.tagName==="OPTGROUP"?o.parentNode:null;
+      if(g&&g!==grupoAtual){ const gh=document.createElement("div"); gh.className="sel-grp"; gh.textContent=g.label; listaEl.appendChild(gh); itens.push({grupoEl:gh,oculto:false,dis:true,txt:""}); }
+      grupoAtual=g;
+      const el=document.createElement("div"); const txt=(o.textContent||"").trim();
+      el.className="sel-item"+(idx===sel.selectedIndex?" on":"")+(o.disabled?" dis":"")+(o.value===""?" ph":"");
+      el.textContent=txt||"—"; el.dataset.i=String(itens.length);
+      listaEl.appendChild(el); itens.push({el,idx,dis:o.disabled,txt:norm(txt),oculto:false});
+    });
+    document.body.appendChild(pop); posicionar(sel);
+    const on=itens.findIndex(x=>x.el&&x.idx===sel.selectedIndex);
+    if(on>=0){ hl=on; itens[on].el.classList.add("hl"); itens[on].el.scrollIntoView({block:"nearest"}); }
+    if(qEl){
+      qEl.focus();
+      qEl.addEventListener("input",()=>{
+        const ws=norm(qEl.value).split(/\s+/).filter(Boolean); let achou=0;
+        itens.forEach(x=>{ if(!x.el) return; x.oculto=!ws.every(w=>x.txt.includes(w)); x.el.style.display=x.oculto?"none":""; if(!x.oculto) achou++; });
+        itens.forEach(x=>{ if(x.grupoEl) x.grupoEl.style.display=ws.length?"none":""; });
+        let v=listaEl.querySelector(".sel-vazio"); if(!achou&&!v){ v=document.createElement("div"); v.className="sel-vazio"; v.textContent="Nada encontrado."; listaEl.appendChild(v); } else if(achou&&v) v.remove();
+        marcar(0);
+      });
+    }
+  }
+  document.addEventListener("mousedown",e=>{
+    const s=e.target.closest&&e.target.closest("select");
+    if(elegivel(s)){ e.preventDefault(); if(alvo===s){ fechar(); } else { s.focus(); abrir(s); } return; }
+    const it=e.target.closest&&e.target.closest(".sel-item");
+    if(it&&pop){ e.preventDefault(); escolher(itens[+it.dataset.i]); return; }
+    if(pop&&!(e.target.closest&&e.target.closest(".sel-pop"))) fechar();
+  },true);
+  document.addEventListener("keydown",e=>{
+    if(pop){
+      const vis=itens.filter(x=>!x.oculto&&!x.dis), pos=vis.indexOf(itens[hl]);
+      if(e.key==="ArrowDown"){ e.preventDefault(); marcar(pos+1); }
+      else if(e.key==="ArrowUp"){ e.preventDefault(); marcar(pos-1); }
+      else if(e.key==="Enter"){ e.preventDefault(); escolher(itens[hl]); }
+      else if(e.key==="Escape"||e.key==="Tab"){ if(e.key==="Escape") e.preventDefault(); const s=alvo; fechar(); if(s) s.focus(); }
+      return;
+    }
+    const s=document.activeElement;
+    if(elegivel(s)&&(e.key==="Enter"||e.key===" "||e.key==="F4"||(e.altKey&&e.key==="ArrowDown"))){ e.preventDefault(); abrir(s); }
+  },true);
+  window.addEventListener("scroll",e=>{ if(pop&&!(e.target&&e.target.closest&&e.target.closest(".sel-pop"))) fechar(); },true);
+  window.addEventListener("resize",fechar);
+  setInterval(()=>{ if(alvo&&!document.contains(alvo)) fechar(); },400);
+})();
 
 function setTopAction(html,handler){
   const c=$("#topbar-actions");
@@ -7060,7 +7211,13 @@ function modalExportar(titulo,htmlConteudo,textoConteudo,nomeArquivo){
   // (com régua, páginas A4 e formatação preservada), continuando 100% editável
   // depois de aberto — sem depender de nenhuma biblioteca externa.
   function montarWord(){
-    return `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+    // .doc no formato MHTML (HTML + imagens anexadas no mesmo arquivo): o Word abre como documento
+    // editável e exibe o logo, o que não acontece com imagens "data:" soltas dentro do HTML.
+    const logos={azul:LOGO_SENAI_AZUL_B64,branco:LOGO_SENAI_BRANCO_B64}, usados=new Set();
+    const corpo=htmlConteudo.replace(/<img[^>]*data-logo="(azul|branco)"[^>]*>/g,(m,t)=>{
+      usados.add(t); return m.replace(/src="[^"]*"/,`src="logo_${t}.png"`);
+    });
+    const html=`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
 <head>
 <meta charset="utf-8">
 <title>${esc(titulo)}</title>
@@ -7073,11 +7230,22 @@ function modalExportar(titulo,htmlConteudo,textoConteudo,nomeArquivo){
 </xml><![endif]-->
 <style>
 @page{ size:21cm 29.7cm; margin:2.4cm 2.2cm 2.2cm 2.2cm; }
-body{ font-family:'Inter','Segoe UI',Calibri,Arial,sans-serif; }
+body{ font-family:'Segoe UI',Calibri,Arial,sans-serif; }
 </style>
 </head>
-<body>${htmlConteudo.replace(/<img[^>]*data-logo[^>]*>/g,"")}</body>
+<body>${corpo}</body>
 </html>`;
+    const b64=txt=>{ const by=new TextEncoder().encode(txt); let bin="";
+      for(let k=0;k<by.length;k+=0x8000) bin+=String.fromCharCode.apply(null,by.subarray(k,k+0x8000)); return btoa(bin); };
+    const quebra=t=>t.replace(/(.{76})/g,"$1\r\n");
+    const B="----=_NextPart_senai_"+Date.now();
+    const partes=[
+      `MIME-Version: 1.0\r\nContent-Type: multipart/related; type="text/html"; boundary="${B}"\r\n\r\n`,
+      `--${B}\r\nContent-Type: text/html; charset="utf-8"\r\nContent-Transfer-Encoding: base64\r\nContent-Location: http://documento.local/documento.htm\r\n\r\n${quebra(b64(html))}\r\n\r\n`
+    ];
+    usados.forEach(t=>partes.push(`--${B}\r\nContent-Type: image/png\r\nContent-Transfer-Encoding: base64\r\nContent-Location: http://documento.local/logo_${t}.png\r\n\r\n${quebra(logos[t])}\r\n\r\n`));
+    partes.push(`--${B}--\r\n`);
+    return partes.join("");
   }
   $("#mx-x").onclick=closeModal;
   $("#mx-doc").onclick=()=>{
