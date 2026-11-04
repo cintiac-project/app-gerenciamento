@@ -270,6 +270,27 @@
   .busca-select .bs-item:hover,.busca-select .bs-item.hl{background:var(--accent-soft)}
   .busca-select .bs-item b{color:var(--accent)}
   .busca-select .bs-empty{padding:9px 11px;font-size:12.5px;color:var(--ink-faint)}
+  /* lista de resultados "em linha": empurra o conteúdo do modal em vez de flutuar por cima
+     (evita que a lista seja cortada pela rolagem interna do modal) */
+  .bs-inline .busca-select .bs-results{position:static;margin-top:4px;box-shadow:none;max-height:260px}
+  .bs-inline .busca-select .bs-item{white-space:normal;line-height:1.35;overflow-wrap:anywhere}
+  .fld select{text-overflow:ellipsis;min-width:0}
+
+  /* ---------- BUSCA GLOBAL DE ATIVIDADES (barra superior) ---------- */
+  .gsearch{position:relative}
+  .gsearch .search{width:250px}
+  .gs-results{display:none;position:absolute;right:0;top:calc(100% + 8px);width:min(580px,92vw);max-height:70vh;overflow-y:auto;
+    background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 32px rgba(16,32,46,.18);z-index:60}
+  .gs-item{padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--line-soft)}
+  .gs-item:last-child{border-bottom:none}
+  .gs-item:hover,.gs-item.hl{background:var(--accent-soft)}
+  .gs-item .gs-t{font-weight:600;font-size:13.5px;line-height:1.35;overflow-wrap:anywhere}
+  .gs-item .gs-t mark{background:#ffe9a8;color:inherit;border-radius:3px;padding:0 1px}
+  .gs-item .gs-s{font-size:11.5px;color:var(--ink-soft);margin-top:3px;overflow-wrap:anywhere}
+  .gs-empty,.gs-more{padding:12px 14px;font-size:12.5px;color:var(--ink-faint)}
+  @keyframes gsflash{0%,60%{background:#ffe9a8}100%{background:transparent}}
+  tr.gs-flash>td{animation:gsflash 2.6s ease-out}
+  @media(max-width:900px){.gsearch .search{width:150px}}
   .fld .help{font-size:11px;color:var(--ink-faint)}
   .form-err{background:var(--danger-bg);color:var(--danger);padding:9px 12px;border-radius:8px;
     font-size:12.5px;font-weight:500;margin-bottom:14px;display:none}
@@ -430,6 +451,10 @@
         <h1 id="page-title">Painel Geral</h1>
       </div>
       <div style="display:flex;align-items:center;gap:14px">
+        <div class="gsearch" id="gsearch">
+          <input type="search" id="gsearch-input" class="search" placeholder="Buscar atividade…  ( / )" autocomplete="off" aria-label="Buscar atividade por palavra">
+          <div class="gs-results" id="gsearch-results"></div>
+        </div>
         <div id="user-widget"></div>
         <div id="topbar-actions"></div>
       </div>
@@ -722,6 +747,7 @@ const DB = {
     });
     console.log("[PMO] DB.load concluído:", this.data.projetos.length, "projetos,", this.data.horas.length, "horas");
     await carregarCapacidadeSemanal();   // não derruba o load se a tabela ainda não existir
+    await carregarMetasMensais();        // idem: sem a tabela metas_mensais o app continua funcionando
   },
 
   // grava de volta no Supabase tudo que está em memória.
@@ -1091,11 +1117,15 @@ function moverAtividadesProjeto(lista){
   if(predsCortadas) avisos.push(`${predsCortadas} vínculo(s) de predecessora com atividades que ficam no projeto de origem será(ão) desfeito(s)`);
   if(sucsCortadas) avisos.push(`${sucsCortadas} atividade(s) que ficam na origem e dependiam ${n>1?"destas":"desta"} perderá(ão) o vínculo`);
   const fields=[
-    {key:"destinoId",label:"Projeto de destino",type:"select",required:true,
-      options:[{value:"",label:"Selecione…"}].concat(destinos.map(x=>({value:x.id,label:`${x.nome} — ${nomeSessao(x.sessaoId)}`}))),
+    {key:"destinoId",label:"Projeto de destino",type:"buscaSelect",required:true,full:true,
+      placeholder:"Clique e digite o código ou o nome do projeto…",
+      options:destinos.map(x=>({value:x.id,
+        label:`${rotuloProjeto(x)} — ${nomeSessao(x.sessaoId)}`,
+        busca:`${x.codigo||""} ${x.nome} ${nomeSessao(x.sessaoId)}`,
+        html:`${rotuloProjetoHtml(x)}<div style="font-size:11px;color:var(--ink-faint)">${esc(nomeSessao(x.sessaoId))}</div>`})),
       help:(n===1?`A atividade "${lista[0].nome}" está hoje em "${origem?origem.nome:"—"}".`:`${n} atividades selecionadas, hoje em "${origem?origem.nome:"—"}".`)+
         ` A Matriz RACI ${n>1?"delas acompanha":"dela acompanha"} a mudança.${avisos.length?" Atenção: "+avisos.join("; ")+".":""}`},
-    {key:"duplicadas",label:"Se já existir atividade com o mesmo nome no destino",type:"select",
+    {key:"duplicadas",label:"Se já existir atividade com o mesmo nome no destino",type:"select",full:true,
       placeholder:"Renomear (acrescentar o nome do projeto de origem)",
       options:[{value:"pular",label:"Não mover as duplicadas"}],
       help:"Um mesmo projeto não pode ter duas atividades com o mesmo nome."}
@@ -1106,6 +1136,7 @@ function moverAtividadesProjeto(lista){
   openForm({
     title:n>1?`Mover ${n} atividades para outro projeto`:"Mover atividade para outro projeto",
     values:{destinoId:"",duplicadas:"",moverHoras:true},
+    buscaEmLinha:true,
     fields,
     onSave:async(v)=>{
       const destino=getProjeto(v.destinoId);
@@ -1348,6 +1379,157 @@ function mciHistorico(){
   return (DB.data.mci||[]).filter(m=>m.concluido)
     .sort((a,b)=>(b.concluidoEm||"").localeCompare(a.concluidoEm||""));
 }
+/* ---------- METAS MENSAIS (Painel Geral, logo abaixo da MCI) ---------- */
+let METAS_MENSAIS_OK=true;
+const SQL_METAS_MENSAIS=[
+"create table if not exists public.metas_mensais (",
+"  id uuid primary key default gen_random_uuid(),",
+"  mes text,",
+"  texto text,",
+"  concluido boolean not null default false,",
+"  concluido_em date,",
+"  criado_em date default current_date",
+");",
+"alter table public.metas_mensais enable row level security;",
+"drop policy if exists metas_mensais_all on public.metas_mensais;",
+"create policy metas_mensais_all on public.metas_mensais for all to authenticated using (true) with check (true);",
+"notify pgrst, 'reload schema';"
+].join("\n");
+async function carregarMetasMensais(){
+  try{
+    DB.data.metasMensais=toCamel(await sbFetch("metas_mensais?select=*"))||[];
+    METAS_MENSAIS_OK=true;
+  }catch(e){
+    console.warn("[PMO] tabela metas_mensais indisponível:",e.message||e);
+    DB.data.metasMensais=[]; METAS_MENSAIS_OK=false;
+  }
+}
+function fmtMesAno(s){
+  const p=String(s||"").split("-");
+  return (p.length>=2&&p[0]&&p[1]) ? `${MONTHS[(+p[1])-1]||p[1]}/${p[0]}` : "—";
+}
+function metasMensaisAtivas(){
+  return (DB.data.metasMensais||[]).filter(m=>!m.concluido).sort((a,b)=>{
+    const ma=a.mes||"9999-99", mb=b.mes||"9999-99";
+    return ma.localeCompare(mb) || (a.criadoEm||"").localeCompare(b.criadoEm||"");
+  });
+}
+function metasMensaisHistorico(){
+  return (DB.data.metasMensais||[]).filter(m=>m.concluido)
+    .sort((a,b)=>(b.concluidoEm||"").localeCompare(a.concluidoEm||"") || (b.mes||"").localeCompare(a.mes||""));
+}
+function metasMensaisCardHtml(){
+  const lista=metasMensaisAtivas(), hist=metasMensaisHistorico();
+  const aviso=METAS_MENSAIS_OK?"":`<div class="form-err" style="display:block;margin-bottom:12px">
+    A tabela <b>metas_mensais</b> ainda não existe no banco. Rode no SQL Editor do Supabase:
+    <code style="user-select:all;white-space:pre-wrap;display:block;margin-top:6px;font-size:11.5px">${esc(SQL_METAS_MENSAIS)}</code></div>`;
+  const linhas=lista.length ? lista.map(m=>`
+    <div class="mm-row" data-id="${m.id}" style="display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line-soft);border-radius:8px;padding:8px 10px;margin-bottom:8px;background:#fafbfc">
+      <input type="checkbox" class="mm-check" data-id="${m.id}" title="Marcar como concluída (vai para o histórico)" style="margin-top:9px;width:16px;height:16px;flex-shrink:0">
+      <input type="month" class="mm-mes" data-id="${m.id}" value="${esc(m.mes||"")}" title="Mês da meta" style="width:150px;flex-shrink:0;padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit">
+      <textarea class="mm-meta" data-id="${m.id}" rows="1" placeholder="Descreva a meta do mês…" style="flex:1;min-width:0;min-height:36px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;resize:vertical">${esc(m.texto||"")}</textarea>
+      <button class="btn-icon del mm-rm" data-id="${m.id}" title="Excluir meta" style="flex-shrink:0">✕</button>
+    </div>`).join("")
+    : `<div class="hint" style="padding:4px 2px 12px">Nenhuma meta mensal ativa. Clique em “+ Adicionar meta”.</div>`;
+  return `
+    <div class="card">
+      <div class="card-head" style="flex-wrap:wrap;row-gap:4px"><h3>🗓️ Metas Mensais</h3>
+        <span class="hint">marque ao concluir → vai para o histórico</span></div>
+      <div class="card-pad">
+        ${aviso}${linhas}
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;flex-wrap:wrap;gap:8px">
+          <button class="btn sm" id="mm-add" ${METAS_MENSAIS_OK?"":"disabled"}>+ Adicionar meta</button>
+          <button class="btn ghost sm" id="mm-hist">🕘 Histórico${hist.length?` (${hist.length})`:""}</button>
+        </div>
+      </div>
+    </div>`;
+}
+function abrirHistoricoMetasMensais(){
+  const lista=metasMensaisHistorico();
+  $("#modal-root").innerHTML=`
+  <div class="overlay"><div class="modal">
+    <div class="modal-head"><h3>🕘 Histórico de Metas Mensais concluídas</h3><button class="btn-icon" id="hmm-x">✕</button></div>
+    <div class="modal-body" style="max-height:60vh;overflow:auto">
+      ${lista.length? lista.map(m=>`
+        <div style="border-bottom:1px solid var(--line-soft);padding:10px 0;display:flex;gap:10px;align-items:flex-start">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;overflow-wrap:anywhere">${esc(m.texto||"(sem descrição)")}</div>
+            <div class="hint">Mês: ${esc(fmtMesAno(m.mes))} · concluída em ${fmtDate(m.concluidoEm)}</div>
+          </div>
+          <button class="btn ghost sm mm-reabrir" data-id="${m.id}" title="Devolve a meta para a lista de metas ativas">↩ Reabrir</button>
+        </div>`).join("") : `<div class="empty"><span class="ic">🗓️</span><p>Nenhuma meta mensal concluída ainda.</p></div>`}
+    </div>
+    <div class="modal-foot"><button class="btn ghost" id="hmm-close">Fechar</button></div>
+  </div></div>`;
+  $("#hmm-x").onclick=closeModal; $("#hmm-close").onclick=closeModal;
+  document.querySelectorAll(".mm-reabrir").forEach(b=>b.onclick=async()=>{
+    const m=(DB.data.metasMensais||[]).find(x=>x.id===b.dataset.id);
+    if(m){ m.concluido=false; m.concluidoEm=null; }
+    try{ await sbUpdate("metas_mensais", b.dataset.id, {concluido:false, concluido_em:null}); toast("Meta reaberta."); }
+    catch(e){ toast("Erro ao reabrir meta: "+e.message); }
+    closeModal(); render();
+  });
+}
+function wireMetasMensais(v){
+  const achar=id=>(DB.data.metasMensais||[]).find(m=>m.id===id);
+  const salvar=async(id,patch)=>{
+    try{ await sbUpdate("metas_mensais", id, patch); return true; }
+    catch(e){ toast("Erro ao salvar meta mensal: "+e.message); return false; }
+  };
+  if($("#mm-add")) $("#mm-add").onclick=async()=>{
+    const novo={id:uid(), mes:todayStr().slice(0,7), texto:"", concluido:false, concluidoEm:null, criadoEm:todayStr()};
+    DB.data.metasMensais=DB.data.metasMensais||[];
+    DB.data.metasMensais.push(novo);
+    try{ await sbInsert("metas_mensais", toSnake(novo)); }
+    catch(e){
+      DB.data.metasMensais=DB.data.metasMensais.filter(x=>x.id!==novo.id);
+      toast("Erro ao criar meta mensal: "+e.message);
+    }
+    render();
+    const ta=document.querySelector(`.mm-meta[data-id="${novo.id}"]`); if(ta) ta.focus();
+  };
+  if($("#mm-hist")) $("#mm-hist").onclick=abrirHistoricoMetasMensais;
+  v.querySelectorAll(".mm-meta").forEach(ta=>{
+    ta.onblur=async()=>{
+      const m=achar(ta.dataset.id), txt=ta.value;
+      if(m && (m.texto||"")===txt) return;
+      if(m) m.texto=txt;
+      await salvar(ta.dataset.id,{texto:txt});
+    };
+  });
+  v.querySelectorAll(".mm-mes").forEach(inp=>{
+    inp.onchange=async()=>{
+      const m=achar(inp.dataset.id); if(m) m.mes=inp.value||null;
+      await salvar(inp.dataset.id,{mes:inp.value||null});
+      render();   // reordena por mês
+    };
+  });
+  v.querySelectorAll(".mm-check").forEach(chk=>{
+    chk.onchange=async()=>{
+      if(!chk.checked) return;
+      const id=chk.dataset.id, m=achar(id), dt=todayStr();
+      const ta=v.querySelector(`.mm-meta[data-id="${id}"]`);
+      const txt=ta?ta.value:(m?m.texto:"");
+      if(m){ m.texto=txt; m.concluido=true; m.concluidoEm=dt; }
+      const ok=await salvar(id,{texto:txt, concluido:true, concluido_em:dt});
+      if(ok) toast("Meta mensal concluída e arquivada no histórico. ✅");
+      else if(m){ m.concluido=false; m.concluidoEm=null; }
+      render();
+    };
+  });
+  v.querySelectorAll(".mm-rm").forEach(b=>{
+    b.onclick=()=>{
+      const id=b.dataset.id;
+      confirmar("Excluir esta meta mensal?","Ela será removida de vez (não vai para o histórico).",async()=>{
+        DB.data.metasMensais=(DB.data.metasMensais||[]).filter(x=>x.id!==id);
+        try{ await sbDelete("metas_mensais", id); }
+        catch(e){ toast("Erro ao excluir meta mensal: "+e.message); }
+        render();
+      });
+    };
+  });
+}
+
 /* MCS = atividade da sprint "fixada" no quadro (📍). A linha da tabela mds só
    guarda o vínculo (atividadeId) e a data em que foi fixada (semana de
    referência); título, projeto e responsáveis são lidos da atividade ao vivo.
@@ -2762,6 +2944,110 @@ function renderUserWidget(){
     <span style="font-size:10px;color:var(--ink-faint);margin-left:3px">▾</span></div>`;
   $("#uw-btn").onclick=selecionarUsuario;
 }
+/* ============================================================
+   BUSCA GLOBAL DE ATIVIDADES (barra superior, atalho "/")
+   Digite uma ou mais palavras (sem se preocupar com acentos ou
+   maiúsculas): acha pelo nome da atividade, projeto (código ou nome)
+   e responsáveis. Ao escolher, abre o Cronograma Físico do projeto,
+   rola até a atividade e a destaca.
+   ============================================================ */
+function statusEfetivoAtividade(a){
+  const prog=+a.progresso||0;
+  const atrasada=a.status!=="Cancelada" && a.dataFimPrev && daysBetween(todayStr(),a.dataFimPrev)<0 && prog<100;
+  return atrasada ? "Atrasada" : (a.status||"Não iniciada");
+}
+function irParaAtividade(id){
+  const a=getAtividade(id); if(!a) return;
+  const p=getProjeto(a.projetoId); if(!p) return;
+  // garante que filtros do cronograma não escondam a atividade procurada
+  ST.cronoStatusVisiveis.add(statusEfetivoAtividade(a));
+  ST.cronoStatusVisiveis.add(a.status||"Não iniciada");
+  ST.cronoFiltroData={de:"",ate:""}; ST.cronoFiltroColab="";
+  ST.view="projeto"; ST.projetoId=p.id; ST.projTab="cronograma"; ST.sessaoAtiva=p.sessaoId||ST.sessaoAtiva;
+  render();
+  const btn=document.querySelector(`[data-eda="${a.id}"]`);
+  const tr=btn&&btn.closest("tr");
+  if(tr){
+    tr.scrollIntoView({block:"center"});
+    tr.classList.add("gs-flash");
+    setTimeout(()=>tr.classList.remove("gs-flash"),2800);
+  } else {
+    // sessão sem cronograma na tela (aba oculta): abre direto a edição da atividade
+    formAtividade(p.id,a);
+  }
+}
+function iniciarBuscaGlobal(){
+  const inp=document.getElementById("gsearch-input"), box=document.getElementById("gsearch-results");
+  if(!inp||!box) return;
+  let itens=[], hl=-1;
+  const norm=s=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+  const fechar=()=>{ box.style.display="none"; hl=-1; };
+  function destacar(texto,palavras){
+    const t=String(texto||""), n=norm(t);
+    if(n.length!==t.length) return esc(t);          // segurança: só destaca quando os índices batem
+    const marc=new Array(t.length).fill(false);
+    palavras.forEach(w=>{ let i=n.indexOf(w); while(i>=0){ for(let k=i;k<i+w.length;k++) marc[k]=true; i=n.indexOf(w,i+w.length); } });
+    let out="", aberto=false;
+    for(let i=0;i<t.length;i++){
+      if(marc[i]&&!aberto){ out+="<mark>"; aberto=true; }
+      if(!marc[i]&&aberto){ out+="</mark>"; aberto=false; }
+      out+=esc(t[i]);
+    }
+    return aberto?out+"</mark>":out;
+  }
+  function marcar(i){
+    const els=box.querySelectorAll(".gs-item"); if(!els.length) return;
+    hl=(i+els.length)%els.length;
+    els.forEach((e,k)=>e.classList.toggle("hl",k===hl));
+    els[hl].scrollIntoView({block:"nearest"});
+  }
+  function buscar(){
+    const palavras=norm(inp.value).split(/\s+/).filter(Boolean);
+    if(!palavras.length){ fechar(); return; }
+    const achados=[];
+    (DB.data&&DB.data.atividades||[]).forEach(a=>{
+      const p=getProjeto(a.projetoId); if(!p) return;
+      let resp=""; try{ resp=nomesResponsaveisAtividade(a,p).join(" "); }catch(_){}
+      const hNome=norm(a.nome);
+      const hTudo=hNome+" "+norm(a.descricao)+" "+norm(p.codigo)+" "+norm(p.nome)+" "+norm(resp);
+      if(!palavras.every(w=>hTudo.includes(w))) return;
+      achados.push({a,p,noNome:palavras.every(w=>hNome.includes(w))});
+    });
+    achados.sort((x,y)=>(y.noNome-x.noNome)||String(x.p.nome).localeCompare(String(y.p.nome),"pt-BR")||String(x.a.nome).localeCompare(String(y.a.nome),"pt-BR"));
+    itens=achados.slice(0,40);
+    if(!itens.length){ box.innerHTML=`<div class="gs-empty">Nenhuma atividade encontrada para “${esc(inp.value)}”.</div>`; box.style.display="block"; hl=-1; return; }
+    box.innerHTML=itens.map(({a,p})=>`
+      <div class="gs-item" data-id="${a.id}">
+        <div class="gs-t">${destacar(a.nome,palavras)}</div>
+        <div class="gs-s">${rotuloProjetoHtml(p)} · ${esc(statusEfetivoAtividade(a))}${a.dataFimPrev?" · prazo "+fmtDate(a.dataFimPrev):""} · ${+a.progresso||0}%</div>
+      </div>`).join("")+(achados.length>itens.length?`<div class="gs-more">Mostrando ${itens.length} de ${achados.length} — refine a busca com mais palavras.</div>`:"");
+    box.style.display="block"; marcar(0);
+  }
+  const abrir=id=>{ fechar(); inp.blur(); irParaAtividade(id); };
+  inp.addEventListener("input",buscar);
+  inp.addEventListener("focus",()=>{ if(inp.value.trim()) buscar(); });
+  inp.addEventListener("keydown",e=>{
+    if(e.key==="ArrowDown"){ e.preventDefault(); marcar(hl+1); }
+    else if(e.key==="ArrowUp"){ e.preventDefault(); marcar(hl-1); }
+    else if(e.key==="Enter"){ e.preventDefault(); const it=itens[hl]; if(it) abrir(it.a.id); }
+    else if(e.key==="Escape"){ fechar(); inp.blur(); }
+  });
+  box.addEventListener("mousedown",e=>{
+    const it=e.target.closest(".gs-item"); if(!it) return;
+    e.preventDefault(); abrir(it.dataset.id);
+  });
+  document.addEventListener("mousedown",e=>{ if(!e.target.closest("#gsearch")) fechar(); });
+  document.addEventListener("keydown",e=>{
+    const tag=(e.target&&e.target.tagName||"").toLowerCase();
+    const digitando=tag==="input"||tag==="textarea"||tag==="select"||(e.target&&e.target.isContentEditable);
+    if((e.key==="/"&&!digitando&&!e.ctrlKey&&!e.metaKey)||((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k")){
+      if(document.getElementById("app").style.display==="none") return;
+      e.preventDefault(); inp.focus(); inp.select();
+    }
+  });
+}
+iniciarBuscaGlobal();
+
 function setTopAction(html,handler){
   const c=$("#topbar-actions");
   c.innerHTML=html;
@@ -2833,9 +3119,12 @@ function mciMdsPainelHtml(){
 
   return `
   <div class="grid g2" style="grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
-    <div class="card">
-      <div class="card-head"><h3>🎯 MCI — Meta Crucialmente Importante</h3></div>
-      <div class="card-pad">${mciHtml}</div>
+    <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+      <div class="card">
+        <div class="card-head"><h3>🎯 MCI — Meta Crucialmente Importante</h3></div>
+        <div class="card-pad">${mciHtml}</div>
+      </div>
+      ${metasMensaisCardHtml()}
     </div>
     <div class="card">
       <div class="card-head" style="flex-wrap:wrap;row-gap:4px"><h3>📍 MCS — Medidas de Direção Semanal</h3>
@@ -2938,6 +3227,8 @@ function wirePainelMciMds(v){
     });
   };
   if($("#mci-hist")) $("#mci-hist").onclick=abrirHistoricoMci;
+
+  wireMetasMensais(v);
 
   if($("#mds-hist")) $("#mds-hist").onclick=abrirHistoricoMds;
   v.querySelectorAll(".mds-check").forEach(chk=>{
@@ -7890,7 +8181,7 @@ function openForm(cfg){
       <button class="btn-icon" id="m-x">✕</button></div>
     <div class="modal-body">
       <div class="form-err" id="f-err"></div>
-      <div class="form-grid ${grid}" id="f-grid">${fields.map(fieldHtml).join("")}</div>
+      <div class="form-grid ${grid} ${cfg.buscaEmLinha?"bs-inline":""}" id="f-grid">${fields.map(fieldHtml).join("")}</div>
     </div>
     <div class="modal-foot">
       <button class="btn ghost" id="m-cancel">Cancelar</button>
