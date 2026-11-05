@@ -1131,7 +1131,7 @@ function moverAtividadesProjeto(lista){
   const origem=getProjeto(origemId);
   const n=lista.length;
   const movIds=new Set(lista.map(x=>x.id));
-  const destinos=DB.data.projetos.filter(x=>x.id!==origemId).sort((x,y)=>(x.nome||"").localeCompare(y.nome||"","pt-BR"));
+  const destinos=DB.data.projetos.filter(x=>x.id!==origemId).sort((x,y)=>cmpAlfa(rotuloProjeto(x),rotuloProjeto(y)));
   if(!destinos.length){ toast("Não há outro projeto para receber "+(n>1?"estas atividades.":"esta atividade.")); return; }
   const horasDe=new Map(lista.map(x=>[x.id,DB.data.horas.filter(h=>h.atividadeId===x.id)]));
   let nHoras=0,totalH=0;
@@ -2572,7 +2572,6 @@ const SESSOES=[
   {id:"estruturantes",    label:"Projetos Estruturantes", ic:ICONS.estrut},
   {id:"eventos",          label:"Eventos",                ic:ICONS.eventos},
   {id:"cursos",           label:"Cursos",                 ic:ICONS.cursos},
-  {id:"rotinas",          label:"Rotinas",                ic:ICONS.rotinas},
   {id:"articulacao",      label:"Articulação Institucional", ic:ICONS.articulacao}
 ];
 function getSessao(id){ return SESSOES.find(s=>s.id===id); }
@@ -2583,31 +2582,17 @@ function haProjetosNaoClassificados(){
 }
 // Monta as opções de um <select> de projetos agrupadas por sessão do
 // portfólio (as mesmas sessões do menu lateral: Captação, Gestão de
-// Projetos, Projetos Estruturantes, Eventos, Cursos, Rotinas), na mesma
+// Projetos, Projetos Estruturantes, Eventos, Cursos), na mesma
 // ordem, com os projetos em ordem alfabética dentro de cada grupo.
 // Projetos sem sessão válida caem no grupo "Não classificados" ao final.
 // Cada opção carrega "group" — usado por fieldHtml()/refreshDynamic() em
 // openForm() para renderizar o <select> com <optgroup> por sessão.
 function opcoesProjetosAgrupadasPorSessao(lista){
+  // Lista plana em ORDEM ALFABÉTICA (independente da sessão). O nome da sessão
+  // segue disponível em "sessao" para quem quiser exibi-lo ao lado do projeto.
   lista=lista||(DB.data?DB.data.projetos:[]);
-  const porSessao={};
-  SESSOES.forEach(s=>porSessao[s.id]=[]);
-  const semSessao=[];
-  lista.forEach(p=>{
-    if(projetoSessaoValida(p)) porSessao[p.sessaoId].push(p);
-    else semSessao.push(p);
-  });
-  const alfabetica=(a,b)=>a.nome.localeCompare(b.nome,"pt-BR",{sensitivity:"base"});
-  const opts=[];
-  SESSOES.forEach(s=>{
-    porSessao[s.id].slice().sort(alfabetica)
-      .forEach(p=>opts.push({value:p.id,label:rotuloProjetoSelect(p),nome:p.nome,group:s.label}));
-  });
-  if(semSessao.length){
-    semSessao.slice().sort(alfabetica)
-      .forEach(p=>opts.push({value:p.id,label:rotuloProjetoSelect(p),nome:p.nome,group:"Não classificados"}));
-  }
-  return opts;
+  return lista.map(p=>({value:p.id,label:rotuloProjetoSelect(p),nome:p.nome,sessao:nomeSessao(p.sessaoId)}))
+    .sort((a,b)=>cmpAlfa(a.label,b.label));
 }
 
 // opções de projeto para o campo de busca (autocomplete) do Apontamento de
@@ -2625,8 +2610,7 @@ function opcoesProjetosBusca(){
       label: codigo?`${codigo} — ${nomeP}`:nomeP,
       busca: codigo?`${codigo} ${nomeP}`:nomeP,
       html: `${codigo?`<b>${esc(codigo)}</b> — `:""}${esc(nomeP)}`+
-        `<div style="font-size:11px;color:var(--ink-faint)">${esc(o.group||"")}</div>`,
-      group:o.group
+        `<div style="font-size:11px;color:var(--ink-faint)">${esc(o.sessao||"")}</div>`
     };
   });
 }
@@ -3121,6 +3105,40 @@ function ajustarQuadros(){
    a lista nativa, que funciona bem. Para um select específico manter a
    lista nativa, use o atributo data-native.
    ============================================================ */
+/* ============================================================
+   LISTAS SUSPENSAS SEMPRE EM ORDEM ALFABÉTICA
+   Toda lista suspensa é ordenada de A a Z (ignorando acentos e maiúsculas),
+   mantendo no topo a primeira opção vazia ("Todos", "Selecione…").
+   Ficam fora, de propósito, as listas cuja ordem tem significado:
+   meses, anos, datas de reunião, status, probabilidade/impacto etc.
+   Para excluir um select específico: atributo data-ordem="natural".
+   ============================================================ */
+const SELECT_ORDEM_NATURAL_IDS=new Set(["dash-year","dash-mes","dash-sem","oh-mes","ord-portfolio","rl-reu","ff-status","ff-tipo"]);
+const SELECT_ORDEM_NATURAL_KEYS=new Set(["status","statusCaptacao","probabilidade","impacto","influencia","classificacao","papel","tipo","modalidade","duplicadas"]);
+function cmpAlfa(a,b){
+  return String(a==null?"":a).normalize("NFKD").localeCompare(String(b==null?"":b).normalize("NFKD"),"pt-BR",{sensitivity:"base",numeric:true});
+}
+function selectOrdemNatural(sel){
+  return sel.hasAttribute("data-ordem")||SELECT_ORDEM_NATURAL_IDS.has(sel.id)||SELECT_ORDEM_NATURAL_KEYS.has(sel.dataset.k)||sel.classList.contains("raci-select");
+}
+function ordenarSelectAlfabetico(sel){
+  if(!sel||sel.multiple||selectOrdemNatural(sel)||sel.querySelector("optgroup")) return;
+  const opts=[...sel.children].filter(n=>n.tagName==="OPTION");
+  if(opts.length<3) return;
+  const resto=opts[0].value===""?opts.slice(1):opts.slice();
+  const ord=resto.slice().sort((a,b)=>cmpAlfa(a.textContent.trim(),b.textContent.trim()));
+  if(ord.every((o,k)=>o===resto[k])) return;                 // já está em ordem
+  const escolhida=sel.selectedIndex>=0?sel.options[sel.selectedIndex]:null;
+  ord.forEach(o=>sel.appendChild(o));
+  if(escolhida) escolhida.selected=true;
+}
+function ordenarSelects(){ document.querySelectorAll("select").forEach(ordenarSelectAlfabetico); }
+(function(){
+  let t=null; const agendar=()=>{ cancelAnimationFrame(t); t=requestAnimationFrame(ordenarSelects); };
+  ["app","modal-root"].forEach(id=>{ const el=document.getElementById(id); if(el) new MutationObserver(agendar).observe(el,{childList:true,subtree:true}); });
+  agendar();
+})();
+
 (function iniciarSelectsPersonalizados(){
   if(!window.matchMedia || !window.matchMedia("(pointer:fine)").matches) return;
   let pop=null, alvo=null, itens=[], hl=-1, listaEl=null, qEl=null;
@@ -3155,7 +3173,7 @@ function ajustarQuadros(){
     else { pop.style.bottom="auto"; pop.style.top=(r.bottom+4)+"px"; listaEl.style.maxHeight=Math.min(340,abaixo-cab)+"px"; }
   }
   function abrir(sel){
-    fechar(); alvo=sel; sel.classList.add("sel-open");
+    fechar(); ordenarSelectAlfabetico(sel); alvo=sel; sel.classList.add("sel-open");
     pop=document.createElement("div"); pop.className="sel-pop";
     const total=sel.options.length;
     if(total>10){ qEl=document.createElement("input"); qEl.type="search"; qEl.className="sel-q"; qEl.placeholder="Buscar…"; qEl.autocomplete="off"; pop.appendChild(qEl); }
@@ -7214,8 +7232,11 @@ function modalExportar(titulo,htmlConteudo,textoConteudo,nomeArquivo){
     // .doc no formato MHTML (HTML + imagens anexadas no mesmo arquivo): o Word abre como documento
     // editável e exibe o logo, o que não acontece com imagens "data:" soltas dentro do HTML.
     const logos={azul:LOGO_SENAI_AZUL_B64,branco:LOGO_SENAI_BRANCO_B64}, usados=new Set();
+    // O Word ignora "height:auto": largura E altura precisam ir explícitas (logo = 480×128 px, proporção 3,75:1)
     const corpo=htmlConteudo.replace(/<img[^>]*data-logo="(azul|branco)"[^>]*>/g,(m,t)=>{
-      usados.add(t); return m.replace(/src="[^"]*"/,`src="logo_${t}.png"`);
+      usados.add(t);
+      const wm=m.match(/width="(\d+)"/), w=wm?+wm[1]:130, h=Math.round(w*128/480);
+      return `<img src="logo_${t}.png" alt="SENAI" width="${w}" height="${h}" style="width:${w}px;height:${h}px">`;
     });
     const html=`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
 <head>
