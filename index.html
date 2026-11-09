@@ -1609,7 +1609,7 @@ function metasMensaisCardHtml(){
       </select>`:""}
       <input type="month" class="mm-mes" data-id="${m.id}" value="${esc(m.mes||"")}" title="Mês da meta" style="width:150px;flex-shrink:0;padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit">
       <div style="flex:1 1 260px;min-width:0">
-        <textarea class="mm-meta" data-id="${m.id}" rows="1" placeholder="Descreva a meta do mês…" style="width:100%;min-height:36px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;resize:vertical">${esc(m.texto||"")}</textarea>
+        <textarea class="mm-meta auto-altura" data-id="${m.id}" rows="1" placeholder="Descreva a meta do mês…" style="width:100%;min-height:36px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;line-height:1.4;resize:none;overflow:hidden">${esc(m.texto||"")}</textarea>
         ${tagsPickerHtml("mm",m)}
       </div>
       <button class="btn-icon del mm-rm" data-id="${m.id}" title="Excluir meta" style="flex-shrink:0">✕</button>
@@ -2278,9 +2278,13 @@ function ocupacaoSemanalPessoas(semanaIni){
     p.executado=exec[cid].h; p.execPorProjeto=exec[cid].porProjeto;
   });
   return Object.values(pessoas).filter(p=>p.planejado>0.0001||p.executado>0.0001||p.foraSprint>0.0001).map(p=>({executado:0,execPorProjeto:{},...p,nome:nomeColab(p.id),capacidade:capacidadeSemanalPessoa(p.id,semanaIni)}))
-    .sort((a,b)=>((b.planejado+b.executado)-b.capacidade)-((a.planejado+a.executado)-a.capacidade)||a.nome.localeCompare(b.nome,"pt-BR"));
+    .sort((a,b)=>((b.planejado+b.executado)-b.capacidade*OCUP_LIMITE)-((a.planejado+a.executado)-a.capacidade*OCUP_LIMITE)||a.nome.localeCompare(b.nome,"pt-BR"));
 }
-/* HTML do gráfico (barras horizontais: planejado + em aberto + marcador da capacidade) */
+/* Faixas da ocupação semanal, em % da carga semanal da pessoa (padrão 40 h):
+   até 70% = verde · 70% a 80% = laranja (chegando ao limite) ·
+   80% em diante = vermelho (acima do limite). O marcador │ fica nos 80%. */
+const OCUP_ALERTA=0.70, OCUP_LIMITE=0.80;
+/* HTML do gráfico (barras horizontais: executado + planejado por faixa + em aberto + marcador do limite de 80%) */
 function ocupacaoSemanalHtml(semanaIni){
   const lista=ocupacaoSemanalPessoas(semanaIni);
   if(!lista.length) return `<div class="empty" style="padding:22px"><span class="ic">✓</span><p>Ninguém com horas previstas para esta semana.</p></div>`;
@@ -2289,9 +2293,16 @@ function ocupacaoSemanalHtml(semanaIni){
   const podeEditar=isGestor();
   return lista.map(p=>{
     const carga=p.executado+p.planejado;   // executadas + restantes da semana
-    const aberto=Math.max(0,p.capacidade-carga), exc=Math.max(0,carga-p.capacidade);
+    const lim=p.capacidade*OCUP_LIMITE, alerta=p.capacidade*OCUP_ALERTA;   // 80% e 70% da carga semanal
+    const aberto=Math.max(0,lim-carga), exc=Math.max(0,carga-lim);
     const ratio=p.capacidade>0? carga/p.capacidade : (carga>0?9:0);
-    const cor=ratio>1.0001?"var(--danger)":ratio>=0.80?"var(--warn)":"var(--ok)";
+    const pctOcup=p.capacidade>0? Math.round(ratio*100) : null;
+    const nivel=carga<=0.0001?"ok":ratio>=OCUP_LIMITE-0.0001?"danger":ratio>=OCUP_ALERTA-0.0001?"warn":"ok";
+    // a parte PLANEJADA da barra (depois do executado) é pintada pela faixa em que
+    // cai na carga total: o que fica abaixo de 70% é verde, entre 70% e 80% é
+    // laranja e de 80% em diante é vermelho
+    const faixa=(a,b)=>Math.max(0,Math.min(carga,b)-Math.max(p.executado,a));
+    const plVerde=faixa(0,alerta), plLaranja=faixa(alerta,lim), plVermelho=faixa(lim,Infinity);
     const ajustada=Math.abs(p.capacidade-CAPACIDADE_SEMANAL_PADRAO)>0.001;
     // saldo detalhado por atividade (para conferir de onde vem cada hora)
     const linhaAtiv=x=>"• "+nomeAtividade(x.atividadeId)+" ("+((getProjeto(x.projetoId)||{}).codigo||nomeProjeto(x.projetoId))+"): "+fmtNum(x.horas,1)+" h"+(x.atrasada?" — atrasada":"");
@@ -2304,12 +2315,15 @@ function ocupacaoSemanalHtml(semanaIni){
     const atrasTxt=(p.atrasado>0.04?` <span style="color:var(--danger)">(inclui ${fmtNum(p.atrasado,1)} h de atividades atrasadas)</span>`:"")
       +(p.foraSprint>0.04?` <span style="color:var(--ink-faint)">· + ${fmtNum(p.foraSprint,1)} h atrasadas fora da sprint (não somadas)</span>`:"");
     const execTxt=p.executado>0.04?`<b style="color:var(--info)">${fmtNum(p.executado,1)} h</b> executadas · `:"";
-    const txt=execTxt+(exc>0
-      ? `<b style="color:var(--danger)">${fmtNum(p.planejado,1)} h</b> planejadas · <b style="color:var(--danger)">${fmtNum(exc,1)} h acima do limite</b>`
-      : `<b>${fmtNum(p.planejado,1)} h</b> planejadas · <b>${fmtNum(aberto,1)} h</b> em aberto`)+atrasTxt;
+    const corNivel=nivel==="danger"?"var(--danger)":nivel==="warn"?"var(--warn)":"var(--ok)";
+    const ocupTxt=pctOcup!=null?`<b style="color:${corNivel}">${pctOcup}%</b> da semana · `:"";
+    const limTxt=`${fmtNum(lim,1)} h`;
+    const txt=ocupTxt+execTxt+(nivel==="danger"
+      ? `<b style="color:var(--danger)">${fmtNum(p.planejado,1)} h</b> planejadas · <b style="color:var(--danger)">${exc>0.04?fmtNum(exc,1)+" h acima do limite":"no limite"} de 80% (${limTxt})</b>`
+      : `<b>${fmtNum(p.planejado,1)} h</b> planejadas · ${nivel==="warn"?`<b style="color:var(--warn)">chegando ao limite</b> · `:""}<b>${fmtNum(aberto,1)} h</b> em aberto até o limite de 80% (${limTxt})`)+atrasTxt;
     const campo=podeEditar
       ? `<input type="number" min="0" max="80" step="0.5" value="${p.capacidade}" data-capsem-colab="${p.id}" data-capsem-semana="${semanaIni}"
-           style="width:68px;padding:4px 6px;border:1px solid ${ajustada?"var(--warn)":"var(--line)"};border-radius:6px;background:${ajustada?"var(--warn-bg)":"var(--surface)"}" title="Horas disponíveis desta pessoa nesta semana (padrão ${CAPACIDADE_SEMANAL_PADRAO}h). Reduza em caso de feriado, licença ou férias.">
+           style="width:68px;padding:4px 6px;border:1px solid ${ajustada?"var(--warn)":"var(--line)"};border-radius:6px;background:${ajustada?"var(--warn-bg)":"var(--surface)"}" title="Carga semanal desta pessoa nesta semana (padrão ${CAPACIDADE_SEMANAL_PADRAO}h). O limite de ocupação é 80% dela. Reduza em caso de feriado, licença ou férias.">
          <span style="font-size:11.5px;color:var(--ink-faint)">h</span>
          ${ajustada?`<button class="btn-icon" data-capsem-reset="${p.id}" data-capsem-semana="${semanaIni}" title="Voltar para ${CAPACIDADE_SEMANAL_PADRAO}h">↺</button>`:""}`
       : `<span style="font-size:12px;color:var(--ink-soft)">${fmtNum(p.capacidade,1)} h${ajustada?" (ajustada)":""}</span>`;
@@ -2318,9 +2332,11 @@ function ocupacaoSemanalHtml(semanaIni){
       <div>
         <div title="${esc(tipFull)}" style="position:relative;height:16px;border-radius:5px;background:var(--line-soft);overflow:hidden;display:flex">
           <div style="width:${pct(p.executado)}%;background:var(--info)" title="Executadas na semana"></div>
-          <div style="width:${pct(p.planejado)}%;background:${cor}"></div>
-          <div style="width:${pct(aberto)}%;background:repeating-linear-gradient(45deg,var(--accent-soft),var(--accent-soft) 4px,#ffffff 4px,#ffffff 8px)"></div>
-          <div style="position:absolute;top:0;bottom:0;left:calc(${pct(p.capacidade)}% - 1px);width:2px;background:var(--ink)"></div>
+          <div style="width:${pct(plVerde)}%;background:var(--ok)" title="Planejado até 70%"></div>
+          <div style="width:${pct(plLaranja)}%;background:var(--warn)" title="Planejado entre 70% e 80% (chegando ao limite)"></div>
+          <div style="width:${pct(plVermelho)}%;background:var(--danger)" title="Planejado acima do limite (80% em diante)"></div>
+          <div style="width:${pct(aberto)}%;background:repeating-linear-gradient(45deg,var(--accent-soft),var(--accent-soft) 4px,#ffffff 4px,#ffffff 8px)" title="Em aberto até o limite de 80%"></div>
+          <div style="position:absolute;top:0;bottom:0;left:calc(${pct(lim)}% - 1px);width:2px;background:var(--ink)" title="Limite: 80% da carga semanal (${limTxt})"></div>
         </div>
         <div style="font-size:11.5px;color:var(--ink-soft);margin-top:2px">${txt}</div>
         ${p.porAtividade.length?`<details style="font-size:11.5px;color:var(--ink-soft);margin-top:2px">
@@ -2332,11 +2348,11 @@ function ocupacaoSemanalHtml(semanaIni){
   }).join("")
   + `<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--ink-faint);margin-top:10px">
       <span><i style="display:inline-block;width:10px;height:10px;background:var(--info);border-radius:2px"></i> executado</span>
-      <span><i style="display:inline-block;width:10px;height:10px;background:var(--ok);border-radius:2px"></i> planejado (até 80%)</span>
-      <span><i style="display:inline-block;width:10px;height:10px;background:var(--warn);border-radius:2px"></i> 80–100%</span>
-      <span><i style="display:inline-block;width:10px;height:10px;background:var(--danger);border-radius:2px"></i> acima do limite</span>
-      <span><i style="display:inline-block;width:10px;height:10px;background:var(--accent-soft);border:1px solid var(--line);border-radius:2px"></i> em aberto</span>
-      <span>│ limite semanal da pessoa</span></div>`;
+      <span><i style="display:inline-block;width:10px;height:10px;background:var(--ok);border-radius:2px"></i> planejado (até 70%)</span>
+      <span><i style="display:inline-block;width:10px;height:10px;background:var(--warn);border-radius:2px"></i> chegando ao limite (70–80%)</span>
+      <span><i style="display:inline-block;width:10px;height:10px;background:var(--danger);border-radius:2px"></i> acima do limite (80% em diante)</span>
+      <span><i style="display:inline-block;width:10px;height:10px;background:var(--accent-soft);border:1px solid var(--line);border-radius:2px"></i> em aberto (até 80%)</span>
+      <span>│ limite: 80% da carga semanal da pessoa</span></div>`;
 }
 
 /* alertas: retorna lista de {tipo,secao,sev,titulo,desc,dias}
@@ -3493,8 +3509,8 @@ function mciMdsPainelHtml(){
   const histMds=mdsHistorico();
 
   const mciHtml = mci
-    ? `<textarea id="mci-texto" placeholder="Descreva a Meta Crucialmente Importante atual…"
-         style="width:100%;min-height:70px;padding:11px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13.5px;font-weight:600;resize:vertical">${esc(mci.texto||"")}</textarea>
+    ? `<textarea id="mci-texto" class="auto-altura" rows="2" placeholder="Descreva a Meta Crucialmente Importante atual…"
+         style="width:100%;min-height:70px;padding:11px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13.5px;font-weight:600;line-height:1.45;resize:none;overflow:hidden">${esc(mci.texto||"")}</textarea>
        ${tagsPickerHtml("mci",mci)}
        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:8px">
          <span class="hint">Definida em ${fmtDate(mci.criadoEm)}</span>
@@ -3630,6 +3646,23 @@ function abrirHistoricoMds(){
   $("#hd-x").onclick=closeModal; $("#hd-close").onclick=closeModal;
 }
 
+/* textarea que cresce com o texto: o quadro nunca corta o conteúdo (MCI e Metas Mensais) */
+function ajustarAlturaTexto(ta){
+  if(!ta || !ta.isConnected) return;
+  ta.style.height="auto";
+  ta.style.height=(ta.scrollHeight+2)+"px";   // +2 = bordas (box-sizing: border-box)
+}
+function ligarAlturaAutomatica(raiz){
+  const tas=[...(raiz||document).querySelectorAll("textarea.auto-altura")];
+  tas.forEach(ta=>{ ajustarAlturaTexto(ta); ta.addEventListener("input",()=>ajustarAlturaTexto(ta)); });
+  // depois que as fontes carregam a quebra de linha pode mudar
+  if(document.fonts && document.fonts.ready) document.fonts.ready.then(()=>tas.forEach(ajustarAlturaTexto));
+}
+let _alturaAutoResizeTimer=null;
+window.addEventListener("resize",()=>{
+  clearTimeout(_alturaAutoResizeTimer);
+  _alturaAutoResizeTimer=setTimeout(()=>document.querySelectorAll("textarea.auto-altura").forEach(ajustarAlturaTexto),120);
+});
 function wirePainelMciMds(v){
   const mci=mciAtiva();
   if($("#mci-nova")) $("#mci-nova").onclick=async()=>{
@@ -3661,6 +3694,7 @@ function wirePainelMciMds(v){
 
   wireMetasMensais(v);
   wirePainelTags(v);
+  ligarAlturaAutomatica(v);
 
   if($("#mds-hist")) $("#mds-hist").onclick=abrirHistoricoMds;
   v.querySelectorAll(".mds-check").forEach(chk=>{
@@ -3904,8 +3938,8 @@ function viewPainel(v){
         ${ST.sprintSemanaOffset?`<button class="btn ghost sm" id="sprint-sem-hoje">Semana atual</button>`:""}
       </div>
       <div style="font-size:12px;color:var(--ink-faint);margin-bottom:8px">
-        Horas <b>restantes</b> (ainda não executadas) de cada atividade, <b>divididas pelos dias úteis</b> de hoje até o término previsto — cada semana mostra só a parte dos seus dias; as <b>atrasadas</b> entram inteiras na semana atual — mais as horas <b>já executadas</b> na semana (barra azul), em todos os projetos, contra o limite de ${CAPACIDADE_SEMANAL_PADRAO}h.
-        ${isGestor()?"Edite o campo à direita para ajustar o limite de uma pessoa (feriado, licença, férias).":""}
+        Horas <b>restantes</b> (ainda não executadas) de cada atividade, <b>divididas pelos dias úteis</b> de hoje até o término previsto — cada semana mostra só a parte dos seus dias; as <b>atrasadas</b> entram inteiras na semana atual — mais as horas <b>já executadas</b> na semana (barra azul), em todos os projetos. O <b>limite</b> (│) é <b>80% da carga semanal</b> (${fmtNum(CAPACIDADE_SEMANAL_PADRAO*OCUP_LIMITE,0)} h de ${CAPACIDADE_SEMANAL_PADRAO} h): de 70% a 80% fica laranja e de 80% em diante, vermelho.
+        ${isGestor()?"Edite o campo à direita para ajustar a carga semanal de uma pessoa (feriado, licença, férias).":""}
         ${CAPSEM.remoto?"":"<br><span style='color:var(--warn)'>⚠ Tabela <b>capacidade_semanal</b> não encontrada no Supabase: os ajustes ficam salvos só neste navegador.</span>"}
       </div>
       ${ocupacaoSemanalHtml(semOcupIni)}
