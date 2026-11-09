@@ -430,6 +430,28 @@
     justify-content:center;color:#fff;font-weight:700;font-size:14px;flex-shrink:0}
   .user-pick .nm{font-weight:600;font-size:14px}
   .user-pick .rl{font-size:11.5px;color:var(--ink-faint);margin-top:1px}
+
+  /* ---- Painel Geral: TAGs (MCI · Metas Mensais · MDS) ---- */
+  .ptags{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px;min-width:0}
+  .ptag{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;line-height:1.3;
+    padding:3px 9px;border-radius:12px;border:1px solid;white-space:nowrap}
+  .ptag-x{border:0;background:none;color:inherit;cursor:pointer;font-size:13px;line-height:1;padding:0 0 0 2px;opacity:.65}
+  .ptag-x:hover{opacity:1}
+  .ptag-add{font-size:11.5px;padding:3px 8px;border:1px dashed var(--line);border-radius:12px;
+    background:#fff;color:var(--ink-soft);font-family:inherit;cursor:pointer;width:auto;max-width:150px}
+  /* ---- Metas Mensais: alça de arraste (prioridade) e semana do mês ---- */
+  .mm-handle{flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+    width:30px;min-height:36px;border:1px solid transparent;border-radius:7px;background:none;color:var(--ink-faint);
+    cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;font-family:inherit;padding:2px 0}
+  .mm-handle:hover,.mm-handle:focus-visible{background:#eef2fa;border-color:var(--line-soft);color:var(--ink-soft)}
+  .mm-handle .gr{font-size:15px;line-height:1}
+  .mm-handle .rk{font-size:10px;font-weight:700;line-height:1}
+  .mm-row.arrastando{box-shadow:0 6px 18px rgba(15,31,61,.18);border-color:var(--accent)!important;background:#fff!important;position:relative;z-index:2}
+  .mm-row.arrastando .mm-handle{cursor:grabbing}
+  body.mm-arrastando, body.mm-arrastando *{cursor:grabbing!important;user-select:none!important}
+  .mm-sem{width:118px;flex-shrink:0;padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;background:#fff}
+  /* data obrigatória nos lançamentos de horas novos (não é mais preenchida sozinha) */
+  .estim-log input[data-lrole="data"].falta-data{border-color:var(--warn);background:var(--warn-bg)}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
@@ -769,6 +791,7 @@ const DB = {
     console.log("[PMO] DB.load concluído:", this.data.projetos.length, "projetos,", this.data.horas.length, "horas");
     await carregarCapacidadeSemanal();   // não derruba o load se a tabela ainda não existir
     await carregarMetasMensais();        // idem: sem a tabela metas_mensais o app continua funcionando
+    await carregarPainelTags();          // TAGs dos painéis (MCI · Metas Mensais · MDS); sem a migração, segue sem elas
   },
 
   // grava de volta no Supabase tudo que está em memória.
@@ -1405,13 +1428,128 @@ function mciHistorico(){
   return (DB.data.mci||[]).filter(m=>m.concluido)
     .sort((a,b)=>(b.concluidoEm||"").localeCompare(a.concluidoEm||""));
 }
+/* ---------- TAGs DOS PAINÉIS (MCI · Metas Mensais · MDS) ----------
+   A lista de TAGs fica na tabela painel_tags (editável em Sistema >
+   Configurações). Cada item guarda as TAGs marcadas na coluna "tags" (jsonb,
+   lista de ids): mci.tags, metas_mensais.tags e mds.tags. As Metas Mensais
+   ganham ainda "ordem" (prioridade, definida arrastando) e "semana" (semana
+   do mês, 1 a 5). Enquanto a migração não for rodada no Supabase, os quadros
+   continuam funcionando como antes e o gestor vê o SQL a rodar. */
+const PTAGS={lista:[]};                 // fica fora do DB.data para sobreviver aos recarregamentos
+let PAINEL_MIGRACAO_OK=null;            // null = ainda não verificado; depois true/false
+const SQL_PAINEL_TAGS=[
+"-- TAGs, prioridade e semana do mês nos quadros do Painel Geral",
+"create table if not exists public.painel_tags (",
+"  id uuid primary key default gen_random_uuid(),",
+"  nome text not null unique,",
+"  cor text,",
+"  ordem integer,",
+"  criado_em date default current_date",
+");",
+"alter table public.painel_tags enable row level security;",
+"drop policy if exists painel_tags_all on public.painel_tags;",
+"create policy painel_tags_all on public.painel_tags for all to authenticated using (true) with check (true);",
+"insert into public.painel_tags (nome, cor, ordem) values",
+"  ('Captação','#164194',1), ('Estruturação','#c67a12',2), ('Implementação','#2f8f4e',3)",
+"  on conflict (nome) do nothing;",
+"alter table public.mci add column if not exists tags jsonb not null default '[]'::jsonb;",
+"alter table public.mds add column if not exists tags jsonb not null default '[]'::jsonb;",
+"alter table public.metas_mensais add column if not exists tags jsonb not null default '[]'::jsonb;",
+"alter table public.metas_mensais add column if not exists ordem integer;",
+"alter table public.metas_mensais add column if not exists semana smallint;",
+"notify pgrst, 'reload schema';"
+].join("\n");
+async function carregarPainelTags(){
+  try{
+    const rows=toCamel(await sbFetch("painel_tags?select=*"))||[];
+    PTAGS.lista=rows.sort((a,b)=>((a.ordem==null?1e9:+a.ordem)-(b.ordem==null?1e9:+b.ordem))
+      || String(a.nome||"").localeCompare(String(b.nome||""),"pt-BR"));
+    if(PAINEL_MIGRACAO_OK!==true){
+      // confere uma vez se as colunas novas já existem nas três tabelas
+      await Promise.all([sbFetch("mci?select=tags&limit=1"), sbFetch("mds?select=tags&limit=1"),
+        sbFetch("metas_mensais?select=tags,ordem,semana&limit=1")]);
+      PAINEL_MIGRACAO_OK=true;
+    }
+  }catch(e){
+    console.warn("[PMO] TAGs dos painéis indisponíveis — rode a migração SQL_PAINEL_TAGS:",e.message||e);
+    if(PAINEL_MIGRACAO_OK!==true) PAINEL_MIGRACAO_OK=false;
+  }
+}
+function painelTags(){ return PTAGS.lista; }
+function getPainelTag(id){ return PTAGS.lista.find(t=>t.id===id); }
+function tagsDoItem(item){
+  const ids=Array.isArray(item&&item.tags)?item.tags:[];
+  return ids.map(getPainelTag).filter(Boolean);
+}
+function corPainelTag(t){ const c=String(t&&t.cor||""); return /^#[0-9a-f]{6}$/i.test(c)?c:"#5a6a8a"; }
+function chipPainelTagHtml(t,remover){
+  const c=corPainelTag(t);
+  return `<span class="ptag" style="color:${c};border-color:${c}55;background:${c}14">${esc(t.nome)}${remover
+    ?`<button type="button" class="ptag-x" data-ptipo="${remover.tipo}" data-pid="${esc(remover.id)}" data-tag="${esc(t.id)}" title="Tirar a TAG ${esc(t.nome)}">×</button>`:""}</span>`;
+}
+/* só exibição (históricos) */
+function tagsChipsHtml(item){
+  const ts=tagsDoItem(item);
+  return ts.length?`<div class="ptags">${ts.map(t=>chipPainelTagHtml(t,null)).join("")}</div>`:"";
+}
+const PTAG_ALVO={
+  mci:{tabela:"mci",           lista:()=>DB.data.mci||[]},
+  mm: {tabela:"metas_mensais", lista:()=>DB.data.metasMensais||[]},
+  mds:{tabela:"mds",           lista:()=>DB.data.mds||[]}
+};
+/* chips das TAGs marcadas + lista suspensa "🏷️ + TAG" com as que faltam */
+function tagsPickerHtml(tipo,item){
+  if(PAINEL_MIGRACAO_OK!==true || !item) return "";
+  const sel=tagsDoItem(item), marcadas=new Set(sel.map(t=>t.id));
+  const livres=painelTags().filter(t=>!marcadas.has(t.id));
+  return `<div class="ptags">
+    ${sel.map(t=>chipPainelTagHtml(t,{tipo,id:item.id})).join("")}
+    ${livres.length?`<select class="ptag-add" data-ptipo="${tipo}" data-pid="${esc(item.id)}" title="Adicionar uma TAG">
+        <option value="">🏷️ + TAG</option>${livres.map(t=>`<option value="${esc(t.id)}">${esc(t.nome)}</option>`).join("")}</select>`
+      :(painelTags().length?"":`<span class="hint">Nenhuma TAG cadastrada (Sistema › Configurações).</span>`)}
+  </div>`;
+}
+async function alterarTagItem(tipo,id,tagId,adicionar){
+  const alvo=PTAG_ALVO[tipo]; if(!alvo) return;
+  const item=alvo.lista().find(x=>x.id===id); if(!item) return;
+  const antes=Array.isArray(item.tags)?item.tags.slice():[];
+  // descarta também ids de TAGs que já foram excluídas em Configurações
+  const nova=antes.filter(t=>t!==tagId && getPainelTag(t));
+  if(adicionar) nova.push(tagId);
+  const ordem=painelTags().map(t=>t.id);
+  nova.sort((a,b)=>ordem.indexOf(a)-ordem.indexOf(b));
+  item.tags=nova; render();
+  try{ await sbUpdate(alvo.tabela,id,{tags:nova}); }
+  catch(e){ item.tags=antes; toast("Erro ao salvar a TAG: "+e.message); render(); }
+}
+function wirePainelTags(v){
+  v.querySelectorAll(".ptag-add").forEach(sel=>{
+    sel.onchange=()=>{ if(sel.value) alterarTagItem(sel.dataset.ptipo,sel.dataset.pid,sel.value,true); };
+  });
+  v.querySelectorAll(".ptag-x").forEach(b=>{
+    b.onclick=()=>alterarTagItem(b.dataset.ptipo,b.dataset.pid,b.dataset.tag,false);
+  });
+}
+/* aviso (só para gestor) quando a migração das TAGs ainda não foi rodada */
+function avisoMigracaoPainelHtml(){
+  if(PAINEL_MIGRACAO_OK!==false || !isGestor()) return "";
+  return `<details class="form-err" style="display:block;margin-bottom:14px">
+    <summary style="cursor:pointer;font-weight:600">⚙️ Falta rodar uma migração no Supabase para ativar as TAGs, a prioridade (arrastar) e a semana do mês nas Metas Mensais — clique para ver o SQL</summary>
+    <div style="margin-top:8px">Copie e rode uma vez no SQL Editor do Supabase e depois recarregue a página:</div>
+    <code style="user-select:all;white-space:pre-wrap;display:block;margin-top:6px;font-size:11.5px">${esc(SQL_PAINEL_TAGS)}</code>
+  </details>`;
+}
+
 /* ---------- METAS MENSAIS (Painel Geral, logo abaixo da MCI) ---------- */
 let METAS_MENSAIS_OK=true;
 const SQL_METAS_MENSAIS=[
 "create table if not exists public.metas_mensais (",
 "  id uuid primary key default gen_random_uuid(),",
 "  mes text,",
+"  semana smallint,",
 "  texto text,",
+"  ordem integer,",
+"  tags jsonb not null default '[]'::jsonb,",
 "  concluido boolean not null default false,",
 "  concluido_em date,",
 "  criado_em date default current_date",
@@ -1434,10 +1572,20 @@ function fmtMesAno(s){
   const p=String(s||"").split("-");
   return (p.length>=2&&p[0]&&p[1]) ? `${MONTHS[(+p[1])-1]||p[1]}/${p[0]}` : "—";
 }
+/* "Semana 1 · Nov/2026" (ou só o mês, se a semana não foi informada) */
+function fmtSemanaMes(m){
+  const mes=fmtMesAno(m&&m.mes);
+  return m&&m.semana ? `Semana ${m.semana} · ${mes}` : mes;
+}
+/* ordem = prioridade definida arrastando (1 = mais importante). Metas antigas,
+   ainda sem ordem, vêm depois, por mês/semana — até a primeira vez que a lista
+   for reordenada. */
 function metasMensaisAtivas(){
   return (DB.data.metasMensais||[]).filter(m=>!m.concluido).sort((a,b)=>{
+    const oa=a.ordem==null?1e9:+a.ordem, ob=b.ordem==null?1e9:+b.ordem;
+    if(oa!==ob) return oa-ob;
     const ma=a.mes||"9999-99", mb=b.mes||"9999-99";
-    return ma.localeCompare(mb) || (a.criadoEm||"").localeCompare(b.criadoEm||"");
+    return ma.localeCompare(mb) || (+a.semana||9)-(+b.semana||9) || (a.criadoEm||"").localeCompare(b.criadoEm||"");
   });
 }
 function metasMensaisHistorico(){
@@ -1446,23 +1594,33 @@ function metasMensaisHistorico(){
 }
 function metasMensaisCardHtml(){
   const lista=metasMensaisAtivas(), hist=metasMensaisHistorico();
+  const extras=PAINEL_MIGRACAO_OK===true;   // prioridade, semana e TAGs
   const aviso=METAS_MENSAIS_OK?"":`<div class="form-err" style="display:block;margin-bottom:12px">
     A tabela <b>metas_mensais</b> ainda não existe no banco. Rode no SQL Editor do Supabase:
     <code style="user-select:all;white-space:pre-wrap;display:block;margin-top:6px;font-size:11.5px">${esc(SQL_METAS_MENSAIS)}</code></div>`;
-  const linhas=lista.length ? lista.map(m=>`
-    <div class="mm-row" data-id="${m.id}" style="display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line-soft);border-radius:8px;padding:8px 10px;margin-bottom:8px;background:#fafbfc">
+  const linhas=lista.length ? lista.map((m,i)=>`
+    <div class="mm-row" data-id="${m.id}" style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;border:1px solid var(--line-soft);border-radius:8px;padding:8px 10px;margin-bottom:8px;background:#fafbfc">
+      ${extras?`<button type="button" class="mm-handle" data-id="${m.id}" aria-label="Prioridade ${i+1}: arraste para mudar a ordem (ou use as setas ↑ ↓)"
+        title="Prioridade ${i+1} — arraste para mudar a ordem de importância (ou use as setas ↑ ↓ com o foco aqui)"><span class="gr">⠿</span><span class="rk">${i+1}º</span></button>`:""}
       <input type="checkbox" class="mm-check" data-id="${m.id}" title="Marcar como concluída (vai para o histórico)" style="margin-top:9px;width:16px;height:16px;flex-shrink:0">
+      ${extras?`<select class="mm-sem" data-id="${m.id}" title="Semana do mês">
+        <option value="">Semana…</option>
+        ${[1,2,3,4,5].map(n=>`<option value="${n}" ${+m.semana===n?"selected":""}>Semana ${n}</option>`).join("")}
+      </select>`:""}
       <input type="month" class="mm-mes" data-id="${m.id}" value="${esc(m.mes||"")}" title="Mês da meta" style="width:150px;flex-shrink:0;padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit">
-      <textarea class="mm-meta" data-id="${m.id}" rows="1" placeholder="Descreva a meta do mês…" style="flex:1;min-width:0;min-height:36px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;resize:vertical">${esc(m.texto||"")}</textarea>
+      <div style="flex:1 1 260px;min-width:0">
+        <textarea class="mm-meta" data-id="${m.id}" rows="1" placeholder="Descreva a meta do mês…" style="width:100%;min-height:36px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;resize:vertical">${esc(m.texto||"")}</textarea>
+        ${tagsPickerHtml("mm",m)}
+      </div>
       <button class="btn-icon del mm-rm" data-id="${m.id}" title="Excluir meta" style="flex-shrink:0">✕</button>
     </div>`).join("")
     : `<div class="hint" style="padding:4px 2px 12px">Nenhuma meta mensal ativa. Clique em “+ Adicionar meta”.</div>`;
   return `
     <div class="card">
       <div class="card-head" style="flex-wrap:wrap;row-gap:4px"><h3>🗓️ Metas Mensais</h3>
-        <span class="hint">marque ao concluir → vai para o histórico</span></div>
+        <span class="hint">${extras&&lista.length>1?"arraste ⠿ para priorizar · ":""}marque ao concluir → vai para o histórico</span></div>
       <div class="card-pad">
-        ${aviso}${linhas}
+        ${aviso}<div id="mm-lista">${linhas}</div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;flex-wrap:wrap;gap:8px">
           <button class="btn sm" id="mm-add" ${METAS_MENSAIS_OK?"":"disabled"}>+ Adicionar meta</button>
           <button class="btn ghost sm" id="mm-hist">🕘 Histórico${hist.length?` (${hist.length})`:""}</button>
@@ -1480,7 +1638,8 @@ function abrirHistoricoMetasMensais(){
         <div style="border-bottom:1px solid var(--line-soft);padding:10px 0;display:flex;gap:10px;align-items:flex-start">
           <div style="flex:1;min-width:0">
             <div style="font-weight:600;overflow-wrap:anywhere">${esc(m.texto||"(sem descrição)")}</div>
-            <div class="hint">Mês: ${esc(fmtMesAno(m.mes))} · concluída em ${fmtDate(m.concluidoEm)}</div>
+            <div class="hint">${esc(fmtSemanaMes(m))} · concluída em ${fmtDate(m.concluidoEm)}</div>
+            ${tagsChipsHtml(m)}
           </div>
           <button class="btn ghost sm mm-reabrir" data-id="${m.id}" title="Devolve a meta para a lista de metas ativas">↩ Reabrir</button>
         </div>`).join("") : `<div class="empty"><span class="ic">🗓️</span><p>Nenhuma meta mensal concluída ainda.</p></div>`}
@@ -1490,10 +1649,64 @@ function abrirHistoricoMetasMensais(){
   $("#hmm-x").onclick=closeModal; $("#hmm-close").onclick=closeModal;
   document.querySelectorAll(".mm-reabrir").forEach(b=>b.onclick=async()=>{
     const m=(DB.data.metasMensais||[]).find(x=>x.id===b.dataset.id);
-    if(m){ m.concluido=false; m.concluidoEm=null; }
-    try{ await sbUpdate("metas_mensais", b.dataset.id, {concluido:false, concluido_em:null}); toast("Meta reaberta."); }
+    // volta para o fim da fila de prioridades
+    const patch={concluido:false, concluido_em:null};
+    if(PAINEL_MIGRACAO_OK===true) patch.ordem=metasMensaisAtivas().reduce((mx,x)=>Math.max(mx,+x.ordem||0),0)+1;
+    if(m){ m.concluido=false; m.concluidoEm=null; if(patch.ordem) m.ordem=patch.ordem; }
+    try{ await sbUpdate("metas_mensais", b.dataset.id, patch); toast("Meta reaberta."); }
     catch(e){ toast("Erro ao reabrir meta: "+e.message); }
     closeModal(); render();
+  });
+}
+/* grava a prioridade (ordem = posição 1, 2, 3…) das metas ativas, na ordem de ids recebida */
+async function salvarOrdemMetasMensais(ids){
+  const achar=id=>(DB.data.metasMensais||[]).find(m=>m.id===id);
+  const mudancas=[];
+  ids.forEach((id,i)=>{ const m=achar(id); if(m && +m.ordem!==i+1){ m.ordem=i+1; mudancas.push([id,i+1]); } });
+  render();
+  if(!mudancas.length) return;
+  try{ await Promise.all(mudancas.map(([id,o])=>sbUpdate("metas_mensais",id,{ordem:o}))); }
+  catch(e){ toast("Erro ao salvar a prioridade das metas: "+e.message); await carregarMetasMensais(); render(); }
+}
+/* arrastar pela alça ⠿ (mouse ou toque) e setas ↑ ↓ pelo teclado */
+function wireArrasteMetasMensais(v){
+  const lista=v.querySelector("#mm-lista"); if(!lista) return;
+  const idsNaTela=()=>[...lista.querySelectorAll(".mm-row")].map(r=>r.dataset.id);
+  lista.querySelectorAll(".mm-handle").forEach(h=>{
+    h.addEventListener("pointerdown",ev=>{
+      if(ev.button!==0) return;
+      ev.preventDefault();
+      const row=h.closest(".mm-row"), antes=idsNaTela().join();
+      // tira o foco de um campo em edição: o blur grava o texto antes de reordenar
+      if(document.activeElement && document.activeElement!==h) document.activeElement.blur();
+      // os eventos seguintes são ouvidos no document: ao reposicionar a linha no
+      // DOM o navegador solta a "captura" do ponteiro, e a alça deixaria de recebê-los
+      row.classList.add("arrastando"); document.body.classList.add("mm-arrastando");
+      const mover=e=>{
+        const y=e.clientY;
+        if(y<70) window.scrollBy(0,-12); else if(y>window.innerHeight-70) window.scrollBy(0,12);
+        const outras=[...lista.querySelectorAll(".mm-row")].filter(r=>r!==row);
+        const alvo=outras.find(r=>{ const b=r.getBoundingClientRect(); return y<b.top+b.height/2; });
+        if(alvo){ if(row.nextElementSibling!==alvo) lista.insertBefore(row,alvo); }
+        else if(lista.lastElementChild!==row) lista.appendChild(row);
+      };
+      const soltar=()=>{
+        document.removeEventListener("pointermove",mover); document.removeEventListener("pointerup",soltar); document.removeEventListener("pointercancel",soltar);
+        row.classList.remove("arrastando"); document.body.classList.remove("mm-arrastando");
+        const ids=idsNaTela();
+        if(ids.join()!==antes) salvarOrdemMetasMensais(ids);
+      };
+      document.addEventListener("pointermove",mover); document.addEventListener("pointerup",soltar); document.addEventListener("pointercancel",soltar);
+    });
+    h.addEventListener("keydown",ev=>{
+      if(ev.key!=="ArrowUp" && ev.key!=="ArrowDown") return;
+      ev.preventDefault();
+      const ids=idsNaTela(), i=ids.indexOf(h.dataset.id), j=ev.key==="ArrowUp"?i-1:i+1;
+      if(i<0 || j<0 || j>=ids.length) return;
+      [ids[i],ids[j]]=[ids[j],ids[i]];
+      salvarOrdemMetasMensais(ids).then(()=>{ const nh=document.querySelector(`.mm-handle[data-id="${h.dataset.id}"]`); if(nh) nh.focus(); });
+      const nh=document.querySelector(`.mm-handle[data-id="${h.dataset.id}"]`); if(nh) nh.focus();
+    });
   });
 }
 function wireMetasMensais(v){
@@ -1504,6 +1717,13 @@ function wireMetasMensais(v){
   };
   if($("#mm-add")) $("#mm-add").onclick=async()=>{
     const novo={id:uid(), mes:todayStr().slice(0,7), texto:"", concluido:false, concluidoEm:null, criadoEm:todayStr()};
+    if(PAINEL_MIGRACAO_OK===true){
+      // a nova meta entra no fim da fila de prioridades; metas antigas ainda
+      // sem ordem recebem a posição em que já aparecem na tela
+      const ativas=metasMensaisAtivas();
+      if(ativas.some(m=>m.ordem==null)) await salvarOrdemMetasMensais(ativas.map(m=>m.id));
+      novo.ordem=ativas.length+1; novo.semana=null; novo.tags=[];
+    }
     DB.data.metasMensais=DB.data.metasMensais||[];
     DB.data.metasMensais.push(novo);
     try{ await sbInsert("metas_mensais", toSnake(novo)); }
@@ -1527,7 +1747,14 @@ function wireMetasMensais(v){
     inp.onchange=async()=>{
       const m=achar(inp.dataset.id); if(m) m.mes=inp.value||null;
       await salvar(inp.dataset.id,{mes:inp.value||null});
-      render();   // reordena por mês
+      if(PAINEL_MIGRACAO_OK!==true) render();   // sem prioridade manual, reordena por mês
+    };
+  });
+  v.querySelectorAll(".mm-sem").forEach(sel=>{
+    sel.onchange=async()=>{
+      const m=achar(sel.dataset.id), sem=sel.value?+sel.value:null, antes=m?m.semana:null;
+      if(m) m.semana=sem;
+      if(!(await salvar(sel.dataset.id,{semana:sem})) && m){ m.semana=antes; render(); }
     };
   });
   v.querySelectorAll(".mm-check").forEach(chk=>{
@@ -1554,12 +1781,13 @@ function wireMetasMensais(v){
       });
     };
   });
+  wireArrasteMetasMensais(v);
 }
 
-/* MCS = atividade da sprint "fixada" no quadro (📍). A linha da tabela mds só
+/* MDS = atividade da sprint "fixada" no quadro (📍). A linha da tabela mds só
    guarda o vínculo (atividadeId) e a data em que foi fixada (semana de
    referência); título, projeto e responsáveis são lidos da atividade ao vivo.
-   Se a atividade for concluída por outro caminho, a MCS sai do quadro sozinha. */
+   Se a atividade for concluída por outro caminho, a MDS sai do quadro sozinha. */
 function mcsAtividadeConcluida(m){
   const at=m.atividadeId?getAtividade(m.atividadeId):null;
   return !!(at && (at.status==="Concluída" || (+at.progresso||0)>=100));
@@ -1896,7 +2124,7 @@ function motivoStatusCalculado(p){
   if(s==="Em andamento") return "Atividades em progresso ou horas já executadas no projeto.";
   return "Ainda não há atividades, horas ou datas indicando início dos trabalhos.";
 }
-/* semana (segunda a domingo) em que uma data cai — usada na "semana de referência" das MCS */
+/* semana (segunda a domingo) em que uma data cai — usada na "semana de referência" das MDS */
 function semanaDaData(d){
   const dow=new Date(d+"T00:00:00").getDay();           // 0=dom ... 6=sáb
   const ini=addDays(d,-(dow===0?6:dow-1));
@@ -2961,6 +3189,26 @@ function renderUserWidget(){
    e responsáveis. Ao escolher, abre o Cronograma Físico do projeto,
    rola até a atividade e a destaca.
    ============================================================ */
+/* SITUAÇÃO AUTOMÁTICA PELA APROPRIAÇÃO DE HORAS (formulário da atividade)
+   - começou a lançar horas executadas e estava "Não iniciada" → "Em andamento";
+   - alguma hora lançada com data DEPOIS do Término previsto → "Atrasada".
+   Não mexe em atividade Concluída ou Cancelada, nem quando o % chega a 100
+   (aí vale a regra de conclusão). Recebe os valores do formulário (v.status,
+   v.dataFimPrev, v.progresso, v.estimativasPessoas[].horasExecLog). */
+function situacaoPelasHoras(v){
+  const st=v.status||"Não iniciada";
+  if(st==="Concluída" || st==="Cancelada") return st;
+  const lanc=[];
+  (Array.isArray(v.estimativasPessoas)?v.estimativasPessoas:[]).forEach(x=>{
+    (Array.isArray(x.horasExecLog)?x.horasExecLog:[]).forEach(e=>{ if(e && (parseFloat(e.horas)||0)>0) lanc.push(e); });
+    // horas antigas, sem quadro de anotações
+    if(!(Array.isArray(x.horasExecLog)&&x.horasExecLog.length) && (parseFloat(x.horasExecutadas)||0)>0) lanc.push({data:"",horas:+x.horasExecutadas});
+  });
+  if(!lanc.length) return st;
+  const fim=v.dataFimPrev||"";
+  if(fim && (parseFloat(v.progresso)||0)<100 && lanc.some(e=>e.data && e.data>fim)) return "Atrasada";
+  return st==="Não iniciada" ? "Em andamento" : st;
+}
 function statusEfetivoAtividade(a){
   const prog=+a.progresso||0;
   const atrasada=a.status!=="Cancelada" && a.dataFimPrev && daysBetween(todayStr(),a.dataFimPrev)<0 && prog<100;
@@ -3233,11 +3481,11 @@ function setTopAction(html,handler){
   if(handler){ const b=c.querySelector("button"); if(b) b.onclick=handler; }
 }
 
-/* ---------- BLOCO MCI / MCS (renderizado no Painel Geral) — nota: os
-   identificadores internos (tabela "mds" no Supabase, ids "mds-add",
-   "mds-texto" etc.) continuam com o nome antigo "mds" de propósito, para
-   não quebrar a ligação com o banco de dados; só o texto exibido na tela
-   mudou de MDS para MCS. ---------- */
+/* ---------- BLOCO MCI / METAS MENSAIS / MDS (renderizado no Painel Geral,
+   um quadro abaixo do outro: MCI → Metas Mensais → MDS). O nome exibido é
+   "MDS — Medidas de Direção Semanal" (chegou a aparecer como "MCS"); os
+   identificadores internos (tabela "mds" no Supabase, ids "mds-…") seguem
+   o mesmo nome. ---------- */
 function mciMdsPainelHtml(){
   const mci=mciAtiva();
   const histMci=mciHistorico();
@@ -3247,6 +3495,7 @@ function mciMdsPainelHtml(){
   const mciHtml = mci
     ? `<textarea id="mci-texto" placeholder="Descreva a Meta Crucialmente Importante atual…"
          style="width:100%;min-height:70px;padding:11px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13.5px;font-weight:600;resize:vertical">${esc(mci.texto||"")}</textarea>
+       ${tagsPickerHtml("mci",mci)}
        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:8px">
          <span class="hint">Definida em ${fmtDate(mci.criadoEm)}</span>
          <div style="display:flex;gap:8px">
@@ -3268,7 +3517,7 @@ function mciMdsPainelHtml(){
       const at=m.atividadeId?getAtividade(m.atividadeId):null;
       const proj=at?getProjeto(at.projetoId):null;
       // espelho da atividade da sprint (sem campos para preencher)
-      const titulo=at?at.nome:(m.texto||"(MCS sem descrição)");
+      const titulo=at?at.nome:(m.texto||"(MDS sem descrição)");
       const nomes=at?nomesResponsaveisAtividade(at,proj):(m.responsavelId&&getColab(m.responsavelId)?[getColab(m.responsavelId).nome]:[]);
       const info=at?`${rotuloProjetoHtml(proj)} · ${at.dataFimPrev?"prazo "+fmtDate(at.dataFimPrev)+" · ":""}${at.progresso||0}% concluído`:"";
       const ref=semanaDaData(m.criadoEm||todayStr());
@@ -3281,14 +3530,15 @@ function mciMdsPainelHtml(){
         ${info?`<div style="font-size:11.5px;color:var(--ink-soft);margin-top:2px">${info}</div>`:""}
         <div style="display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap;margin-top:6px;min-width:0;max-width:100%">
           <span style="font-size:11.5px;background:#f4f6fb;padding:3px 9px;border-radius:5px"><span style="color:var(--ink-faint)">Responsável:</span> <b>${nomes.length?esc(nomes.join(", ")):"<i>não atribuído</i>"}</b></span>
-          <span class="mds-semana" title="Semana (segunda a domingo) em que esta atividade foi fixada como MCS${antiga?" — ainda não concluída, vem de semana anterior":""}"
+          <span class="mds-semana" title="Semana (segunda a domingo) em que esta atividade foi fixada como MDS${antiga?" — ainda não concluída, vem de semana anterior":""}"
             style="box-sizing:border-box;max-width:100%;font-size:11.5px;line-height:1.35;font-weight:600;padding:4px 10px;border-radius:12px;white-space:normal;background:${antiga?"var(--warn-bg)":"var(--info-bg)"};color:${antiga?"var(--warn)":"var(--info)"}">
             📅 Semana de referência: ${fmtDate(ref.ini)} a ${fmtDate(ref.fim)}${antiga?" · semana anterior":""}</span>
         </div>
+        ${tagsPickerHtml("mds",m)}
       </div>
-      <button class="btn-icon del mds-rm" data-id="${m.id}" title="Tirar do quadro de MCS (a atividade continua na sprint)">📍✕</button>
+      <button class="btn-icon del mds-rm" data-id="${m.id}" title="Tirar do quadro de MDS (a atividade continua na sprint)">📍✕</button>
     </div>`;}).join("")
-    : `<div class="empty" style="padding:16px 10px"><span class="ic">📌</span><p>Nenhuma MCS ativa esta semana.</p><p class="hint">Clique no 📍 de uma atividade da Sprint para trazê-la para cá.</p></div>`;
+    : `<div class="empty" style="padding:16px 10px"><span class="ic">📌</span><p>Nenhuma MDS ativa esta semana.</p><p class="hint">Clique no 📍 de uma atividade da Sprint para trazê-la para cá.</p></div>`;
 
   const mdsHtml = `
     ${mdsRows}
@@ -3296,17 +3546,17 @@ function mciMdsPainelHtml(){
       <button class="btn ghost sm" id="mds-hist">🕘 Histórico${histMds.length?` (${histMds.length})`:""}</button>
     </div>`;
 
+  // um quadro abaixo do outro, nesta ordem: MCI → Metas Mensais → MDS
   return `
-  <div class="grid g2" style="grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
-    <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
-      <div class="card">
-        <div class="card-head"><h3>🎯 MCI — Meta Crucialmente Importante</h3></div>
-        <div class="card-pad">${mciHtml}</div>
-      </div>
-      ${metasMensaisCardHtml()}
-    </div>
+  ${avisoMigracaoPainelHtml()}
+  <div style="display:flex;flex-direction:column;gap:18px;margin-bottom:18px;min-width:0">
     <div class="card">
-      <div class="card-head" style="flex-wrap:wrap;row-gap:4px"><h3>📍 MCS — Medidas de Direção Semanal</h3>
+      <div class="card-head"><h3>🎯 MCI — Meta Crucialmente Importante</h3></div>
+      <div class="card-pad">${mciHtml}</div>
+    </div>
+    ${metasMensaisCardHtml()}
+    <div class="card">
+      <div class="card-head" style="flex-wrap:wrap;row-gap:4px"><h3>📍 MDS — Medidas de Direção Semanal</h3>
         <span class="hint">semana corrente · ${fmtDate(semAtualMcs.ini)} a ${fmtDate(semAtualMcs.fim)}</span>
         <span class="hint" style="flex-basis:100%">Espelho das atividades da Sprint marcadas com 📍 · concluída → sai da lista e vai pro histórico</span></div>
       <div class="card-pad">${mdsHtml}</div>
@@ -3314,7 +3564,7 @@ function mciMdsPainelHtml(){
   </div>`;
 }
 
-/* Marca/desmarca uma atividade da SPRINT como MCS. Cria (ou remove) uma linha na
+/* Marca/desmarca uma atividade da SPRINT como MDS. Cria (ou remove) uma linha na
    tabela "mds" ligada à atividade (colunas atividade_id e projeto_id). */
 async function alternarAtividadeComoMcs(atividadeId){
   const at=getAtividade(atividadeId); if(!at) return;
@@ -3322,8 +3572,8 @@ async function alternarAtividadeComoMcs(atividadeId){
   const existente=DB.data.mds.find(m=>!m.concluido && m.atividadeId===atividadeId);
   if(existente){
     DB.data.mds=DB.data.mds.filter(m=>m.id!==existente.id);
-    try{ await sbDelete("mds", existente.id); toast("Atividade removida do quadro de MCS."); }
-    catch(e){ DB.data.mds.push(existente); toast("Erro ao remover MCS: "+e.message); }
+    try{ await sbDelete("mds", existente.id); toast("Atividade removida do quadro de MDS."); }
+    catch(e){ DB.data.mds.push(existente); toast("Erro ao remover MDS: "+e.message); }
     render(); return;
   }
   // se houver um único responsável interno identificável, já preenche
@@ -3332,10 +3582,10 @@ async function alternarAtividadeComoMcs(atividadeId){
   const novo={id:uid(), texto:at.nome, responsavelId:interno?interno.id:null,
     criadoEm:todayStr(), concluido:false, concluidoEm:null, atividadeId:at.id, projetoId:at.projetoId};
   DB.data.mds.push(novo);
-  try{ await sbInsert("mds", toSnake(novo)); toast("Atividade adicionada ao quadro de MCS. 📍"); }
+  try{ await sbInsert("mds", toSnake(novo)); toast("Atividade adicionada ao quadro de MDS. 📍"); }
   catch(e){
     DB.data.mds=DB.data.mds.filter(m=>m.id!==novo.id);
-    toast("Erro ao criar MCS (confira se as colunas atividade_id e projeto_id existem na tabela mds): "+e.message);
+    toast("Erro ao criar MDS (confira se as colunas atividade_id e projeto_id existem na tabela mds): "+e.message);
   }
   render();
 }
@@ -3350,6 +3600,7 @@ function abrirHistoricoMci(){
         <div style="border-bottom:1px solid var(--line-soft);padding:10px 0">
           <div style="font-weight:600">${esc(m.texto||"(sem descrição)")}</div>
           <div class="hint">Concluída em ${fmtDate(m.concluidoEm)} · definida em ${fmtDate(m.criadoEm)}</div>
+          ${tagsChipsHtml(m)}
         </div>`).join("") : `<div class="empty"><span class="ic">🎯</span><p>Nenhuma MCI concluída ainda.</p></div>`}
     </div>
     <div class="modal-foot"><button class="btn ghost" id="hm-close">Fechar</button></div>
@@ -3361,7 +3612,7 @@ function abrirHistoricoMds(){
   const lista=mdsHistorico();
   $("#modal-root").innerHTML=`
   <div class="overlay"><div class="modal">
-    <div class="modal-head"><h3>🕘 Histórico de MCS concluídas</h3><button class="btn-icon" id="hd-x">✕</button></div>
+    <div class="modal-head"><h3>🕘 Histórico de MDS concluídas</h3><button class="btn-icon" id="hd-x">✕</button></div>
     <div class="modal-body" style="max-height:60vh;overflow:auto">
       ${lista.length? lista.map(m=>{
         const atH=m.atividadeId?getAtividade(m.atividadeId):null;
@@ -3370,8 +3621,9 @@ function abrirHistoricoMds(){
         return `<div style="border-bottom:1px solid var(--line-soft);padding:10px 0">
           <div style="font-weight:600">${esc(atH?atH.nome:(m.texto||"(sem descrição)"))}</div>
           <div class="hint">Responsável: ${nomesH.length?esc(nomesH.join(", ")):"—"} · semana de referência: ${(()=>{const r=semanaDaData(m.criadoEm||m.concluidoEm||todayStr());return fmtDate(r.ini)+" a "+fmtDate(r.fim);})()} · concluída em ${fmtDate(m.concluidoEm)}</div>
+          ${tagsChipsHtml(m)}
         </div>`;
-      }).join("") : `<div class="empty"><span class="ic">📍</span><p>Nenhuma MCS concluída ainda.</p></div>`}
+      }).join("") : `<div class="empty"><span class="ic">📍</span><p>Nenhuma MDS concluída ainda.</p></div>`}
     </div>
     <div class="modal-foot"><button class="btn ghost" id="hd-close">Fechar</button></div>
   </div></div>`;
@@ -3408,6 +3660,7 @@ function wirePainelMciMds(v){
   if($("#mci-hist")) $("#mci-hist").onclick=abrirHistoricoMci;
 
   wireMetasMensais(v);
+  wirePainelTags(v);
 
   if($("#mds-hist")) $("#mds-hist").onclick=abrirHistoricoMds;
   v.querySelectorAll(".mds-check").forEach(chk=>{
@@ -3417,10 +3670,10 @@ function wirePainelMciMds(v){
       item.concluido=true; item.concluidoEm=todayStr();
       try{
         await sbUpdate("mds", item.id, {concluido:true, concluido_em:item.concluidoEm});
-        toast("MCS concluída e arquivada no histórico.");
-      }catch(e){ toast("Erro ao concluir MCS: "+e.message); return render(); }
+        toast("MDS concluída e arquivada no histórico.");
+      }catch(e){ toast("Erro ao concluir MDS: "+e.message); return render(); }
       render();
-      // MCS vinda de uma atividade da sprint: conclui também a atividade
+      // MDS vinda de uma atividade da sprint: conclui também a atividade
       // (abre a confirmação com datas reais e horas executadas)
       const ativ=item.atividadeId?getAtividade(item.atividadeId):null;
       if(ativ && ativ.status!=="Concluída" && (+ativ.progresso||0)<100) marcarAtividadeConcluidaRapido(ativ.id);
@@ -3428,7 +3681,7 @@ function wirePainelMciMds(v){
   });
   v.querySelectorAll(".mds-rm").forEach(b=>{
     b.onclick=()=>{
-      confirmar("Tirar do quadro de MCS?","A atividade continua na Sprint; só deixa de ser uma MCS (não vai para o histórico).", async()=>{
+      confirmar("Tirar do quadro de MDS?","A atividade continua na Sprint; só deixa de ser uma MDS (não vai para o histórico).", async()=>{
         const id=b.dataset.id;
         DB.data.mds=DB.data.mds.filter(m=>m.id!==id);
         try{ await sbDelete("mds", id); }
@@ -3551,12 +3804,12 @@ function viewPainel(v){
     // anotações de progresso da atividade (preenchidas em "Editar atividade",
     // logo abaixo de "% Concluído"), exibidas aqui para dar contexto rápido
     // do andamento sem precisar abrir a atividade.
-    // ITEM 3: botão "marcar como MCS" nas atividades da SPRINT
+    // ITEM 3: botão "marcar como MDS" nas atividades da SPRINT
     const mcsAtiva=(a.tipo==="fisico" && a.secao==="sprint")
       ? (DB.data.mds||[]).find(m=>!m.concluido && m.atividadeId===a.atividadeId) : null;
     const mcsBtnHtml=(a.tipo==="fisico" && a.secao==="sprint")
       ? `<div class="alert-acoes"><button class="btn-icon ${mcsAtiva?"mcs-on":""}" data-alerta-mcs="${a.atividadeId}"
-           title="${mcsAtiva?"Já é uma MCS desta semana — clique para remover do quadro de MCS":"Escolher esta atividade como MCS (aparece no quadro de MCS)"}">📍</button></div>` : "";
+           title="${mcsAtiva?"Já é uma MDS desta semana — clique para remover do quadro de MDS":"Escolher esta atividade como MDS (aparece no quadro de MDS)"}">📍</button></div>` : "";
     const notasHtml=(a.tipo==="fisico" && a.notasProgresso)
       ? `<div class="alert-resp" style="white-space:pre-line"><span class="rl">Anotações:</span> ${esc(a.notasProgresso)}</div>`
       : "";
@@ -6795,6 +7048,11 @@ function viewConfig(v){
     <td>${esc(r.nome)}</td>
     <td class="actions"><button class="btn-icon" data-edrub="${r.id}">✎</button>
       <button class="btn-icon del" data-dlrub="${r.id}">🗑</button></td></tr>`).join("");
+  const ptagsOk=PAINEL_MIGRACAO_OK===true;
+  const ptags=painelTags().map(t=>`<tr>
+    <td>${chipPainelTagHtml(t,null)}</td>
+    <td class="actions"><button class="btn-icon" data-edptag="${t.id}" title="Editar TAG">✎</button>
+      <button class="btn-icon del" data-dlptag="${t.id}" title="Excluir TAG">🗑</button></td></tr>`).join("");
 
   v.innerHTML=`
   <div class="grid g2">
@@ -6805,6 +7063,15 @@ function viewConfig(v){
     <div class="card">
       <div class="card-head"><h3>Rubricas de despesa</h3><button class="btn ghost sm" id="add-rub">+ Adicionar</button></div>
       <div class="table-wrap"><table><tbody>${rubs||`<tr><td style="color:var(--ink-faint);padding:18px">Nenhuma rubrica.</td></tr>`}</tbody></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head" style="flex-wrap:wrap;row-gap:4px"><h3>🏷️ TAGs dos painéis</h3>
+        <button class="btn ghost sm" id="add-ptag" ${ptagsOk?"":"disabled"}>+ Adicionar</button>
+        <span class="hint" style="flex-basis:100%">Usadas na MCI, nas Metas Mensais e na MDS do Painel Geral</span></div>
+      ${ptagsOk?"":`<div class="card-pad"><div class="form-err" style="display:block">
+        As TAGs ainda não existem no banco. Rode uma vez no SQL Editor do Supabase e recarregue a página:
+        <code style="user-select:all;white-space:pre-wrap;display:block;margin-top:6px;font-size:11.5px">${esc(SQL_PAINEL_TAGS)}</code></div></div>`}
+      ${ptagsOk?`<div class="table-wrap"><table><tbody>${ptags||`<tr><td style="color:var(--ink-faint);padding:18px">Nenhuma TAG cadastrada.</td></tr>`}</tbody></table></div>`:""}
     </div>
   </div>
   <div style="height:18px"></div>
@@ -6864,6 +7131,28 @@ function viewConfig(v){
       DB.data.rubricas=DB.data.rubricas.filter(x=>x.id!==rid);
       await sbDelete("rubricas", rid);
       toast("Rubrica removida."); render();
+    });
+  });
+  $("#add-ptag").onclick=()=>formPainelTag();
+  v.querySelectorAll("[data-edptag]").forEach(b=>b.onclick=()=>formPainelTag(getPainelTag(b.dataset.edptag)));
+  v.querySelectorAll("[data-dlptag]").forEach(b=>b.onclick=()=>{
+    const t=getPainelTag(b.dataset.dlptag); if(!t) return;
+    confirmar(`Excluir a TAG "${t.nome}"?`,"Ela sai da lista e de todos os itens da MCI, Metas Mensais e MDS em que estiver marcada.",async()=>{
+      try{
+        await sbDelete("painel_tags", t.id);
+        PTAGS.lista=PTAGS.lista.filter(x=>x.id!==t.id);
+        // limpa a TAG dos itens que a usavam
+        const limpezas=[];
+        Object.values(PTAG_ALVO).forEach(alvo=>alvo.lista().forEach(it=>{
+          if(Array.isArray(it.tags) && it.tags.includes(t.id)){
+            it.tags=it.tags.filter(x=>x!==t.id);
+            limpezas.push(sbUpdate(alvo.tabela,it.id,{tags:it.tags}));
+          }
+        }));
+        await Promise.all(limpezas);
+        toast("TAG excluída.");
+      }catch(e){ toast("Erro ao excluir a TAG: "+e.message); }
+      render();
     });
   });
   $("#exp").onclick=exportarBackup;
@@ -8416,7 +8705,8 @@ function openForm(cfg){
           ${log.length?`<div style="display:flex;gap:6px;font-size:10.5px;color:var(--ink-faint);font-weight:600;text-transform:uppercase;margin-bottom:4px">
             <span style="width:128px;flex-shrink:0">Data</span><span style="flex:1">Anotação</span><span style="width:78px;flex-shrink:0">Horas exec.</span><span style="width:26px;flex-shrink:0"></span></div>`:""}
           ${log.map((e,j)=>`<div class="estim-log" data-j="${j}" style="display:flex;gap:6px;align-items:flex-start;margin-bottom:6px">
-            <input type="date" data-lrole="data" value="${esc(e.data||"")}" style="width:128px;flex-shrink:0">
+            <input type="date" data-lrole="data" value="${esc(e.data||"")}" style="width:128px;flex-shrink:0"
+              class="${e._novo&&!e.data?"falta-data":""}" title="${e._novo&&!e.data?"Informe a data em que as horas foram executadas (pode ser retroativa)":"Data do lançamento"}">
             <textarea data-lrole="nota" rows="2" placeholder="O que foi feito, pendências, próximos passos…" style="flex:1;min-width:0;resize:vertical">${esc(e.nota||"")}</textarea>
             <input type="number" min="0" step="0.5" data-lrole="horas" placeholder="h" value="${e.horas!==""&&e.horas!=null?e.horas:""}" style="width:78px;flex-shrink:0">
             <button type="button" class="btn-icon del" data-lrole="rm" title="Remover lançamento" style="width:26px;flex-shrink:0">✕</button>
@@ -8435,7 +8725,7 @@ function openForm(cfg){
         </select>
         <input type="number" min="0" step="0.5" data-erole="horas" placeholder="Horas" value="${item.horas!=null&&item.horas!==""?item.horas:""}" style="width:90px;flex-shrink:0" title="Horas previstas">
         <button type="button" class="btn ghost sm" data-erole="ok" style="width:76px;flex-shrink:0;justify-content:center"
-          title="Lança no quadro as horas que faltam para completar as previstas (hoje)">✓ OK</button>
+          title="Lança no quadro as horas que faltam para completar as previstas — depois informe a data em que foram executadas">✓ OK</button>
         <input type="number" data-erole="horasExec" placeholder="0" value="${horasExec}" readonly tabindex="-1" style="width:100px;flex-shrink:0;background:#f1f4fa" title="Soma das horas lançadas no quadro de anotações abaixo">
         <button type="button" class="btn-icon del" data-erole="rm" title="Remover">✕</button>
       </div>${boardHtml(item,idx)}`;
@@ -8465,10 +8755,15 @@ function openForm(cfg){
           board.addEventListener("toggle",()=>{ it._open=board.open; });
           board.querySelectorAll(".estim-log").forEach(lr=>{
             const j=+lr.dataset.j;
-            lr.querySelector('[data-lrole="data"]').oninput=ev=>{ it.horasExecLog[j].data=ev.target.value; };
+            lr.querySelector('[data-lrole="data"]').oninput=ev=>{
+              it.horasExecLog[j].data=ev.target.value;
+              ev.target.classList.toggle("falta-data", !!it.horasExecLog[j]._novo && !ev.target.value);
+              avisar();   // a data pode tornar a atividade "Atrasada" (depois do Término previsto)
+            };
             // ao sair do campo de data, reposiciona a anotação na ordem cronológica
             // (só redesenha se a ordem mudou, para não atrapalhar a digitação)
             lr.querySelector('[data-lrole="data"]').onblur=()=>{
+              if(!it.horasExecLog[j] || !it.horasExecLog[j].data) return;   // sem data: fica onde está
               const ord=ordenarLogExecucao(it.horasExecLog);
               if(ord.some((e,k)=>e!==it.horasExecLog[k])){ it.horasExecLog=ord; it._open=true; renderRows(); }
             };
@@ -8477,8 +8772,11 @@ function openForm(cfg){
             lr.querySelector('[data-lrole="rm"]').onclick=()=>{ it.horasExecLog.splice(j,1); it._open=true; sincronizarTotal(it); renderRows(); avisar(); };
           });
           board.querySelector('[data-erole="addlog"]').onclick=()=>{
-            it.horasExecLog.push({data:todayStr(),horas:"",nota:""}); it._open=true; renderRows();
-            const ult=container().querySelectorAll(`.estim-board[data-idx="${idx}"] .estim-log textarea`); if(ult.length) ult[ult.length-1].focus();
+            // a data NÃO é mais preenchida com hoje: o lançamento pode ser retroativo,
+            // e uma data automática induzia ao erro. É obrigatória ao salvar.
+            it.horasExecLog.push({data:"",horas:"",nota:"",_novo:true}); it._open=true; renderRows();
+            const novoIdx=it.horasExecLog.length-1;
+            const campo=container().querySelector(`.estim-board[data-idx="${idx}"] .estim-log[data-j="${novoIdx}"] [data-lrole="data"]`); if(campo) campo.focus();
           };
         }
         // "OK": entende que a pessoa cumpriu exatamente as horas previstas —
@@ -8488,8 +8786,11 @@ function openForm(cfg){
         btnOk.onclick=()=>{
           const falta=Math.round(((parseFloat(inpHoras.value)||0)-somaLog(it))*100)/100;
           if(!(falta>0)){ toast(parseFloat(inpHoras.value)>0?"As horas previstas já foram todas lançadas.":"Informe antes as horas previstas."); return; }
-          it.horasExecLog.push({data:todayStr(),horas:falta,nota:"Conforme previsto"});
+          it.horasExecLog.push({data:"",horas:falta,nota:"Conforme previsto",_novo:true});
           it._open=true; sincronizarTotal(it); renderRows(); avisar();
+          const novoIdx=it.horasExecLog.length-1;
+          const campo=container().querySelector(`.estim-board[data-idx="${idx}"] .estim-log[data-j="${novoIdx}"] [data-lrole="data"]`); if(campo) campo.focus();
+          toast("Horas lançadas. Informe a data em que foram executadas.");
         };
         btnRm.onclick=()=>{ vals[f.key].splice(idx,1); renderRows(); avisar(); };
       });
@@ -8821,6 +9122,18 @@ function formAtividade(projetoId,a,opts){
       .map(co=>({value:co.id,label:co.nome+(co.tipo==="parceiro"?" (parceiro)":"")})),
     help:"Pessoa(s) responsável(is) por esta atividade. É preenchido automaticamente com quem aponta horas nela, e pode ser ajustado aqui a qualquer momento — inclusive marcando mais de uma pessoa."
   };
+  // situação "de base" escolhida pela pessoa (ou a gravada); a situação exibida é
+  // ela ajustada pelas horas lançadas — ver situacaoPelasHoras(). Assim, se a
+  // data de um lançamento for corrigida, a situação automática também volta.
+  let situacaoBase=(a&&a.status)||"Não iniciada";
+  const aplicarSituacaoPelasHoras=(vv,gridEl)=>{
+    const nova=situacaoPelasHoras(Object.assign({},vv,{status:situacaoBase}));
+    if(nova===vv.status) return;
+    vv.status=nova;
+    const sel=gridEl&&gridEl.querySelector('[data-k="status"]'); if(sel) sel.value=nova;
+    toast(nova==="Atrasada"?"Situação: Atrasada — há horas lançadas depois do Término previsto."
+      :`Situação ajustada para "${nova}" pelas horas lançadas.`);
+  };
   openForm({
     title:edit?"Editar atividade":"Nova atividade",
     wide:true,
@@ -8853,7 +9166,7 @@ function formAtividade(projetoId,a,opts){
         help:"Data em que a atividade de fato terminou. Marque \"Mesmo do previsto\" para replicar automaticamente o Término previsto."},
       {key:"status",label:"Situação",type:"select",
         options:STATUS_ATIV.map(s=>({value:s,label:s})),
-        help:"Marcar como \"Concluída\" preenche automaticamente 100% em % Concluído."},
+        help:"Marcar como \"Concluída\" preenche automaticamente 100% em % Concluído. Ao lançar horas executadas, passa sozinha para \"Em andamento\"; se alguma hora for lançada com data depois do Término previsto, vira \"Atrasada\"."},
       {key:"progresso",label:"% Concluído",type:"number",min:0,
         help:"Valor de 0 a 100. Preenchido automaticamente pelas horas executadas ÷ previstas (você pode ajustar à mão).",placeholder:"0"},
       ...((a&&a.notasProgresso&&String(a.notasProgresso).trim())?[{key:"notasProgresso",label:"Anotações anteriores (texto único)",type:"textarea",full:true,
@@ -8862,7 +9175,7 @@ function formAtividade(projetoId,a,opts){
         type:"estimativas",full:true,dynamic:true,
         optionsFn:()=>[...getInternos(),...getParceirosDoProjeto(getProjeto(projetoId))]
           .map(co=>({value:co.id,label:co.nome+(co.tipo==="parceiro"?" (parceiro)":"")})),
-        help:"Escolha cada colaborador (interno ou parceiro vinculado a este projeto) e a quantidade de horas previstas para ele nesta atividade. Usado para calcular a ocupação da equipe no calendário, distribuída ao longo dos dias úteis entre início e término previstos. Em cada colaborador, abra \"Anotações de progresso\" e lance data, anotação e horas executadas: a \"Executada\" é a soma desses lançamentos. O botão \"OK\" lança de uma vez as horas que faltam para completar as previstas.",
+        help:"Escolha cada colaborador (interno ou parceiro vinculado a este projeto) e a quantidade de horas previstas para ele nesta atividade. Usado para calcular a ocupação da equipe no calendário, distribuída ao longo dos dias úteis entre início e término previstos. Em cada colaborador, abra \"Anotações de progresso\" e lance data, anotação e horas executadas: a \"Executada\" é a soma desses lançamentos. O botão \"OK\" lança de uma vez as horas que faltam para completar as previstas. A data de cada lançamento não é preenchida sozinha: informe a data em que as horas foram de fato executadas (pode ser retroativa).",
         prefillButton: (a && !semRaci) ? {
           label:"↺ Puxar quem está em \"R\" na RACI",
           msgVazio:"Ninguém novo marcado como \"R\" na RACI desta atividade (ou já foram todos adicionados aqui).",
@@ -8881,21 +9194,43 @@ function formAtividade(projetoId,a,opts){
       const lista=Array.isArray(vv.estimativasPessoas)?vv.estimativasPessoas:[];
       const prev=lista.reduce((t,x)=>t+(parseFloat(x.horas)||0),0);
       const algumaExec=lista.some(x=>x.horasExecutadas!==""&&x.horasExecutadas!=null);
-      if(prev<=0||!algumaExec) return;
-      const exec=lista.reduce((t,x)=>t+(parseFloat(x.horasExecutadas)||0),0);
-      const pct=Math.max(0,Math.min(100,Math.round(exec/prev*100)));
-      vv.progresso=pct;
-      const inp=gridEl.querySelector('[data-k="progresso"]');
-      if(inp) inp.value=pct;
+      if(prev>0 && algumaExec){
+        const exec=lista.reduce((t,x)=>t+(parseFloat(x.horasExecutadas)||0),0);
+        const pct=Math.max(0,Math.min(100,Math.round(exec/prev*100)));
+        vv.progresso=pct;
+        const inp=gridEl.querySelector('[data-k="progresso"]');
+        if(inp) inp.value=pct;
+      }
+      // horas lançadas → "Em andamento"; lançadas depois do Término previsto → "Atrasada"
+      aplicarSituacaoPelasHoras(vv,gridEl);
     },
     onFieldChange:(vv,key,gridEl)=>{
-      if(key==="status" && vv.status==="Concluída"){
-        vv.progresso=100;
-        const inp=gridEl.querySelector('[data-k="progresso"]');
-        if(inp) inp.value=100;
+      if(key==="status"){
+        situacaoBase=vv.status||"Não iniciada";   // escolha manual da pessoa
+        if(vv.status==="Concluída"){
+          vv.progresso=100;
+          const inp=gridEl.querySelector('[data-k="progresso"]');
+          if(inp) inp.value=100;
+        }
+        return;
       }
+      if(key==="dataFimPrev" || key==="progresso") aplicarSituacaoPelasHoras(vv,gridEl);
     },
     onSave:async(v)=>{
+      // lançamentos de horas/anotações NOVOS precisam de data (não é mais preenchida
+      // automaticamente com hoje, porque o trabalho pode ter sido feito antes)
+      const semDataNovos=[];
+      (Array.isArray(v.estimativasPessoas)?v.estimativasPessoas:[]).forEach(x=>{
+        const n=(Array.isArray(x.horasExecLog)?x.horasExecLog:[])
+          .filter(e=>e && e._novo && !e.data && ((parseFloat(e.horas)||0)>0 || String(e.nota||"").trim())).length;
+        if(n){ const c=getColab(x.colaboradorId); semDataNovos.push(`${c?c.nome:"colaborador sem nome"} (${n})`); }
+      });
+      if(semDataNovos.length){
+        const eData=new Error("Informe a data de cada lançamento novo nas Anotações de progresso — ela não é mais preenchida automaticamente, "+
+          "porque as horas podem ter sido executadas em outro dia. Faltando data: "+semDataNovos.join(", ")+".");
+        eData.validacao=true; throw eData;
+      }
+      v.status=situacaoPelasHoras(v);
       // o banco aceita só UM nome de atividade por projeto: avisa antes de tentar gravar
       const nomeNovo=String(v.nome||"").trim();
       const colide=DB.data.atividades.find(x=>x.projetoId===projetoId && (!a||x.id!==a.id) && String(x.nome||"").trim()===nomeNovo);
@@ -9163,6 +9498,39 @@ function formCategoria(c){
         DB.data.categorias.push(nova);
         await sbInsert("categorias", toSnake(nova));
         toast("Categoria criada.");
+      }
+      render();
+    }
+  });
+}
+
+/* ---- FORM: TAG DOS PAINÉIS (MCI · Metas Mensais · MDS) ---- */
+function formPainelTag(t){
+  const edit=!!t;
+  const usadas=new Set(painelTags().map(x=>corPainelTag(x).toLowerCase()));
+  const corLivre=PALETTE.find(c=>!usadas.has(c.toLowerCase()))||PALETTE[painelTags().length%PALETTE.length];
+  openForm({
+    title:edit?"Editar TAG":"Nova TAG dos painéis",
+    values:t?{nome:t.nome,cor:corPainelTag(t)}:{cor:corLivre},
+    fields:[
+      {key:"nome",label:"Nome da TAG",required:true,full:true,placeholder:"Ex.: Captação"},
+      {key:"cor",label:"Cor",type:"color",full:true}
+    ],
+    onSave:async(v)=>{
+      const nome=String(v.nome||"").trim();
+      if(!nome){ const e=new Error("Informe o nome da TAG."); e.validacao=true; throw e; }
+      const repetida=painelTags().find(x=>(!t||x.id!==t.id) && normTxt(x.nome)===normTxt(nome));
+      if(repetida){ const e=new Error(`Já existe a TAG "${repetida.nome}".`); e.validacao=true; throw e; }
+      const cor=/^#[0-9a-f]{6}$/i.test(v.cor||"")?v.cor:corLivre;
+      if(edit){
+        await sbUpdate("painel_tags", t.id, {nome, cor});
+        Object.assign(t,{nome,cor});
+        toast("TAG atualizada.");
+      } else {
+        const nova={id:uid(), nome, cor, ordem:painelTags().reduce((mx,x)=>Math.max(mx,+x.ordem||0),0)+1};
+        await sbInsert("painel_tags", toSnake(nova));
+        PTAGS.lista.push(nova);
+        toast("TAG criada.");
       }
       render();
     }
