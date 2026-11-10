@@ -434,6 +434,10 @@
   .user-pick .nm{font-weight:600;font-size:14px}
   .user-pick .rl{font-size:11.5px;color:var(--ink-faint);margin-top:1px}
 
+  /* ---- Saídas e entregas: balão com o texto completo ao passar o cursor ---- */
+  #tip-saida-full{position:fixed;z-index:99999;display:none;max-width:min(560px,92vw);padding:10px 13px;border-radius:9px;
+    background:#0f1f3d;color:#fff;font-size:13px;line-height:1.5;font-weight:500;white-space:pre-wrap;overflow-wrap:anywhere;
+    box-shadow:0 8px 24px rgba(15,31,61,.3);pointer-events:none}
   /* ---- Painel Geral: TAGs (MCI · Metas Mensais · MDS) ---- */
   .ptags{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px;min-width:0}
   .ptag{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;line-height:1.3;
@@ -1578,10 +1582,12 @@ function avaliarRecalculoCronograma(proj, atividadeBase, atrasoDias){
 }
 
 
-function mciAtiva(){
-  const lista=(DB.data.mci||[]).filter(m=>!m.concluido)
-    .sort((a,b)=>(a.criadoEm||"").localeCompare(b.criadoEm||""));
-  return lista.length? lista[lista.length-1] : null;
+/* várias MCIs ativas ao mesmo tempo (botão "+ MCI"); ordem = data de criação */
+function mciAtivas(){
+  return (DB.data.mci||[]).filter(m=>!m.concluido)
+    .map((m,i)=>({m,i}))
+    .sort((a,b)=>(a.m.criadoEm||"").localeCompare(b.m.criadoEm||"")||a.i-b.i)
+    .map(x=>x.m);
 }
 function mciHistorico(){
   return (DB.data.mci||[]).filter(m=>m.concluido)
@@ -2125,7 +2131,54 @@ function statusBadge(s){
    nova); lançamentos sem data ficam no topo. Ordenação estável: no mesmo dia,
    mantém a ordem em que foram lançados. */
 function ordenarLogExecucao(log){
-  return (log||[]).map((e,i)=>({e,i})).sort((a,b)=>(a.e.data||"").localeCompare(b.e.data||"")||a.i-b.i).map(x=>x.e);
+  /* MAIS RECENTE NO TOPO. Grupos: 0 = lançamento novo ainda sem data (fica no topo
+     para ser preenchido) · 1 = com data (da mais nova para a mais antiga) ·
+     2 = antigo sem data (fim da lista). Empate: mantém a ordem em que estava. */
+  const grupo=e=>e.data?1:(e._novo?0:2);
+  return (log||[]).map((e,i)=>({e,i})).sort((a,b)=>{
+    const ga=grupo(a.e), gb=grupo(b.e);
+    if(ga!==gb) return ga-gb;
+    if(ga===1){ const c=(b.e.data||"").localeCompare(a.e.data||""); if(c) return c; }
+    return a.i-b.i;
+  }).map(x=>x.e);
+}
+/* ---- anotações em TEXTO (campo antigo "notasProgresso"): cada anotação começa com
+   uma data no início da linha (28/09 - …, [06/11/2026] …). Linhas sem data continuam
+   a anotação anterior. Sem ano, assume o ano corrente (ou o anterior, se a data
+   ficaria mais de 45 dias no futuro). ---- */
+function isoDiaMesNota(d,m,y){
+  if(!(m>=1&&m<=12&&d>=1&&d<=31)) return "";
+  const hoje=todayStr();
+  let ano;
+  if(y){ ano=+y; if(ano<100) ano+=2000; }
+  else{
+    ano=+hoje.slice(0,4);
+    if(daysBetween(hoje, ano+"-"+pad(m)+"-"+pad(d))>45) ano-=1;
+  }
+  return ano+"-"+pad(m)+"-"+pad(d);
+}
+function entradasNotasTexto(txt){
+  const re=/^\s*\[?(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\]?(?![\d\/])/;
+  const out=[];
+  String(txt||"").split(/\r?\n/).forEach(l=>{
+    if(!l.trim()) return;
+    const m=l.match(re);
+    if(m) out.push({iso:isoDiaMesNota(+m[1],+m[2],m[3]), texto:l});
+    else if(out.length) out[out.length-1].texto+="\n"+l;
+    else out.push({iso:"", texto:l});
+  });
+  return out;
+}
+function ordenarEntradasNotas(lista){
+  return lista.map((e,i)=>({e,i})).sort((a,b)=>{
+    const da=a.e.iso||"", db=b.e.iso||"";
+    if(da&&db){ const c=db.localeCompare(da); if(c) return c; }
+    else if(da||db) return da?-1:1;      // sem data vai para o fim
+    return a.i-b.i;
+  }).map(x=>x.e);
+}
+function ordenarNotasTexto(txt){
+  return ordenarEntradasNotas(entradasNotasTexto(txt)).map(e=>e.texto).join("\n");
 }
 function atualizarLogExecucao(itemAnterior,novoTotal,opts){
   opts=opts||{};
@@ -2144,16 +2197,17 @@ function atualizarLogExecucao(itemAnterior,novoTotal,opts){
     }
   } else if(delta<-0.0001){
     let resta=-delta;
-    for(let i=log.length-1;i>=0&&resta>0.0001;i--){ const t=Math.min(log[i].horas,resta); log[i].horas-=t; resta-=t; }
+    for(let i=0;i<log.length&&resta>0.0001;i++){ const t=Math.min(log[i].horas,resta); log[i].horas-=t; resta-=t; }   // tira primeiro das mais recentes
   }
-  return log.filter(e=>e.horas>0.0001 || e.nota);
+  return ordenarLogExecucao(log.filter(e=>e.horas>0.0001 || e.nota));
 }
 /* texto curto com as anotações de progresso lançadas pelos colaboradores
    (as 3 mais recentes) + o texto único antigo, se ainda existir — usado no
    alerta do Painel Geral e nos relatórios */
 function textoAnotacoesAtividade(a){
-  const partes=[];
-  if(a.notasProgresso && String(a.notasProgresso).trim()) partes.push(String(a.notasProgresso).trim());
+  // tudo em ordem da data MAIS RECENTE para a mais antiga (sem data, no fim)
+  const ent=[];
+  if(a.notasProgresso && String(a.notasProgresso).trim()) ent.push(...entradasNotasTexto(String(a.notasProgresso).trim()));
   const reg=[];
   (a.estimativasPessoas||[]).forEach(x=>{
     const c=getColab(x.colaboradorId);
@@ -2162,11 +2216,11 @@ function textoAnotacoesAtividade(a){
     });
   });
   reg.sort((p,q)=>(q.data||"").localeCompare(p.data||""));
-  reg.slice(0,3).reverse().forEach(r=>{
+  reg.slice(0,3).forEach(r=>{
     const d=r.data?r.data.slice(8,10)+"/"+r.data.slice(5,7)+" · ":"";
-    partes.push(`${d}${r.nome?r.nome+": ":""}${r.nota}${r.horas>0?` (${fmtNum(r.horas,1)}h)`:""}`);
+    ent.push({iso:r.data||"", texto:`${d}${r.nome?r.nome+": ":""}${r.nota}${r.horas>0?` (${fmtNum(r.horas,1)}h)`:""}`});
   });
-  return partes.join("\n");
+  return ordenarEntradasNotas(ent).map(e=>e.texto).join("\n");
 }
 /* separa o total executado de um item em {log:[{data,horas}], legado:horas sem data} */
 function partesExecucaoItem(x){
@@ -3768,40 +3822,32 @@ function setTopAction(html,handler){
    identificadores internos (tabela "mds" no Supabase, ids "mds-…") seguem
    o mesmo nome. ---------- */
 function mciMdsPainelHtml(){
-  const mci=mciAtiva();
+  const mcis=mciAtivas();
   const histMci=mciHistorico();
   const mdsList=mdsAtivas();
   const histMds=mdsHistorico();
 
-  const mciHtml = (mci && !isGestor())
-    ? `<div style="padding:11px;border:1px solid var(--line-soft);border-radius:8px;background:#fafbfc;font-size:13.5px;font-weight:600;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere">${esc(mci.texto||"(sem descrição)")}</div>
-       ${tagsChipsHtml(mci)}
-       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:8px">
-         <span class="hint">Definida em ${fmtDate(mci.criadoEm)} · só o Gestor altera</span>
-         <button class="btn ghost sm" id="mci-hist">🕘 Histórico${histMci.length?` (${histMci.length})`:""}</button>
-       </div>`
-    : (!mci && !isGestor())
-    ? `<div class="empty" style="padding:20px 10px"><span class="ic">🎯</span><p>Nenhuma MCI ativa no momento.</p>
-         ${histMci.length?`<button class="btn ghost sm" id="mci-hist">🕘 Histórico (${histMci.length})</button>`:""}</div>`
-    : mci
-    ? `<textarea id="mci-texto" class="auto-altura" rows="2" placeholder="Descreva a Meta Crucialmente Importante atual…"
-         style="width:100%;min-height:70px;padding:11px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13.5px;font-weight:600;line-height:1.45;resize:none;overflow:hidden">${esc(mci.texto||"")}</textarea>
-       ${tagsPickerHtml("mci",mci)}
-       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:8px">
-         <span class="hint">Definida em ${fmtDate(mci.criadoEm)}</span>
-         <div style="display:flex;gap:8px">
-           <button class="btn ghost sm" id="mci-hist">🕘 Histórico${histMci.length?` (${histMci.length})`:""}</button>
-           <button class="btn sm" id="mci-concluir">✓ Marcar como concluída</button>
-         </div>
-       </div>`
-    : `<div class="empty" style="padding:20px 10px">
-         <span class="ic">🎯</span>
-         <p>Nenhuma MCI ativa no momento.</p>
-         <div style="display:flex;gap:8px;justify-content:center;margin-top:8px;flex-wrap:wrap">
-           <button class="btn sm" id="mci-nova">+ Definir MCI</button>
-           ${histMci.length?`<button class="btn ghost sm" id="mci-hist">🕘 Histórico (${histMci.length})</button>`:""}
-         </div>
-       </div>`;
+  const gestorMci=isGestor();
+  const mciItens=mcis.map((m,i)=>`
+    <div class="mci-item" data-id="${m.id}" style="border:1px solid var(--line-soft);border-radius:10px;padding:12px;margin-bottom:12px;background:#fff">
+      ${gestorMci
+        ? `<textarea class="mci-texto auto-altura" data-id="${m.id}" rows="2" placeholder="Descreva a Meta Crucialmente Importante…"
+             style="width:100%;min-height:70px;padding:11px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13.5px;font-weight:600;line-height:1.45;resize:none;overflow:hidden">${esc(m.texto||"")}</textarea>
+           ${tagsPickerHtml("mci",m)}`
+        : `<div style="padding:11px;border:1px solid var(--line-soft);border-radius:8px;background:#fafbfc;font-size:13.5px;font-weight:600;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere">${esc(m.texto||"(sem descrição)")}</div>
+           ${tagsChipsHtml(m)}`}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:8px">
+        <span class="hint">Definida em ${fmtDate(m.criadoEm)}${gestorMci?"":" · só o Gestor altera"}</span>
+        ${gestorMci?`<div style="display:flex;gap:8px;align-items:center">
+          <button class="btn-icon del mci-rm" data-id="${m.id}" title="Excluir esta MCI">🗑</button>
+          <button class="btn sm mci-concluir" data-id="${m.id}">✓ Marcar como concluída</button></div>`:""}
+      </div>
+    </div>`).join("");
+  const mciHtml = `
+    ${mciItens || `<div class="empty" style="padding:20px 10px"><span class="ic">🎯</span><p>Nenhuma MCI ativa no momento.</p>${gestorMci?`<p class="hint">Use o botão “+ MCI” para adicionar.</p>`:""}</div>`}
+    <div style="display:flex;justify-content:flex-start;margin-top:2px">
+      <button class="btn ghost sm" id="mci-hist">🕘 Histórico${histMci.length?` (${histMci.length})`:""}</button>
+    </div>`;
 
   const semAtualMcs=limitesSemanaCorrente();
   const mdsRows = mdsList.length ? mdsList.map(m=>{
@@ -3842,7 +3888,8 @@ function mciMdsPainelHtml(){
   ${avisoMigracaoPainelHtml()}
   <div style="display:flex;flex-direction:column;gap:18px;margin-bottom:18px;min-width:0">
     <div class="card">
-      <div class="card-head"><h3>🎯 MCI — Meta Crucialmente Importante</h3></div>
+      <div class="card-head"><h3>🎯 MCI — Meta Crucialmente Importante</h3>
+        ${isGestor()?`<button class="btn ghost sm" id="mci-nova" title="Adicionar mais uma MCI">+ MCI</button>`:""}</div>
       <div class="card-pad">${mciHtml}</div>
     </div>
     ${metasMensaisCardHtml()}
@@ -3938,33 +3985,80 @@ window.addEventListener("resize",()=>{
   clearTimeout(_alturaAutoResizeTimer);
   _alturaAutoResizeTimer=setTimeout(()=>document.querySelectorAll("textarea.auto-altura").forEach(ajustarAlturaTexto),120);
 });
+/* Saídas e entregas (Reuniões): ao passar o cursor em "Descrição da entrega" ou
+   "Responsável", mostra o texto COMPLETO num balão (só quando o campo está cortado). */
+(function(){
+  let tip=null, atual=null;
+  const getTip=()=>{ if(!tip){ tip=document.createElement("div"); tip.id="tip-saida-full"; document.body.appendChild(tip); } return tip; };
+  function esconder(){ if(tip) tip.style.display="none"; atual=null; }
+  function mostrar(el){
+    const txt=(el.value||"").trim();
+    if(!txt || el.scrollWidth<=el.clientWidth+1){ esconder(); return; }   // cabe inteiro: não precisa
+    atual=el;
+    const t=getTip(); t.textContent=txt; t.style.display="block";
+    const r=el.getBoundingClientRect(), th=t.offsetHeight, tw=t.offsetWidth;
+    let top=r.bottom+6; if(top+th>window.innerHeight-8) top=Math.max(8,r.top-th-6);
+    let left=Math.min(Math.max(8,r.left),window.innerWidth-tw-8);
+    t.style.top=top+"px"; t.style.left=left+"px";
+  }
+  document.addEventListener("mouseover",e=>{
+    const el=e.target.closest&&e.target.closest(".sai-desc,.sai-resp");
+    if(el) mostrar(el); else if(atual) esconder();
+  });
+  document.addEventListener("mouseout",e=>{
+    const el=e.target.closest&&e.target.closest(".sai-desc,.sai-resp");
+    if(el && el===atual && !(e.relatedTarget&&el.contains(e.relatedTarget))) esconder();
+  });
+  document.addEventListener("input",e=>{ if(atual&&e.target===atual) mostrar(atual); });
+  document.addEventListener("scroll",esconder,true);
+  document.addEventListener("mousedown",esconder,true);
+})();
 function wirePainelMciMds(v){
-  const mci=mciAtiva();
+  const mciPorId=id=>(DB.data.mci||[]).find(m=>String(m.id)===String(id));
   if($("#mci-nova")) $("#mci-nova").onclick=async()=>{
     const novo={id:uid(), texto:"", criadoEm:todayStr(), concluido:false, concluidoEm:null};
+    DB.data.mci=DB.data.mci||[];
     DB.data.mci.push(novo);
     try{ await sbInsert("mci", toSnake(novo)); }
     catch(e){ toast("Erro ao criar MCI: "+e.message); }
     render();
+    const ta=document.querySelector('.mci-texto[data-id="'+novo.id+'"]'); if(ta) ta.focus();
   };
-  if($("#mci-texto")) $("#mci-texto").onblur=async(e)=>{
-    if(!mci) return;
-    mci.texto=e.target.value;
-    try{ await sbUpdate("mci", mci.id, {texto:mci.texto}); }
-    catch(err){ toast("Erro ao salvar MCI: "+err.message); }
-  };
-  if($("#mci-concluir")) $("#mci-concluir").onclick=()=>{
-    if(!mci) return;
-    confirmar("Concluir esta MCI?","Ela será movida para o histórico como alcançada.", async()=>{
-      mci.texto=$("#mci-texto")? $("#mci-texto").value : mci.texto;
-      mci.concluido=true; mci.concluidoEm=todayStr();
-      try{
-        await sbUpdate("mci", mci.id, {texto:mci.texto, concluido:true, concluido_em:mci.concluidoEm});
-        toast("MCI concluída! 🎉");
-      }catch(err){ toast("Erro ao concluir MCI: "+err.message); }
-      render();
-    });
-  };
+  v.querySelectorAll(".mci-texto").forEach(ta=>{
+    ta.onblur=async()=>{
+      const m=mciPorId(ta.dataset.id); if(!m || m.texto===ta.value) return;
+      m.texto=ta.value;
+      try{ await sbUpdate("mci", m.id, {texto:m.texto}); }
+      catch(err){ toast("Erro ao salvar MCI: "+err.message); }
+    };
+  });
+  v.querySelectorAll(".mci-concluir").forEach(btn=>{
+    btn.onclick=()=>{
+      const m=mciPorId(btn.dataset.id); if(!m) return;
+      confirmar("Concluir esta MCI?","Ela será movida para o histórico como alcançada.", async()=>{
+        const ta=document.querySelector('.mci-texto[data-id="'+m.id+'"]');
+        m.texto=ta? ta.value : m.texto;
+        m.concluido=true; m.concluidoEm=todayStr();
+        try{
+          await sbUpdate("mci", m.id, {texto:m.texto, concluido:true, concluido_em:m.concluidoEm});
+          toast("MCI concluída! 🎉");
+        }catch(err){ toast("Erro ao concluir MCI: "+err.message); }
+        render();
+      });
+    };
+  });
+  v.querySelectorAll(".mci-rm").forEach(btn=>{
+    btn.onclick=()=>{
+      const m=mciPorId(btn.dataset.id); if(!m) return;
+      confirmar("Excluir esta MCI?","Ela será apagada de vez (não vai para o histórico). Para guardar no histórico, use “Marcar como concluída”.", async()=>{
+        const antes=DB.data.mci.slice();
+        DB.data.mci=DB.data.mci.filter(x=>x.id!==m.id);
+        try{ await sbDelete("mci", m.id); toast("MCI excluída."); }
+        catch(err){ DB.data.mci=antes; toast("Erro ao excluir MCI: "+err.message); }
+        render();
+      });
+    };
+  });
   if($("#mci-hist")) $("#mci-hist").onclick=abrirHistoricoMci;
 
   wireMetasMensais(v);
@@ -4502,7 +4596,7 @@ function moverAtividadeParaSprint(atividadeId){
     if(ini && ini>hoje){ err.textContent="O Início real não pode ser uma data futura."; err.style.display="block"; return; }
     // registra o histórico nas anotações de progresso
     const linha=`[${fmtDate(hoje)}] Retornada para a sprint da semana ${fmtDate(sem.ini)} a ${fmtDate(sem.fim)} (prazo previsto mantido: ${fmtDate(a.dataFimPrev)}).`;
-    const patch={sprintSemana:sem.ini,notasProgresso:a.notasProgresso?(a.notasProgresso+"\n"+linha):linha};
+    const patch={sprintSemana:sem.ini,notasProgresso:a.notasProgresso?(linha+"\n"+a.notasProgresso):linha};
     if(ini!==(a.dataInicioReal||null)){ patch.dataInicioReal=ini; patch.inicioRealMesmo=!!ini && ini===a.dataInicioPrev; }
     try{
       await sbUpdate("atividades", a.id, toSnake(patch));
@@ -9347,7 +9441,7 @@ function openForm(cfg){
               ev.target.classList.toggle("falta-data", !!it.horasExecLog[j]._novo && !ev.target.value);
               avisar();   // a data pode tornar a atividade "Atrasada" (depois do Término previsto)
             };
-            // ao sair do campo de data, reposiciona a anotação na ordem cronológica
+            // ao sair do campo de data, reposiciona a anotação (mais recente no topo)
             // (só redesenha se a ordem mudou, para não atrapalhar a digitação)
             lr.querySelector('[data-lrole="data"]').onblur=()=>{
               if(!it.horasExecLog[j] || !it.horasExecLog[j].data) return;   // sem data: fica onde está
@@ -9363,8 +9457,8 @@ function openForm(cfg){
           if(addLog) addLog.onclick=()=>{
             // a data NÃO é mais preenchida com hoje: o lançamento pode ser retroativo,
             // e uma data automática induzia ao erro. É obrigatória ao salvar.
-            it.horasExecLog.push({data:"",horas:"",nota:"",_novo:true}); it._open=true; renderRows();
-            const novoIdx=it.horasExecLog.length-1;
+            it.horasExecLog.unshift({data:"",horas:"",nota:"",_novo:true}); it._open=true; renderRows();
+            const novoIdx=0;
             const campo=container().querySelector(`.estim-board[data-idx="${idx}"] .estim-log[data-j="${novoIdx}"] [data-lrole="data"]`); if(campo) campo.focus();
           };
         }
@@ -9375,9 +9469,9 @@ function openForm(cfg){
         btnOk.onclick=()=>{
           const falta=Math.round(((parseFloat(inpHoras.value)||0)-somaLog(it))*100)/100;
           if(!(falta>0)){ toast(parseFloat(inpHoras.value)>0?"As horas previstas já foram todas lançadas.":"Informe antes as horas previstas."); return; }
-          it.horasExecLog.push({data:"",horas:falta,nota:"Conforme previsto",_novo:true});
+          it.horasExecLog.unshift({data:"",horas:falta,nota:"Conforme previsto",_novo:true});
           it._open=true; sincronizarTotal(it); renderRows(); avisar();
-          const novoIdx=it.horasExecLog.length-1;
+          const novoIdx=0;
           const campo=container().querySelector(`.estim-board[data-idx="${idx}"] .estim-log[data-j="${novoIdx}"] [data-lrole="data"]`); if(campo) campo.focus();
           toast("Horas lançadas. Informe a data em que foram executadas.");
         };
@@ -9951,6 +10045,7 @@ function formAtividade(projetoId,a,opts){
             .map(e=>({data:e.data||"",horas:parseFloat(e.horas)||0,nota:String(e.nota||"").trim()}))
             .filter(e=>e.horas>0 || e.nota))
         }));
+      if(v.notasProgresso && String(v.notasProgresso).trim()) v.notasProgresso=ordenarNotasTexto(v.notasProgresso);
       if(usaCampoResp) v.responsaveisIds=Array.isArray(v.responsaveisIds)?v.responsaveisIds:[];
       else delete v.responsaveisIds; // sem o campo no formulário: não mexe no valor antigo
       v.predecessorasIds=Array.isArray(v.predecessorasIds)?v.predecessorasIds:[];
