@@ -297,6 +297,9 @@
   .sel-vazio{padding:10px 12px;font-size:12.5px;color:var(--ink-faint)}
   select.sel-open{border-color:var(--accent);outline:2px solid var(--accent-soft)}
   .fld select{text-overflow:ellipsis;min-width:0}
+  /* campos travados pelo perfil de acesso (ou por "Data indeterminada"): fundo cinza */
+  .fld input:disabled:not([type=checkbox]):not([type=radio]),.fld select:disabled,.fld textarea:disabled{
+    background:#f1f4f9;color:var(--ink-soft);-webkit-text-fill-color:var(--ink-soft);cursor:not-allowed;border-color:var(--line-soft)}
 
   /* ---------- BUSCA GLOBAL DE ATIVIDADES (barra superior) ---------- */
   .gsearch{position:relative}
@@ -450,6 +453,12 @@
   .mm-row.arrastando .mm-handle{cursor:grabbing}
   body.mm-arrastando, body.mm-arrastando *{cursor:grabbing!important;user-select:none!important}
   .mm-sem{width:118px;flex-shrink:0;padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;background:#fff}
+  .mm-linha2{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;min-width:0}
+  .mm-linha2 .ptags{margin-top:0}
+  .mm-proj{flex:0 1 340px;min-width:0;max-width:100%;padding:5px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12.5px;background:#fff;color:var(--ink)}
+  .mm-proj.vazio{border-style:dashed;color:var(--ink-faint)}
+  .mm-sub{font-size:12px;color:var(--ink-faint);margin-top:2px;overflow-wrap:anywhere}
+  .mm-sub .mm-projnome{color:var(--ink-soft);font-weight:600}
   /* data obrigatória nos lançamentos de horas novos (não é mais preenchida sozinha) */
   .estim-log input[data-lrole="data"].falta-data{border-color:var(--warn);background:var(--warn-bg)}
 </style>
@@ -555,18 +564,22 @@ function isGestor(){ return !!(USER.current && USER.current.tipo==="gestor"); }
 /* ============================================================
    PERFIS E ACESSOS
    gestor ...... acesso total; único que entra em Configurações
-   lideranca ... vê só o que o Gestor liberar; inclui, edita e exclui; cria projetos
-   equipe ...... vê só o que o Gestor liberar; inclui e edita; nunca exclui
-   colaborador . vê só o que o Gestor liberar; edita só as atividades em que está vinculado
-   O banco (regras RLS da migração sql/2026-11-10_perfis_e_acessos.sql) só
+   lideranca ... vê só o que o Gestor liberar; inclui, edita e exclui; cria projetos; vê a ocupação
+   equipe ...... vê só o que o Gestor liberar; inclui e edita; nunca exclui; nas atividades,
+                 não altera datas previstas nem as horas de outras pessoas (só se inclui)
+   colaborador . vê só o que o Gestor liberar; edita só as atividades em que está vinculado;
+                 não vê MCI, Metas Mensais, MDS nem ocupação
+   Liderança e Equipe veem só as Metas Mensais e MDS dos seus projetos.
+   O banco (regras RLS de sql/2026-11-10_perfis_e_acessos.sql e
+   sql/2026-11-10_perfis_e_acessos_2_ajustes.sql) só
    entrega a cada pessoa o que ela pode ver e recusa o que ela não pode
    gravar. Estas funções só escondem botões e travam campos de acordo.
    ============================================================ */
 const PERFIS=[
   {id:"gestor",      label:"Gestor",      desc:"Acesso total ao app. Único perfil com Configurações."},
-  {id:"lideranca",   label:"Liderança",   desc:"Vê as sessões, projetos e áreas liberados. Inclui, edita e exclui dados e cria projetos."},
-  {id:"equipe",      label:"Equipe",      desc:"Vê as sessões, projetos e áreas liberados. Inclui e edita dados, nunca exclui."},
-  {id:"colaborador", label:"Colaborador", desc:"Vê as sessões e projetos liberados. Edita só as atividades em que está vinculado."}
+  {id:"lideranca",   label:"Liderança",   desc:"Vê as sessões, projetos e áreas liberados e a ocupação das pessoas. Inclui, edita e exclui dados e cria projetos."},
+  {id:"equipe",      label:"Equipe",      desc:"Vê as sessões, projetos e áreas liberados. Inclui e edita dados, nunca exclui. Nas atividades, não muda datas previstas nem as horas de outras pessoas."},
+  {id:"colaborador", label:"Colaborador", desc:"Vê as sessões e projetos liberados. Edita só as atividades em que está vinculado. Não vê metas nem ocupação."}
 ];
 const AREAS_OPERACAO=[
   {id:"relatorios", label:"Relatórios"},
@@ -586,8 +599,20 @@ function podeEditarDados(){ return ["gestor","lideranca","equipe"].includes(perf
 /* exclui dados dentro do que enxerga */
 function podeExcluirDados(){ return ["gestor","lideranca"].includes(perfilAtual()); }
 function ehPerfilColaborador(){ return perfilAtual()==="colaborador"; }
-/* MCI, Metas Mensais e MDS aparecem para Gestor, Liderança e Equipe */
+/* MCI, Metas Mensais e MDS aparecem para Gestor, Liderança e Equipe
+   (Liderança e Equipe veem só as Metas Mensais e MDS dos seus projetos) */
 function veQuadrosEstrategicos(){ return podeEditarDados(); }
+/* Ocupação (semanal, por colaborador e da equipe no projeto): Gestor e Liderança */
+function veOcupacao(){ return ["gestor","lideranca"].includes(perfilAtual()); }
+/* altera o planejamento de qualquer atividade (datas previstas) e as horas de
+   todas as pessoas. A Equipe altera as datas reais e só o próprio quadro de horas. */
+function editaAtividadeCompleta(){ return ["gestor","lideranca"].includes(perfilAtual()); }
+/* Equipe só se inclui (e só se tira) como responsável: filtra uma lista de pessoas */
+function pessoasQueEuPossoAtribuir(ids){
+  if(editaAtividadeCompleta()) return ids;
+  const me=USER.current&&USER.current.colabId;
+  return (ids||[]).filter(id=>String(id)===String(me));
+}
 /* área da Operação liberada (relatorios | financeiro | equipe) */
 function temArea(area){
   if(isGestor()) return true;
@@ -648,7 +673,7 @@ async function carregarCustosPessoa(){
 const PROJETO_OUTROS="__outros__";
 async function carregarOcupacaoOutros(){
   DB.data.outros={atividades:[], horas:[]};
-  if(isGestor() || ACESSOS.ok!==true) return;
+  if(isGestor() || !veOcupacao() || ACESSOS.ok!==true) return;
   try{
     const r=await sbFetch("rpc/ocupacao_outros_projetos",{method:"POST", body:{}});
     DB.data.outros={atividades:toCamel((r&&r.atividades)||[]), horas:toCamel((r&&r.horas)||[])};
@@ -1676,6 +1701,9 @@ function avisoMigracaoPainelHtml(){
 
 /* ---------- METAS MENSAIS (Painel Geral, logo abaixo da MCI) ---------- */
 let METAS_MENSAIS_OK=true;
+/* null = ainda não verificado · true = coluna metas_mensais.projeto_id existe ·
+   false = falta rodar sql/2026-11-10_perfis_e_acessos_2_ajustes.sql */
+let METAS_PROJETO_OK=null;
 const SQL_METAS_MENSAIS=[
 "create table if not exists public.metas_mensais (",
 "  id uuid primary key default gen_random_uuid(),",
@@ -1697,6 +1725,11 @@ async function carregarMetasMensais(){
   try{
     DB.data.metasMensais=toCamel(await sbFetch("metas_mensais?select=*"))||[];
     METAS_MENSAIS_OK=true;
+    if(DB.data.metasMensais.some(m=>"projetoId" in m)) METAS_PROJETO_OK=true;
+    else if(METAS_PROJETO_OK!==true){
+      try{ await sbFetch("metas_mensais?select=projeto_id&limit=1"); METAS_PROJETO_OK=true; }
+      catch(e2){ METAS_PROJETO_OK=false; }
+    }
   }catch(e){
     console.warn("[PMO] tabela metas_mensais indisponível:",e.message||e);
     DB.data.metasMensais=[]; METAS_MENSAIS_OK=false;
@@ -1711,11 +1744,42 @@ function fmtSemanaMes(m){
   const mes=fmtMesAno(m&&m.mes);
   return m&&m.semana ? `Semana ${m.semana} · ${mes}` : mes;
 }
+/* Gestor vê todas. Liderança e Equipe veem só as metas dos projetos a que têm
+   acesso (o banco já entrega só essas; o filtro aqui é a segunda trava). */
+function metasMensaisVisiveis(){
+  const todas=DB.data.metasMensais||[];
+  if(isGestor()) return todas;
+  if(!veQuadrosEstrategicos()) return [];
+  return todas.filter(m=>m.projetoId && getProjeto(m.projetoId));
+}
+function projetoDaMeta(m){ return m&&m.projetoId ? getProjeto(m.projetoId) : null; }
+function nomeProjetoMeta(m){
+  const p=projetoDaMeta(m);
+  if(!p) return m&&m.projetoId ? "(projeto excluído)" : "";
+  return p.codigo ? `${String(p.codigo).trim()} — ${p.nome}` : p.nome;
+}
+/* "Semana 1 · Nov/2026 · 📁 Projeto" */
+function infoMetaMensalHtml(m){
+  const proj=nomeProjetoMeta(m);
+  return `${esc(fmtSemanaMes(m))}${proj?` · <span class="mm-projnome">📁 ${esc(proj)}</span>`:""}`;
+}
+/* lista suspensa de projetos (agrupados por sessão) para vincular a meta */
+function opcoesProjetoMetaHtml(atual){
+  const projs=(DB.data.projetos||[]).slice().sort((a,b)=>String(a.nome||"").localeCompare(String(b.nome||""),"pt-BR"));
+  const grupos=SESSOES.map(ses=>({label:ses.label, itens:projs.filter(p=>p.sessaoId===ses.id)}))
+    .concat([{label:"Não classificados", itens:projs.filter(p=>!getSessao(p.sessaoId))}])
+    .filter(g=>g.itens.length);
+  const orfa=atual && !getProjeto(atual);
+  return `<option value="">📁 Sem projeto (só o Gestor vê)</option>`
+    +(orfa?`<option value="${esc(atual)}" selected>(projeto excluído)</option>`:"")
+    +grupos.map(g=>`<optgroup label="${esc(g.label)}">${g.itens.map(p=>
+      `<option value="${esc(p.id)}" ${String(p.id)===String(atual||"")?"selected":""}>${esc(p.codigo?`${String(p.codigo).trim()} — ${p.nome}`:p.nome)}</option>`).join("")}</optgroup>`).join("");
+}
 /* ordem = prioridade definida arrastando (1 = mais importante). Metas antigas,
    ainda sem ordem, vêm depois, por mês/semana — até a primeira vez que a lista
    for reordenada. */
 function metasMensaisAtivas(){
-  return (DB.data.metasMensais||[]).filter(m=>!m.concluido).sort((a,b)=>{
+  return metasMensaisVisiveis().filter(m=>!m.concluido).sort((a,b)=>{
     const oa=a.ordem==null?1e9:+a.ordem, ob=b.ordem==null?1e9:+b.ordem;
     if(oa!==ob) return oa-ob;
     const ma=a.mes||"9999-99", mb=b.mes||"9999-99";
@@ -1723,25 +1787,25 @@ function metasMensaisAtivas(){
   });
 }
 function metasMensaisHistorico(){
-  return (DB.data.metasMensais||[]).filter(m=>m.concluido)
+  return metasMensaisVisiveis().filter(m=>m.concluido)
     .sort((a,b)=>(b.concluidoEm||"").localeCompare(a.concluidoEm||"") || (b.mes||"").localeCompare(a.mes||""));
 }
-/* Liderança e Equipe: só leitura (só o Gestor altera as Metas Mensais) */
+/* Liderança e Equipe: só leitura (só o Gestor altera as Metas Mensais), só as dos seus projetos */
 function metasMensaisLeituraHtml(lista,hist){
   const linhas=lista.length ? lista.map((m,i)=>`
     <div class="mm-row" style="display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line-soft);border-radius:8px;padding:9px 12px;margin-bottom:8px;background:#fafbfc">
       <span class="tag" style="flex-shrink:0;font-weight:700" title="Prioridade definida pelo Gestor">${m.ordem!=null?(i+1)+"º":"—"}</span>
       <div style="flex:1;min-width:0">
         <div style="font-weight:600;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere">${esc(m.texto||"(sem descrição)")}</div>
-        <div class="hint" style="margin-top:2px">${esc(fmtSemanaMes(m))}</div>
+        <div class="mm-sub">${infoMetaMensalHtml(m)}</div>
         ${tagsChipsHtml(m)}
       </div>
     </div>`).join("")
-    : `<div class="hint" style="padding:4px 2px 12px">Nenhuma meta mensal ativa.</div>`;
+    : `<div class="mm-sub" style="padding:4px 2px 12px">Nenhuma meta mensal ativa nos seus projetos.</div>`;
   return `
     <div class="card">
       <div class="card-head" style="flex-wrap:wrap;row-gap:4px"><h3>🗓️ Metas Mensais</h3>
-        <span class="hint">em ordem de prioridade · definidas pelo Gestor</span></div>
+        <span class="hint">dos seus projetos · em ordem de prioridade · definidas pelo Gestor</span></div>
       <div class="card-pad">
         <div id="mm-lista">${linhas}</div>
         <div style="display:flex;justify-content:flex-end;margin-top:6px">
@@ -1754,9 +1818,12 @@ function metasMensaisCardHtml(){
   const lista=metasMensaisAtivas(), hist=metasMensaisHistorico();
   if(!isGestor()) return metasMensaisLeituraHtml(lista,hist);
   const extras=PAINEL_MIGRACAO_OK===true;   // prioridade, semana e TAGs
-  const aviso=METAS_MENSAIS_OK?"":`<div class="form-err" style="display:block;margin-bottom:12px">
+  const comProjeto=METAS_PROJETO_OK===true;
+  const aviso=!METAS_MENSAIS_OK?`<div class="form-err" style="display:block;margin-bottom:12px">
     A tabela <b>metas_mensais</b> ainda não existe no banco. Rode no SQL Editor do Supabase:
-    <code style="user-select:all;white-space:pre-wrap;display:block;margin-top:6px;font-size:11.5px">${esc(SQL_METAS_MENSAIS)}</code></div>`;
+    <code style="user-select:all;white-space:pre-wrap;display:block;margin-top:6px;font-size:11.5px">${esc(SQL_METAS_MENSAIS)}</code></div>`
+    : METAS_PROJETO_OK===false?`<div class="form-err" style="display:block;margin-bottom:12px">
+    Para vincular as metas a projetos, rode no SQL Editor do Supabase o arquivo <b>sql/2026-11-10_perfis_e_acessos_2_ajustes.sql</b> e recarregue a página.</div>`:"";
   const linhas=lista.length ? lista.map((m,i)=>`
     <div class="mm-row" data-id="${m.id}" style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;border:1px solid var(--line-soft);border-radius:8px;padding:8px 10px;margin-bottom:8px;background:#fafbfc">
       ${extras?`<button type="button" class="mm-handle" data-id="${m.id}" aria-label="Prioridade ${i+1}: arraste para mudar a ordem (ou use as setas ↑ ↓)"
@@ -1769,7 +1836,11 @@ function metasMensaisCardHtml(){
       <input type="month" class="mm-mes" data-id="${m.id}" value="${esc(m.mes||"")}" title="Mês da meta" style="width:150px;flex-shrink:0;padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit">
       <div style="flex:1 1 260px;min-width:0">
         <textarea class="mm-meta auto-altura" data-id="${m.id}" rows="1" placeholder="Descreva a meta do mês…" style="width:100%;min-height:36px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;line-height:1.4;resize:none;overflow:hidden">${esc(m.texto||"")}</textarea>
-        ${tagsPickerHtml("mm",m)}
+        <div class="mm-linha2">
+          ${comProjeto?`<select class="mm-proj ${m.projetoId?"":"vazio"}" data-id="${m.id}" aria-label="Projeto vinculado à meta"
+            title="Projeto vinculado — Liderança e Equipe veem só as metas dos projetos a que têm acesso">${opcoesProjetoMetaHtml(m.projetoId)}</select>`:""}
+          ${tagsPickerHtml("mm",m)}
+        </div>
       </div>
       <button class="btn-icon del mm-rm" data-id="${m.id}" title="Excluir meta" style="flex-shrink:0">✕</button>
     </div>`).join("")
@@ -1797,7 +1868,7 @@ function abrirHistoricoMetasMensais(){
         <div style="border-bottom:1px solid var(--line-soft);padding:10px 0;display:flex;gap:10px;align-items:flex-start">
           <div style="flex:1;min-width:0">
             <div style="font-weight:600;overflow-wrap:anywhere">${esc(m.texto||"(sem descrição)")}</div>
-            <div class="hint">${esc(fmtSemanaMes(m))} · concluída em ${fmtDate(m.concluidoEm)}</div>
+            <div class="mm-sub">${infoMetaMensalHtml(m)} · concluída em ${fmtDate(m.concluidoEm)}</div>
             ${tagsChipsHtml(m)}
           </div>
           ${isGestor()?`<button class="btn ghost sm mm-reabrir" data-id="${m.id}" title="Devolve a meta para a lista de metas ativas">↩ Reabrir</button>`:""}
@@ -1877,6 +1948,7 @@ function wireMetasMensais(v){
   };
   if($("#mm-add")) $("#mm-add").onclick=async()=>{
     const novo={id:uid(), mes:todayStr().slice(0,7), texto:"", concluido:false, concluidoEm:null, criadoEm:todayStr()};
+    if(METAS_PROJETO_OK===true) novo.projetoId=null;
     if(PAINEL_MIGRACAO_OK===true){
       // a nova meta entra no fim da fila de prioridades; metas antigas ainda
       // sem ordem recebem a posição em que já aparecem na tela
@@ -1908,6 +1980,14 @@ function wireMetasMensais(v){
       const m=achar(inp.dataset.id); if(m) m.mes=inp.value||null;
       await salvar(inp.dataset.id,{mes:inp.value||null});
       if(PAINEL_MIGRACAO_OK!==true) render();   // sem prioridade manual, reordena por mês
+    };
+  });
+  v.querySelectorAll(".mm-proj").forEach(sel=>{
+    sel.onchange=async()=>{
+      const m=achar(sel.dataset.id), pid=sel.value||null, antes=m?m.projetoId:null;
+      if(m) m.projetoId=pid;
+      sel.classList.toggle("vazio",!pid);
+      if(!(await salvar(sel.dataset.id,{projeto_id:pid})) && m){ m.projetoId=antes; render(); }
     };
   });
   v.querySelectorAll(".mm-sem").forEach(sel=>{
@@ -4142,10 +4222,10 @@ function viewPainel(v){
       +(reuAberto.length? subTitulo("Reuniões em aberto (já realizadas, sem OK)")+reuAberto.map(alertaRowHtml).join("") : "")
     : vazioHtml(alertas.some(a=>a.secao==="reunioes")?"Nenhuma reunião para o filtro selecionado.":"Nenhuma reunião próxima ou em aberto.");
   const semOcupIni=addDays(sem.ini,7*(ST.sprintSemanaOffset||0));
-  const sprintOcupHtml=`
+  const sprintOcupHtml=!veOcupacao()?"":`
     <div class="card-pad" style="border-top:1px solid var(--line)">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
-        <h4 style="font-size:14px">📊 ${ehPerfilColaborador()?"Minha ocupação semanal":"Ocupação semanal da equipe"}</h4>
+        <h4 style="font-size:14px">📊 Ocupação semanal da equipe</h4>
         <button class="btn ghost sm" id="sprint-sem-prev" title="Semana anterior">◀</button>
         <span style="font-size:12.5px;font-weight:600">${fmtDate(semOcupIni)} a ${fmtDate(addDays(semOcupIni,6))}${ST.sprintSemanaOffset?"":" (semana atual)"}</span>
         <button class="btn ghost sm" id="sprint-sem-next" title="Próxima semana">▶</button>
@@ -4187,7 +4267,7 @@ function viewPainel(v){
   <div class="toolbar">
     <span class="section-title" style="margin:0">${ehPerfilColaborador()?"Minhas horas":"Dashboards de horas"}</span>
     <div class="spacer"></div>
-    ${podeEditarDados()?`<button class="btn ghost sm" id="btn-imp-pend" title="Envie a planilha de pendências preenchida para gravar as datas reais e as horas executadas de uma vez">⬆ Importar pendências preenchidas</button>`:""}
+    ${editaAtividadeCompleta()?`<button class="btn ghost sm" id="btn-imp-pend" title="Envie a planilha de pendências preenchida para gravar as datas reais e as horas executadas de uma vez">⬆ Importar pendências preenchidas</button>`:""}
     <button class="btn ghost sm" id="btn-pend-conc" title="Planilha com as atividades concluídas que estão sem datas reais ou horas executadas, uma aba por projeto">⬇ Pendências de conclusão (.xlsx)</button>
     <div class="field-inline">Ano
       <select class="select" id="dash-year">${anosDisponiveis().map(y=>`<option ${y===ST.dashYear?"selected":""}>${y}</option>`).join("")}</select>
@@ -4224,10 +4304,10 @@ function viewPainel(v){
     </div>
   </div>
 
-  <div class="card" style="margin-top:18px">
+  ${veOcupacao()?`<div class="card" style="margin-top:18px">
     <div class="card-head"><h3>Ocupação por colaborador</h3><span class="hint">${esc(perDash.label)} · executado × planejado × capacidade (${CAPACIDADE_DIARIA_PADRAO} h por dia útil) · clique no nome para filtrar os gráficos</span></div>
     <div class="card-pad">${comOutrosProjetos(()=>ocupacaoColabPeriodoHtml(perDash,horasPlanejadasPeriodo(perDash.ini,perDash.fim)))}</div>
-  </div>`;
+  </div>`:""}`;
 
   if(podeCriarProjeto()) setTopAction(`<button class="btn">+ Novo projeto</button>`,()=>formProjeto());
   if(veQuadrosEstrategicos()) wirePainelMciMds(v);
@@ -4246,8 +4326,8 @@ function viewPainel(v){
     el.onclick=()=>{ ST.dashColab=(ST.dashColab===el.dataset.dashColab?"":el.dataset.dashColab); render(); };
   });
   // gráfico de ocupação semanal (SPRINT): navegação de semana e ajuste de horas por pessoa
-  $("#sprint-sem-prev").onclick=()=>{ ST.sprintSemanaOffset=(ST.sprintSemanaOffset||0)-1; render(); };
-  $("#sprint-sem-next").onclick=()=>{ ST.sprintSemanaOffset=(ST.sprintSemanaOffset||0)+1; render(); };
+  if($("#sprint-sem-prev")) $("#sprint-sem-prev").onclick=()=>{ ST.sprintSemanaOffset=(ST.sprintSemanaOffset||0)-1; render(); };
+  if($("#sprint-sem-next")) $("#sprint-sem-next").onclick=()=>{ ST.sprintSemanaOffset=(ST.sprintSemanaOffset||0)+1; render(); };
   if($("#sprint-sem-hoje")) $("#sprint-sem-hoje").onclick=()=>{ ST.sprintSemanaOffset=0; render(); };
   v.querySelectorAll("[data-capsem-colab]").forEach(inp=>{
     inp.onchange=async()=>{
@@ -4444,18 +4524,22 @@ async function marcarAtividadeConcluidaRapido(atividadeId){
   const a=getAtividade(atividadeId);
   if(!a) return;
   const pessoas=(Array.isArray(a.estimativasPessoas)?a.estimativasPessoas:[]).filter(x=>x.colaboradorId);
+  // Equipe informa só as próprias horas; as das outras pessoas ficam como estão
+  const meuId=USER.current&&USER.current.colabId;
+  const soAsMinhas=!editaAtividadeCompleta();
   const rowHtml=(item,idx)=>{
     const colab=getColab(item.colaboradorId);
     const nome=colab?colab.nome:"(colaborador removido)";
     const exec=(item.horasExecutadas!=null&&item.horasExecutadas!=="")?item.horasExecutadas:"";
+    const travada=soAsMinhas && String(item.colaboradorId)!==String(meuId);
     return `<div class="estim-row" data-idx="${idx}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
       <span style="flex:1;min-width:130px;font-size:13px">${esc(nome)}</span>
       <span style="font-size:12px;color:var(--ink-faint);white-space:nowrap">Previstas: ${fmtH(+item.horas||0)}</span>
-      <button type="button" class="btn ghost sm" data-erole="ok" data-idx="${idx}"
+      <button type="button" class="btn ghost sm" data-erole="ok" data-idx="${idx}" style="${travada?"visibility:hidden":""}" ${travada?"disabled":""}
         title="Confirmar que foram executadas as horas previstas">✓ OK</button>
       <input type="number" min="0" step="0.5" data-erole="horasExec" data-idx="${idx}"
-        placeholder="Executadas" value="${esc(exec)}" style="width:100px;flex-shrink:0"
-        title="Horas realmente executadas por esta pessoa">
+        placeholder="Executadas" value="${esc(exec)}" style="width:100px;flex-shrink:0" ${travada?"disabled":""}
+        title="${travada?"Só a própria pessoa (ou o Gestor e a Liderança) informa estas horas":"Horas realmente executadas por esta pessoa"}">
     </div>`;
   };
   const lblStyle='display:block;margin-bottom:5px;font-size:12.5px;font-weight:600;color:var(--ink-soft)';
@@ -4503,6 +4587,7 @@ async function marcarAtividadeConcluidaRapido(atividadeId){
   $("#c-yes").onclick=()=>{
     const dIni=$("#c-ini").value||null, dFim=$("#c-fim").value||null;
     const novasEstimativas=pessoas.map((item,idx)=>{
+      if(soAsMinhas && String(item.colaboradorId)!==String(meuId)) return item;
       const inp=$("#modal-root").querySelector(`[data-erole="horasExec"][data-idx="${idx}"]`);
       const val=inp?inp.value:"";
       const novoTotal=(val===""?null:parseFloat(val));
@@ -4526,11 +4611,12 @@ async function salvarConclusaoAtividade(a,novasEstimativas,dataInicioReal,dataFi
     // apagava o atraso); só é preenchido se estiver vazio. O atraso fica
     // visível comparando previsto × real. Só aplica no objeto em memória
     // depois que o servidor confirmar (evita a tela mostrar "concluída" sem ter salvado).
-    const prevFim=a.dataFimPrev||dataFimReal||todayStr();
-    const patch={status:"Concluída",progresso:100,dataFimPrev:prevFim,
+    const prevFim=editaAtividadeCompleta()?(a.dataFimPrev||dataFimReal||todayStr()):(a.dataFimPrev||null);
+    const patch={status:"Concluída",progresso:100,
       dataInicioReal:dataInicioReal||null,dataFimReal:dataFimReal||null,
       inicioRealMesmo:!!dataInicioReal && dataInicioReal===a.dataInicioPrev,
       fimRealMesmo:!!dataFimReal && dataFimReal===prevFim};
+    if(prevFim!==(a.dataFimPrev||null)) patch.dataFimPrev=prevFim;
     if(novasEstimativas) patch.estimativasPessoas=novasEstimativas;
     await sbUpdate("atividades", a.id, toSnake(patch));
     Object.assign(a,patch);
@@ -5061,7 +5147,7 @@ function viewProjeto(v){
   let tabs=[
     ["resumo","Resumo"],["documentos","📎 Documentos"],["cronograma","Cronograma Físico"]
   ];
-  if(podeEditarDados()) tabs.push(["ocupacao","👥 Ocupação da Equipe"]);
+  if(veOcupacao()) tabs.push(["ocupacao","👥 Ocupação da Equipe"]);
   tabs.push(["reunioes","Reuniões"]);
   // financeiro só para quem tem a área Financeiro liberada
   if(temArea("financeiro")) tabs.push(["financeiro","Financeiro"]);
@@ -6699,6 +6785,7 @@ function reuniaoDetalhe(c,p,r){
   async function ressincronizarResponsaveis(){
     const semRaciProjeto = !!(cfgSessao(p.sessaoId).abasOcultas||[]).includes("raci");
     if(!semRaciProjeto) return;
+    if(!editaAtividadeCompleta()) return;   // Equipe não troca o responsável de outras pessoas
     for(const s of r.ata.saidas){
       if(!s.atividadeId) continue;
       const ativ=DB.data.atividades.find(x=>x.id===s.atividadeId);
@@ -6787,7 +6874,7 @@ function reuniaoDetalhe(c,p,r){
     // o responsável deve ser ajustado na aba RACI (marcando "R").
     const semRaciProjeto = !!(cfgSessao(p.sessaoId).abasOcultas||[]).includes("raci");
     if(semRaciProjeto){
-      const idsResp=matchPessoasPorNomes(s.responsavel,p);
+      const idsResp=pessoasQueEuPossoAtribuir(matchPessoasPorNomes(s.responsavel,p));
       if(idsResp.length) novaAtiv.responsaveisIds=idsResp;
     }
     DB.data.atividades.push(novaAtiv);
@@ -9186,7 +9273,8 @@ function openForm(cfg){
     const somaLog=it=>(it.horasExecLog||[]).reduce((t,e)=>t+(parseFloat(e.horas)||0),0);
     function sincronizarTotal(it){ const t=Math.round(somaLog(it)*100)/100; it.horasExecutadas=t>0?t:""; }
     vals[f.key]=Array.isArray(vals[f.key])?vals[f.key].map(x=>{ const c=Object.assign({},x); c.horasExecLog=normLog(x); return c; }):[];
-    // f.somenteColab = id do Colaborador: só o quadro dele é editável
+    // f.somenteColab = id da pessoa logada: só o quadro dela é editável
+    // f.podeSeIncluir (Equipe): também edita as próprias horas previstas e pode se incluir
     // f.semExcluirLancamentos: lançamentos já salvos não podem ser removidos (perfis sem exclusão)
     const ehMinhaLinha=item=>!f.somenteColab || String(item.colaboradorId)===String(f.somenteColab);
     function boardHtml(item,idx){
@@ -9215,16 +9303,18 @@ function openForm(cfg){
       const opts=(f.dynamic?f.optionsFn(vals):f.options)||[];
       const horasExec=item.horasExecutadas!=null&&item.horasExecutadas!==""?item.horasExecutadas:"";
       const soMinhas=!!f.somenteColab, minha=ehMinhaLinha(item);
+      const previstaLivre=!soMinhas || (f.podeSeIncluir && minha);
+      const removivel=!soMinhas || (f.podeSeIncluir && minha && item._novaLinha);
       return `<div class="estim-row" data-idx="${idx}" style="display:flex;gap:8px;align-items:center;margin-bottom:7px;flex-wrap:wrap">
         <select data-erole="colab" style="flex:1;min-width:150px" ${soMinhas?"disabled":""}>
           <option value="">Selecione o colaborador…</option>
           ${opts.map(o=>`<option value="${esc(o.value)}" ${String(item.colaboradorId||"")===String(o.value)?"selected":""}>${esc(o.label)}</option>`).join("")}
         </select>
-        <input type="number" min="0" step="0.5" data-erole="horas" placeholder="Horas" value="${item.horas!=null&&item.horas!==""?item.horas:""}" style="width:90px;flex-shrink:0" title="Horas previstas" ${soMinhas?"disabled":""}>
+        <input type="number" min="0" step="0.5" data-erole="horas" placeholder="Horas" value="${item.horas!=null&&item.horas!==""?item.horas:""}" style="width:90px;flex-shrink:0" title="Horas previstas" ${previstaLivre?"":"disabled"}>
         <button type="button" class="btn ghost sm" data-erole="ok" style="width:76px;flex-shrink:0;justify-content:center;${minha?"":"visibility:hidden"}"
           title="Lança no quadro as horas que faltam para completar as previstas — depois informe a data em que foram executadas" ${minha?"":"disabled"}>✓ OK</button>
         <input type="number" data-erole="horasExec" placeholder="0" value="${horasExec}" readonly tabindex="-1" style="width:100px;flex-shrink:0;background:#f1f4fa" title="Soma das horas lançadas no quadro de anotações abaixo">
-        ${soMinhas?`<span style="width:30px;flex-shrink:0"></span>`:`<button type="button" class="btn-icon del" data-erole="rm" title="Remover">✕</button>`}
+        ${removivel?`<button type="button" class="btn-icon del" data-erole="rm" title="Remover">✕</button>`:`<span style="width:30px;flex-shrink:0"></span>`}
       </div>${boardHtml(item,idx)}`;
     }
     function bindRows(){
@@ -9305,13 +9395,28 @@ function openForm(cfg){
     const el=container();
     if(el){
       const btnAdd=el.querySelector(".estim-add");
-      if(f.somenteColab){
+      const estouNaLista=()=>vals[f.key].some(x=>String(x.colaboradorId)===String(f.somenteColab));
+      if(f.somenteColab && f.podeSeIncluir){
+        // Equipe: o botão inclui só a própria pessoa (e some quando ela já está na lista)
+        btnAdd.textContent="+ Me incluir nesta atividade";
+        btnAdd.title="Inclui você em Horas previstas — as outras pessoas são incluídas pelo Gestor ou pela Liderança";
+        const sincBtn=()=>{ btnAdd.style.display=estouNaLista()?"none":""; };
+        const renderAntes=renderRows;
+        renderRows=()=>{ renderAntes(); sincBtn(); };
+        btnAdd.onclick=()=>{
+          if(estouNaLista()) return;
+          vals[f.key].push({colaboradorId:f.somenteColab,horas:"",horasExecutadas:"",horasExecLog:[],_novaLinha:true});
+          renderRows();
+          const novo=container().querySelector(`.estim-row[data-idx="${vals[f.key].length-1}"] [data-erole="horas"]`); if(novo) novo.focus();
+        };
+      }else if(f.somenteColab){
         btnAdd.style.display="none";
-        if(!vals[f.key].some(x=>String(x.colaboradorId)===String(f.somenteColab))){
+        if(!estouNaLista()){
           btnAdd.insertAdjacentHTML("afterend",`<span class="hint">Você não está em "Horas previstas" desta atividade. Para lançar horas, peça para incluírem você aqui.</span>`);
         }
+      }else{
+        btnAdd.onclick=()=>{ vals[f.key].push({colaboradorId:"",horas:"",horasExecutadas:"",horasExecLog:[]}); renderRows(); };
       }
-      btnAdd.onclick=()=>{ vals[f.key].push({colaboradorId:"",horas:"",horasExecutadas:"",horasExecLog:[]}); renderRows(); };
       const btnPrefill=el.querySelector(".estim-prefill");
       if(btnPrefill && f.somenteColab) btnPrefill.style.display="none";
       if(btnPrefill && f.prefillButton && !f.somenteColab){
@@ -9494,6 +9599,14 @@ function openForm(cfg){
     const fld=el&&el.closest(".fld");
     if(fld) fld.querySelectorAll("input,select,textarea,button").forEach(x=>{ x.disabled=true; });
   });
+  // f.somenteOpcao (lista de pessoas): só a caixinha dessa pessoa pode mudar
+  fields.forEach(f=>{
+    if(f.type!=="checklist" || f.somenteOpcao==null || f.disabled) return;
+    const el=$("#f-grid").querySelector(`[data-k="${f.key}"]`);
+    if(el) el.querySelectorAll("input[type=checkbox]").forEach(x=>{
+      if(String(x.value)!==String(f.somenteOpcao)){ x.disabled=true; x.closest("label").title="Só o Gestor ou a Liderança altera as outras pessoas"; }
+    });
+  });
   if(cfg.somenteLeitura){
     $("#f-grid").querySelectorAll("input,select,textarea,button").forEach(x=>{ x.disabled=true; });
   }
@@ -9627,15 +9740,28 @@ function formProjeto(p,sessaoIdDefault){
 /* ---- FORM: ATIVIDADE (removido campo responsavelId) ---- */
 /* Perfil Colaborador, numa atividade em que está vinculado: lança as próprias
    horas e anotações, as datas reais, a situação e o % concluído. O resto fica
-   travado (o banco também ignora qualquer outra alteração dele). */
+   travado (o banco também ignora qualquer outra alteração dele).
+   Perfil Equipe: edita a atividade, mas não as datas previstas (só ao criar)
+   nem as horas das outras pessoas — só se inclui e edita o próprio quadro. */
 const CAMPOS_ATIVIDADE_TRAVADOS_COLAB=new Set(["nome","categoriaId","marco","responsaveisIds","predecessorasIds","dataInicioPrev","dataFimPrev"]);
-function ajustarCamposAtividade(fields,modo){
+const CAMPOS_ATIVIDADE_PREVISTOS=new Set(["dataInicioPrev","dataFimPrev"]);
+function ajustarCamposAtividade(fields,modo,edit){
+  const me=USER.current&&USER.current.colabId;
   if(modo==="colaborador"){
-    const me=USER.current&&USER.current.colabId;
     fields.forEach(f=>{
       if(CAMPOS_ATIVIDADE_TRAVADOS_COLAB.has(f.key)) f.disabled=true;
       if(f.key==="status") f.options=(f.options||[]).filter(o=>o.value!=="Cancelada");
       if(f.type==="estimativas"){ f.somenteColab=me; f.prefillButton=null; }
+    });
+  }
+  if(modo==="equipe"){
+    fields.forEach(f=>{
+      if(edit && CAMPOS_ATIVIDADE_PREVISTOS.has(f.key)){
+        f.disabled=true;
+        f.help="Definida pelo Gestor ou pela Liderança.";
+      }
+      if(f.key==="responsaveisIds") f.somenteOpcao=me;
+      if(f.type==="estimativas"){ f.somenteColab=me; f.podeSeIncluir=true; f.prefillButton=null; }
     });
   }
   // quem não exclui não remove lançamentos de horas já salvos
@@ -9644,9 +9770,11 @@ function ajustarCamposAtividade(fields,modo){
 }
 function formAtividade(projetoId,a,opts){
   const edit=!!a;
-  const modo=podeEditarDados() ? "total"
+  const modo=editaAtividadeCompleta() ? "total"
+    : podeEditarDados() ? "equipe"
     : (edit && ehPerfilColaborador() && usuarioVinculadoAtividade(a)) ? "colaborador" : "leitura";
-  if(!edit && modo!=="total"){ avisoSemPermissao(); return; }
+  if(!edit && modo!=="total" && modo!=="equipe"){ avisoSemPermissao(); return; }
+  const meuId=USER.current&&USER.current.colabId;
   // opts.semPredecessoras: usado quando o formulário abre pelo Painel Geral,
   // onde não faz sentido definir "Depende de" (isso fica só no cronograma do
   // projeto). As predecessoras já salvas são preservadas.
@@ -9683,6 +9811,7 @@ function formAtividade(projetoId,a,opts){
     wide:true,
     somenteLeitura:modo==="leitura",
     aviso:modo==="colaborador"?"Perfil Colaborador: você pode lançar as suas horas e anotações, as datas reais, a situação e o % concluído. Os demais campos ficam com o Gestor, a Liderança ou a Equipe."
+      :modo==="equipe"?(edit?"Perfil Equipe: as datas previstas e as horas das outras pessoas ficam com o Gestor e a Liderança. Você pode se incluir na atividade e lançar as suas horas.":"Perfil Equipe: em “Horas previstas por colaborador” você pode incluir só a si mesmo.")
       :modo==="leitura"?"Você não está vinculado a esta atividade, por isso ela abre só para leitura.":"",
     values:a||{projetoId,status:"Não iniciada",progresso:0,dataInicioPrev:todayStr(),marco:false},
     fields:ajustarCamposAtividade([
@@ -9732,7 +9861,7 @@ function formAtividade(projetoId,a,opts){
             return Object.entries(raciAtiv).filter(([,papel])=>papel==="R").map(([pid])=>pid);
           }
         } : null}
-    ], modo),
+    ], modo, edit),
     // % Concluído acompanha as horas: soma executada ÷ soma prevista de todos os
     // colaboradores, atualizada a cada digitação/clique em OK (limitada a 100%).
     // Só calcula quando há horas previstas e ao menos uma executada informada;
@@ -9776,6 +9905,16 @@ function formAtividade(projetoId,a,opts){
         const eData=new Error("Informe a data de cada lançamento novo nas Anotações de progresso — ela não é mais preenchida automaticamente, "+
           "porque as horas podem ter sido executadas em outro dia. Faltando data: "+semDataNovos.join(", ")+".");
         eData.validacao=true; throw eData;
+      }
+      // Equipe/Colaborador: a própria linha precisa de horas previstas (sem elas a
+      // linha seria descartada ao salvar, junto com os lançamentos)
+      if(modo!=="total"){
+        const minha=(Array.isArray(v.estimativasPessoas)?v.estimativasPessoas:[]).find(x=>String(x.colaboradorId)===String(meuId));
+        if(minha && !(parseFloat(minha.horas)>0)){
+          const eH=new Error("Informe as suas horas previstas nesta atividade (maiores que zero)."+
+            (edit && (a.estimativasPessoas||[]).some(x=>String(x.colaboradorId)===String(meuId))?" Para sair da atividade, fale com o Gestor ou a Liderança.":""));
+          eH.validacao=true; throw eH;
+        }
       }
       v.status=situacaoPelasHoras(v);
       // o banco aceita só UM nome de atividade por projeto: avisa antes de tentar gravar
@@ -9829,7 +9968,7 @@ function formAtividade(projetoId,a,opts){
       // atividade (e não a data de hoje) — é a data em que o trabalho de
       // fato aconteceu. Só serve de fallback: se a pessoa digitou uma data
       // no formulário, essa data é respeitada e não é sobrescrita.
-      if(edit && v.status==="Concluída" && !v.dataFimPrev){
+      if(edit && modo==="total" && v.status==="Concluída" && !v.dataFimPrev){
         const datasApontadas=DB.data.horas
           .filter(h=>h.atividadeId===a.id && h.data)
           .map(h=>h.data)
@@ -9865,7 +10004,7 @@ function formAtividade(projetoId,a,opts){
       // o Início real informado é novo/mudou nesta gravação e ficou atrasado
       // em relação ao Início previsto. O modal é aberto com um pequeno atraso
       // (setTimeout) para não ser fechado junto pelo closeModal() deste form.
-      if(edit && podeEditarDados() && v.dataInicioReal && v.dataInicioReal!==inicioRealAntes && v.dataInicioPrev){
+      if(edit && modo==="total" && v.dataInicioReal && v.dataInicioReal!==inicioRealAntes && v.dataInicioPrev){
         const atrasoDias=daysBetween(v.dataInicioPrev,v.dataInicioReal);
         const temGantt=cfgSessao(proj.sessaoId).linhaDoTempo!==false;
         if(temGantt && atrasoDias>0){
