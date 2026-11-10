@@ -551,6 +551,117 @@ const USER = {
   }
 };
 function isGestor(){ return !!(USER.current && USER.current.tipo==="gestor"); }
+
+/* ============================================================
+   PERFIS E ACESSOS
+   gestor ...... acesso total; único que entra em Configurações
+   lideranca ... vê só o que o Gestor liberar; inclui, edita e exclui; cria projetos
+   equipe ...... vê só o que o Gestor liberar; inclui e edita; nunca exclui
+   colaborador . vê só o que o Gestor liberar; edita só as atividades em que está vinculado
+   O banco (regras RLS da migração sql/2026-11-10_perfis_e_acessos.sql) só
+   entrega a cada pessoa o que ela pode ver e recusa o que ela não pode
+   gravar. Estas funções só escondem botões e travam campos de acordo.
+   ============================================================ */
+const PERFIS=[
+  {id:"gestor",      label:"Gestor",      desc:"Acesso total ao app. Único perfil com Configurações."},
+  {id:"lideranca",   label:"Liderança",   desc:"Vê as sessões, projetos e áreas liberados. Inclui, edita e exclui dados e cria projetos."},
+  {id:"equipe",      label:"Equipe",      desc:"Vê as sessões, projetos e áreas liberados. Inclui e edita dados, nunca exclui."},
+  {id:"colaborador", label:"Colaborador", desc:"Vê as sessões e projetos liberados. Edita só as atividades em que está vinculado."}
+];
+const AREAS_OPERACAO=[
+  {id:"relatorios", label:"Relatórios"},
+  {id:"financeiro", label:"Financeiro", desc:"Controle Financeiro, aba Financeiro dos projetos e custo/hora das pessoas"},
+  {id:"equipe",     label:"Equipe"}
+];
+/* ok: null = ainda não carregado · true = migração rodada · false = tabela "acessos" não existe */
+const ACESSOS={ok:null, meus:[], todos:[]};
+const CUSTOS={ok:null};
+function perfilAtual(){
+  const t=USER.current&&USER.current.tipo;
+  return PERFIS.some(p=>p.id===t) ? t : "colaborador";
+}
+function rotuloPerfil(id){ const p=PERFIS.find(x=>x.id===id); return p?p.label:"Colaborador"; }
+/* inclui e edita dados dentro do que enxerga */
+function podeEditarDados(){ return ["gestor","lideranca","equipe"].includes(perfilAtual()); }
+/* exclui dados dentro do que enxerga */
+function podeExcluirDados(){ return ["gestor","lideranca"].includes(perfilAtual()); }
+function ehPerfilColaborador(){ return perfilAtual()==="colaborador"; }
+/* MCI, Metas Mensais e MDS aparecem para Gestor, Liderança e Equipe */
+function veQuadrosEstrategicos(){ return podeEditarDados(); }
+/* área da Operação liberada (relatorios | financeiro | equipe) */
+function temArea(area){
+  if(isGestor()) return true;
+  if(!["lideranca","equipe"].includes(perfilAtual())) return false;
+  return ACESSOS.meus.some(a=>a.tipo==="area" && a.valor===area);
+}
+/* sessões do portfólio que aparecem no menu: a sessão inteira liberada ou
+   pelo menos um projeto liberado nela */
+function sessoesComAcesso(){
+  if(isGestor()) return SESSOES.map(s=>s.id);
+  const ids=new Set(ACESSOS.meus.filter(a=>a.tipo==="sessao").map(a=>a.valor));
+  ((DB.data&&DB.data.projetos)||[]).forEach(p=>{ if(p.sessaoId) ids.add(p.sessaoId); });
+  return SESSOES.map(s=>s.id).filter(id=>ids.has(id));
+}
+/* Liderança cria projetos nas sessões em que tem algum acesso (não precisa da sessão inteira) */
+function podeCriarProjeto(sessaoId){
+  if(isGestor()) return true;
+  if(perfilAtual()!=="lideranca") return false;
+  const ses=sessoesComAcesso();
+  return sessaoId ? ses.includes(sessaoId) : ses.length>0;
+}
+/* a pessoa logada está vinculada à atividade: horas previstas, responsável ou "R" na RACI */
+function usuarioVinculadoAtividade(a){
+  const me=USER.current&&USER.current.colabId;
+  if(!me || !a) return false;
+  if((a.estimativasPessoas||[]).some(e=>e && e.colaboradorId===me)) return true;
+  if(Array.isArray(a.responsaveisIds) && a.responsaveisIds.includes(me)) return true;
+  return responsaveisRaciIds(getProjeto(a.projetoId), a.id).includes(me);
+}
+function podeEditarAtividade(a){ return podeEditarDados() || (ehPerfilColaborador() && usuarioVinculadoAtividade(a)); }
+/* pessoa sem nada liberado ainda (ex.: acabou de criar a conta) */
+function semAcessoLiberado(){ return !isGestor() && ACESSOS.ok===true && !ACESSOS.meus.length; }
+function avisoSemPermissao(){ toast("Seu perfil de acesso não permite esta ação."); }
+
+async function carregarAcessos(){
+  try{
+    const rows=toCamel(await sbFetch("acessos?select=*"))||[];
+    const me=USER.current&&USER.current.colabId;
+    ACESSOS.ok=true;
+    ACESSOS.todos=rows;   // o Gestor recebe os de todos; os demais, só os próprios
+    ACESSOS.meus=rows.filter(a=>a.pessoaId===me);
+  }catch(e){
+    console.warn("[PMO] tabela acessos indisponível — rode sql/2026-11-10_perfis_e_acessos.sql:", e.message||e);
+    ACESSOS.ok=false; ACESSOS.todos=[]; ACESSOS.meus=[];
+  }
+}
+/* custo/hora fica na tabela custos_pessoa (só quem tem Financeiro recebe) */
+async function carregarCustosPessoa(){
+  try{
+    const rows=toCamel(await sbFetch("custos_pessoa?select=*"))||[];
+    CUSTOS.ok=true;
+    const mapa=new Map(rows.map(r=>[String(r.pessoaId), +r.custoHora||0]));
+    DB.data.colaboradores.forEach(c=>{ if(mapa.has(String(c.id))) c.custoHora=mapa.get(String(c.id)); });
+  }catch(e){ CUSTOS.ok=false; }
+}
+/* Ocupação: horas das pessoas em projetos que eu não enxergo, sem nomes —
+   entram só nos gráficos de ocupação como "Outros projetos". */
+const PROJETO_OUTROS="__outros__";
+async function carregarOcupacaoOutros(){
+  DB.data.outros={atividades:[], horas:[]};
+  if(isGestor() || ACESSOS.ok!==true) return;
+  try{
+    const r=await sbFetch("rpc/ocupacao_outros_projetos",{method:"POST", body:{}});
+    DB.data.outros={atividades:toCamel((r&&r.atividades)||[]), horas:toCamel((r&&r.horas)||[])};
+  }catch(e){ console.warn("[PMO] ocupação de outros projetos indisponível:", e.message||e); }
+}
+/* roda fn() com as horas de "outros projetos" somadas às visíveis */
+function comOutrosProjetos(fn){
+  const o=DB.data&&DB.data.outros;
+  if(!o || (!o.atividades.length && !o.horas.length)) return fn();
+  const at=DB.data.atividades, hs=DB.data.horas;
+  DB.data.atividades=at.concat(o.atividades); DB.data.horas=hs.concat(o.horas);
+  try{ return fn(); } finally { DB.data.atividades=at; DB.data.horas=hs; }
+}
 function currentColabId(){
   // gestor não tem restrição de colaborador — retorna null para não filtrar
   if(!USER.current || USER.current.tipo==="gestor") return null;
@@ -649,6 +760,12 @@ async function sbWrite(path, {method="POST", body, prefer="return=representation
   }
   if(!resp.ok){
     const txt = await resp.text().catch(()=>"");
+    // recusa por perfil de acesso (regras RLS / gatilhos dos perfis)
+    if((resp.status===403 || txt.includes("42501") || txt.includes("row-level security")) && !/JWT/i.test(txt)){
+      let msg="";
+      try{ const j=JSON.parse(txt); if(j && j.message && !/row-level security|permission denied/i.test(j.message)) msg=j.message; }catch(_){}
+      throw new Error(msg || "Seu perfil de acesso não permite esta ação.");
+    }
     if(txt.includes("PGRST204")){
       throw new Error("O banco de dados está com uma coluna faltando ou desatualizada "+
         "(schema cache do Supabase). Avise o administrador do sistema para rodar a "+
@@ -665,7 +782,7 @@ async function sbWrite(path, {method="POST", body, prefer="return=representation
     }
     throw new Error("Falha ao salvar ("+resp.status+"): "+(txt||resp.statusText));
   }
-  if(method==="DELETE" || resp.status===204) return null;
+  if(resp.status===204) return null;
   return resp.json().catch(()=>null);
 }
 function qsEq(field,val){ return field+"=eq."+encodeURIComponent(val); }
@@ -673,14 +790,23 @@ function sbInsert(table, body, opts={}){
   const qs = opts.onConflict? "?on_conflict="+encodeURIComponent(opts.onConflict) : "";
   return sbWrite(table+qs, {method:"POST", body, prefer:opts.prefer||"return=representation"});
 }
-function sbUpdate(table, id, body){
-  return sbWrite(table+"?"+qsEq("id",id), {method:"PATCH", body});
+/* Quando o perfil não permite alterar a linha, o banco não dá erro: só não
+   altera nada (devolve lista vazia). Aqui isso vira erro, para o app não
+   mostrar "salvo" sem ter salvo. (Para o Gestor, lista vazia = linha que não
+   existe mais, como antes.) */
+async function sbUpdate(table, id, body){
+  const r=await sbWrite(table+"?"+qsEq("id",id), {method:"PATCH", body});
+  if(Array.isArray(r) && !r.length && !isGestor()) throw new Error("Seu perfil de acesso não permite alterar este registro.");
+  return r;
 }
 function sbUpdateWhere(table, filterQS, body){
   return sbWrite(table+"?"+filterQS, {method:"PATCH", body});
 }
-function sbDelete(table, id){
-  return sbWrite(table+"?"+qsEq("id",id), {method:"DELETE", prefer:"return=minimal"});
+async function sbDelete(table, id){
+  if(isGestor()) return sbWrite(table+"?"+qsEq("id",id), {method:"DELETE", prefer:"return=minimal"});
+  const r=await sbWrite(table+"?"+qsEq("id",id), {method:"DELETE", prefer:"return=representation"});
+  if(Array.isArray(r) && !r.length) throw new Error("Seu perfil de acesso não permite excluir este registro.");
+  return null;
 }
 function sbDeleteWhere(table, filterQS){
   return sbWrite(table+"?"+filterQS, {method:"DELETE", prefer:"return=minimal"});
@@ -788,6 +914,14 @@ const DB = {
     this.data.projetos.forEach(p=>{
       if(p.statusCaptacao && STATUS_CAPTACAO_LEGADO[p.statusCaptacao]) p.statusCaptacao=STATUS_CAPTACAO_LEGADO[p.statusCaptacao];
     });
+    // o perfil pode ter mudado (o Gestor alterou em Configurações) desde o login
+    if(USER.current){
+      const eu=colaboradores.find(c=>c.id===USER.current.colabId);
+      if(eu && eu.papel) USER.current.tipo=eu.papel;
+    }
+    await carregarAcessos();
+    await carregarCustosPessoa();
+    await carregarOcupacaoOutros();
     console.log("[PMO] DB.load concluído:", this.data.projetos.length, "projetos,", this.data.horas.length, "horas");
     await carregarCapacidadeSemanal();   // não derruba o load se a tabela ainda não existir
     await carregarMetasMensais();        // idem: sem a tabela metas_mensais o app continua funcionando
@@ -1592,8 +1726,33 @@ function metasMensaisHistorico(){
   return (DB.data.metasMensais||[]).filter(m=>m.concluido)
     .sort((a,b)=>(b.concluidoEm||"").localeCompare(a.concluidoEm||"") || (b.mes||"").localeCompare(a.mes||""));
 }
+/* Liderança e Equipe: só leitura (só o Gestor altera as Metas Mensais) */
+function metasMensaisLeituraHtml(lista,hist){
+  const linhas=lista.length ? lista.map((m,i)=>`
+    <div class="mm-row" style="display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line-soft);border-radius:8px;padding:9px 12px;margin-bottom:8px;background:#fafbfc">
+      <span class="tag" style="flex-shrink:0;font-weight:700" title="Prioridade definida pelo Gestor">${m.ordem!=null?(i+1)+"º":"—"}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere">${esc(m.texto||"(sem descrição)")}</div>
+        <div class="hint" style="margin-top:2px">${esc(fmtSemanaMes(m))}</div>
+        ${tagsChipsHtml(m)}
+      </div>
+    </div>`).join("")
+    : `<div class="hint" style="padding:4px 2px 12px">Nenhuma meta mensal ativa.</div>`;
+  return `
+    <div class="card">
+      <div class="card-head" style="flex-wrap:wrap;row-gap:4px"><h3>🗓️ Metas Mensais</h3>
+        <span class="hint">em ordem de prioridade · definidas pelo Gestor</span></div>
+      <div class="card-pad">
+        <div id="mm-lista">${linhas}</div>
+        <div style="display:flex;justify-content:flex-end;margin-top:6px">
+          <button class="btn ghost sm" id="mm-hist">🕘 Histórico${hist.length?` (${hist.length})`:""}</button>
+        </div>
+      </div>
+    </div>`;
+}
 function metasMensaisCardHtml(){
   const lista=metasMensaisAtivas(), hist=metasMensaisHistorico();
+  if(!isGestor()) return metasMensaisLeituraHtml(lista,hist);
   const extras=PAINEL_MIGRACAO_OK===true;   // prioridade, semana e TAGs
   const aviso=METAS_MENSAIS_OK?"":`<div class="form-err" style="display:block;margin-bottom:12px">
     A tabela <b>metas_mensais</b> ainda não existe no banco. Rode no SQL Editor do Supabase:
@@ -1641,7 +1800,7 @@ function abrirHistoricoMetasMensais(){
             <div class="hint">${esc(fmtSemanaMes(m))} · concluída em ${fmtDate(m.concluidoEm)}</div>
             ${tagsChipsHtml(m)}
           </div>
-          <button class="btn ghost sm mm-reabrir" data-id="${m.id}" title="Devolve a meta para a lista de metas ativas">↩ Reabrir</button>
+          ${isGestor()?`<button class="btn ghost sm mm-reabrir" data-id="${m.id}" title="Devolve a meta para a lista de metas ativas">↩ Reabrir</button>`:""}
         </div>`).join("") : `<div class="empty"><span class="ic">🗓️</span><p>Nenhuma meta mensal concluída ainda.</p></div>`}
     </div>
     <div class="modal-foot"><button class="btn ghost" id="hmm-close">Fechar</button></div>
@@ -1710,6 +1869,7 @@ function wireArrasteMetasMensais(v){
   });
 }
 function wireMetasMensais(v){
+  if(!isGestor()){ if($("#mm-hist")) $("#mm-hist").onclick=abrirHistoricoMetasMensais; return; }
   const achar=id=>(DB.data.metasMensais||[]).find(m=>m.id===id);
   const salvar=async(id,patch)=>{
     try{ await sbUpdate("metas_mensais", id, patch); return true; }
@@ -2221,7 +2381,15 @@ function horasExecutadasSemanaPorPessoa(semanaIni){
   });
   return out;
 }
+/* Ocupação semanal por pessoa. Liderança e Equipe veem o total de cada pessoa,
+   inclusive as horas em projetos que não enxergam ("Outros projetos", sem
+   nomes); o Colaborador vê só a própria linha. */
 function ocupacaoSemanalPessoas(semanaIni){
+  let lista=comOutrosProjetos(()=>ocupacaoSemanalPessoasBase(semanaIni));
+  if(ehPerfilColaborador()) lista=lista.filter(p=>p.id===(USER.current&&USER.current.colabId));
+  return lista;
+}
+function ocupacaoSemanalPessoasBase(semanaIni){
   const semanaFim=addDays(semanaIni,6);
   const hoje=todayStr();
   const ehSemanaCorrente=(semanaIni===limitesSemanaCorrente().ini);
@@ -2306,11 +2474,15 @@ function ocupacaoSemanalHtml(semanaIni){
     const ajustada=Math.abs(p.capacidade-CAPACIDADE_SEMANAL_PADRAO)>0.001;
     // saldo detalhado por atividade (para conferir de onde vem cada hora)
     const linhaAtiv=x=>"• "+nomeAtividade(x.atividadeId)+" ("+((getProjeto(x.projetoId)||{}).codigo||nomeProjeto(x.projetoId))+"): "+fmtNum(x.horas,1)+" h"+(x.atrasada?" — atrasada":"");
+    // horas em projetos sem acesso viram uma linha só, sem nomes
+    const ehOutro=x=>x.projetoId===PROJETO_OUTROS;
+    const linhaOutros=lst=>{ const h=lst.filter(ehOutro).reduce((t,x)=>t+x.horas,0); return h>0.04?["• Outros projetos (sem acesso): "+fmtNum(h,1)+" h"]:[]; };
     const naCarga=p.porAtividade.filter(x=>!x.foraSprint).sort((a,b)=>b.horas-a.horas);
     const fora=p.porAtividade.filter(x=>x.foraSprint).sort((a,b)=>b.horas-a.horas);
-    const tip=(naCarga.map(linhaAtiv).join("\n")||"Sem horas previstas")
-      +(fora.length?"\n\nATRASADAS FORA DA SPRINT (não somadas na carga):\n"+fora.map(linhaAtiv).join("\n"):"");
-    const tipExec=Object.entries(p.execPorProjeto).sort((a,b)=>b[1]-a[1]).map(([pid,h])=>nomeProjetoCod(pid)+": "+fmtNum(h,1)+" h").join("\n");
+    const tip=([...naCarga.filter(x=>!ehOutro(x)).map(linhaAtiv),...linhaOutros(naCarga)].join("\n")||"Sem horas previstas")
+      +(fora.length?"\n\nATRASADAS FORA DA SPRINT (não somadas na carga):\n"+[...fora.filter(x=>!ehOutro(x)).map(linhaAtiv),...linhaOutros(fora)].join("\n"):"");
+    const nItensSaldo=p.porAtividade.filter(x=>!ehOutro(x)).length+(p.porAtividade.some(ehOutro)?1:0);
+    const tipExec=Object.entries(p.execPorProjeto).sort((a,b)=>b[1]-a[1]).map(([pid,h])=>(pid===PROJETO_OUTROS?"Outros projetos (sem acesso)":nomeProjetoCod(pid))+": "+fmtNum(h,1)+" h").join("\n");
     const tipFull=(tipExec?"EXECUTADAS na semana:\n"+tipExec+"\n\nPLANEJADAS (restantes):\n":"")+tip+(p.atrasado>0.04?"\n— inclui "+fmtNum(p.atrasado,1)+" h de atividades atrasadas":"");
     const atrasTxt=(p.atrasado>0.04?` <span style="color:var(--danger)">(inclui ${fmtNum(p.atrasado,1)} h de atividades atrasadas)</span>`:"")
       +(p.foraSprint>0.04?` <span style="color:var(--ink-faint)">· + ${fmtNum(p.foraSprint,1)} h atrasadas fora da sprint (não somadas)</span>`:"");
@@ -2340,7 +2512,7 @@ function ocupacaoSemanalHtml(semanaIni){
         </div>
         <div style="font-size:11.5px;color:var(--ink-soft);margin-top:2px">${txt}</div>
         ${p.porAtividade.length?`<details style="font-size:11.5px;color:var(--ink-soft);margin-top:2px">
-          <summary style="cursor:pointer;color:var(--ink-faint)">ver saldo por atividade (${p.porAtividade.length})</summary>
+          <summary style="cursor:pointer;color:var(--ink-faint)">ver saldo por atividade (${nItensSaldo})</summary>
           <div style="white-space:pre-line;margin-top:3px">${esc(tip)}</div></details>`:""}
       </div>
       <div style="display:flex;align-items:center;gap:4px;justify-content:flex-end">${campo}</div>
@@ -3045,20 +3217,29 @@ const NAV=[
 ];
 
 
+/* telas da Operação e do Sistema que cada perfil abre */
+function podeAbrirView(view){
+  if(view==="config") return isGestor();
+  if(view==="relatorios"||view==="financeiro"||view==="equipe") return temArea(view);
+  return true;
+}
 function renderNav(){
   let h="";
-  const gestor=isGestor();
   const projetoAtivo=ST.view==="projeto"?getProjeto(ST.projetoId):null;
-  NAV.forEach(it=>{
+  const sessoesVisiveis=new Set(sessoesComAcesso());
+  // esconde o título da seção quando nenhum item dela fica visível
+  const itensVisiveis=it=>!it.sec && !it.portfolioSection && podeAbrirView(it.id);
+  NAV.forEach((it,i)=>{
     if(it.portfolioSection){
+      if(!sessoesVisiveis.size && !isGestor()) return;
       h+=`<div class="nav-label">Portfólio</div>`;
-      SESSOES.forEach(s=>{
+      SESSOES.filter(s=>sessoesVisiveis.has(s.id)).forEach(s=>{
         const active=(ST.view==="portfolio"&&ST.sessaoAtiva===s.id)||
           (!!projetoAtivo && projetoAtivo.sessaoId===s.id);
         h+=`<button class="nav-item ${active?"active":""}" data-nav="portfolio" data-sessao="${s.id}">
           <span class="ic">${s.ic}</span><span>${s.label}</span></button>`;
       });
-      if(haProjetosNaoClassificados()){
+      if(isGestor() && haProjetosNaoClassificados()){
         const active=(ST.view==="portfolio"&&!ST.sessaoAtiva)||
           (!!projetoAtivo && !projetoSessaoValida(projetoAtivo));
         h+=`<button class="nav-item ${active?"active":""}" data-nav="portfolio" data-sessao="">
@@ -3066,9 +3247,14 @@ function renderNav(){
       }
       return;
     }
-    if(it.sec){ h+=`<div class="nav-label">${it.sec}</div>`; return; }
-    // colaboradores não veem Financeiro, Equipe nem Configurações
-    if(!gestor && (it.id==="equipe"||it.id==="config"||it.id==="financeiro")) return;
+    if(it.sec){
+      // pula o título se nenhum item até o próximo título aparece para este perfil
+      const seguintes=[];
+      for(let j=i+1;j<NAV.length && !NAV[j].sec;j++) seguintes.push(NAV[j]);
+      if(seguintes.length && !seguintes.some(x=>x.portfolioSection||itensVisiveis(x))) return;
+      h+=`<div class="nav-label">${it.sec}</div>`; return;
+    }
+    if(!podeAbrirView(it.id)) return;
     const active=(ST.view===it.id);
     h+=`<button class="nav-item ${active?"active":""}" data-nav="${it.id}">
       <span class="ic">${it.ic}</span><span>${it.label}</span></button>`;
@@ -3140,10 +3326,9 @@ function render(){
   $("#crumb").textContent=crumb;
   $("#topbar-actions").innerHTML="";
 
-  // bloqueia acesso indevido por permissão
-  if(!isGestor() && (ST.view==="equipe"||ST.view==="config"||ST.view==="financeiro")){
-    ST.view="painel";
-  }
+  // bloqueia acesso indevido por perfil (Operação/Configurações e sessões não liberadas)
+  if(!podeAbrirView(ST.view)) ST.view="painel";
+  if(ST.view==="portfolio" && !isGestor() && (!ST.sessaoAtiva || !sessoesComAcesso().includes(ST.sessaoAtiva))) ST.view="painel";
 
   const v=$("#view");
   if(ST.view==="painel") viewPainel(v);
@@ -3190,7 +3375,7 @@ function renderUserWidget(){
   }
   const nome=nomeUsuarioAtual();
   const inic=nome.split(" ").slice(0,2).map(s=>s[0]||"").join("").toUpperCase()||"?";
-  const role=USER.current.tipo==="gestor"?"Gestor":"Colaborador";
+  const role=rotuloPerfil(perfilAtual());
   const bg=USER.current.tipo==="gestor"?"#164194":"#164194";
   w.innerHTML=`<div class="user-w" id="uw-btn" title="Minha conta">
     <div class="ava" style="background:${bg}">${esc(inic)}</div>
@@ -3508,7 +3693,17 @@ function mciMdsPainelHtml(){
   const mdsList=mdsAtivas();
   const histMds=mdsHistorico();
 
-  const mciHtml = mci
+  const mciHtml = (mci && !isGestor())
+    ? `<div style="padding:11px;border:1px solid var(--line-soft);border-radius:8px;background:#fafbfc;font-size:13.5px;font-weight:600;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere">${esc(mci.texto||"(sem descrição)")}</div>
+       ${tagsChipsHtml(mci)}
+       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:8px">
+         <span class="hint">Definida em ${fmtDate(mci.criadoEm)} · só o Gestor altera</span>
+         <button class="btn ghost sm" id="mci-hist">🕘 Histórico${histMci.length?` (${histMci.length})`:""}</button>
+       </div>`
+    : (!mci && !isGestor())
+    ? `<div class="empty" style="padding:20px 10px"><span class="ic">🎯</span><p>Nenhuma MCI ativa no momento.</p>
+         ${histMci.length?`<button class="btn ghost sm" id="mci-hist">🕘 Histórico (${histMci.length})</button>`:""}</div>`
+    : mci
     ? `<textarea id="mci-texto" class="auto-altura" rows="2" placeholder="Descreva a Meta Crucialmente Importante atual…"
          style="width:100%;min-height:70px;padding:11px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13.5px;font-weight:600;line-height:1.45;resize:none;overflow:hidden">${esc(mci.texto||"")}</textarea>
        ${tagsPickerHtml("mci",mci)}
@@ -3731,6 +3926,10 @@ function wirePainelMciMds(v){
    ============================================================ */
 function viewPainel(v){
   const ps=DB.data.projetos;
+  const meuId=USER.current&&USER.current.colabId;
+  const verFinanceiro=temArea("financeiro");
+  // o Colaborador acompanha só as próprias horas nos dashboards
+  if(ehPerfilColaborador()) ST.dashColab=meuId||"";
   const ativos=ps.filter(p=>{ const s=statusCalculado(p); return s==="Em andamento"||s==="Em risco"||s==="Planejado"; });
   // "Captação" é a sessão de propostas/editais em andamento (ainda não
   // ganhos) — assim que um projeto é aprovado, a própria regra de
@@ -3749,7 +3948,10 @@ function viewPainel(v){
   const despesaTotal=ps.reduce((s,p)=>s+despesasProjeto(p.id),0);
   const margens=ps.map(margemProjeto).filter(m=>m!=null);
   const margemMedia=margens.length? margens.reduce((a,b)=>a+b,0)/margens.length : null;
-  const alertas=calcularAlertas();
+  // Colaborador: só os alertas das atividades em que está vinculado (e as reuniões dos seus projetos)
+  const alertas=calcularAlertas().filter(a=>!ehPerfilColaborador()
+    || a.tipo==="reuniao"
+    || (a.tipo==="fisico" && usuarioVinculadoAtividade(getAtividade(a.atividadeId))));
   const horasAno=horasConsolidadas().filter(h=>yearOf(h.data)===ST.dashYear).reduce((s,h)=>s+(+h.horas||0),0);
 
   // opções de filtro dos Alertas de prazo: apenas projetos e responsáveis que
@@ -3781,6 +3983,14 @@ function viewPainel(v){
     ))
   );
 
+  if(!ps.length && semAcessoLiberado()){
+    v.innerHTML=`<div class="card"><div class="empty">
+      <span class="ic">🔒</span>
+      <h3>Seu acesso ainda não foi liberado</h3>
+      <p>Seu perfil é <b>${esc(rotuloPerfil(perfilAtual()))}</b>. Peça ao Gestor do portfólio para liberar as sessões e os projetos em que você vai trabalhar (Configurações › Perfis e acessos).</p>
+    </div></div>`;
+    return;
+  }
   if(!ps.length){
     v.innerHTML=`
     <div class="help-banner"><span>👋</span><span><b>Bem-vindo!</b> ${isGestor()?"Comece cadastrando a equipe e o primeiro projeto. Os dashboards e alertas são preenchidos automaticamente conforme você registra atividades, horas e lançamentos financeiros.":"Ainda não há projetos cadastrados no portfólio."}</span></div>
@@ -3788,23 +3998,26 @@ function viewPainel(v){
       <span class="ic">▦</span>
       <h3>Nenhum projeto cadastrado ainda</h3>
       <p>${isGestor()?"Crie seu primeiro projeto para começar a monitorar prazos, horas e finanças.":"Fale com o gestor do portfólio para que projetos sejam cadastrados."}</p>
-      ${isGestor()?'<button class="btn" id="go-novo">+ Criar primeiro projeto</button>':""}
+      ${podeCriarProjeto()?'<button class="btn" id="go-novo">+ Criar primeiro projeto</button>':""}
     </div></div>`;
-    if(isGestor()) $("#go-novo").onclick=()=>formProjeto();
+    if($("#go-novo")) $("#go-novo").onclick=()=>formProjeto();
     return;
   }
 
+  // valores em R$: só para quem não é Colaborador; margem e despesas, só com Financeiro
+  const kpiValores=!ehPerfilColaborador(), kpiMargem=verFinanceiro;
+  const nKpis=2+(kpiValores?2:0)+(kpiMargem?1:0);
   const kpis=`
-  <div class="grid g5">
+  <div class="grid ${nKpis===5?"g5":nKpis===4?"g4":"g2"}">
     <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--accent)"></span>Projetos ativos</div>
       <div class="val">${ativos.length}</div><div class="sub">${ps.length} no portfólio</div></div>
-    <div class="card kpi" id="kpi-captacao" style="cursor:pointer" title="Ver detalhamento por projeto"><div class="lbl"><span class="dot" style="background:var(--warn)"></span>Captação (previsto)</div>
+    ${kpiValores?`<div class="card kpi" id="kpi-captacao" style="cursor:pointer" title="Ver detalhamento por projeto"><div class="lbl"><span class="dot" style="background:var(--warn)"></span>Captação (previsto)</div>
       <div class="val" title="${fmtBRL(captacaoPrevista)}">${fmtBRLResumo(captacaoPrevista)}</div><div class="sub">Valor pleiteado em propostas/editais · clique para detalhar</div></div>
     <div class="card kpi" id="kpi-receita" style="cursor:pointer" title="Ver detalhamento por projeto"><div class="lbl"><span class="dot" style="background:var(--info)"></span>Receita já captada</div>
-      <div class="val" title="${fmtBRL(receitaCaptada)}">${fmtBRLResumo(receitaCaptada)}</div><div class="sub">Valor contratado do portfólio · clique para detalhar</div></div>
-    <div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--gold)"></span>Margem média</div>
+      <div class="val" title="${fmtBRL(receitaCaptada)}">${fmtBRLResumo(receitaCaptada)}</div><div class="sub">Valor contratado do portfólio · clique para detalhar</div></div>`:""}
+    ${kpiMargem?`<div class="card kpi"><div class="lbl"><span class="dot" style="background:var(--gold)"></span>Margem média</div>
       <div class="val">${margemMedia==null?"—":fmtNum(margemMedia,1)+"%"}</div>
-      <div class="sub">Despesas: ${fmtBRL(despesaTotal)}</div></div>
+      <div class="sub">Despesas: ${fmtBRL(despesaTotal)}</div></div>`:""}
     <div class="card kpi"><div class="lbl"><span class="dot" style="background:${alertas.some(a=>a.tipo==="fisico"||a.tipo==="financeiro")?"var(--danger)":"var(--ok)"}"></span>Alertas de prazo</div>
       <div class="val">${alertas.filter(a=>a.tipo==="fisico"||a.tipo==="financeiro").length}</div><div class="sub">${alertas.filter(a=>a.sev==="danger").length} vencido(s)</div></div>
   </div>`;
@@ -3841,7 +4054,7 @@ function viewPainel(v){
     // ITEM 3: botão "marcar como MDS" nas atividades da SPRINT
     const mcsAtiva=(a.tipo==="fisico" && a.secao==="sprint")
       ? (DB.data.mds||[]).find(m=>!m.concluido && m.atividadeId===a.atividadeId) : null;
-    const mcsBtnHtml=(a.tipo==="fisico" && a.secao==="sprint")
+    const mcsBtnHtml=(a.tipo==="fisico" && a.secao==="sprint" && veQuadrosEstrategicos())
       ? `<div class="alert-acoes"><button class="btn-icon ${mcsAtiva?"mcs-on":""}" data-alerta-mcs="${a.atividadeId}"
            title="${mcsAtiva?"Já é uma MDS desta semana — clique para remover do quadro de MDS":"Escolher esta atividade como MDS (aparece no quadro de MDS)"}">📍</button></div>` : "";
     const notasHtml=(a.tipo==="fisico" && a.notasProgresso)
@@ -3854,27 +4067,28 @@ function viewPainel(v){
     const acoesHtml=a.tipo==="reuniao"
       ? `<div class="alert-acoes">
             <button class="btn-icon" data-alerta-ir-reuniao="${a.reuniaoId}" data-proj="${a.projetoId}" title="Ir para a reunião">↗</button>
-            <button class="btn-icon" data-alerta-ok-reuniao="${a.reuniaoId}" data-proj="${a.projetoId}" title="OK — reunião concluída, remover deste painel">✓</button>
+            ${podeEditarDados()?`<button class="btn-icon" data-alerta-ok-reuniao="${a.reuniaoId}" data-proj="${a.projetoId}" title="OK — reunião concluída, remover deste painel">✓</button>`:""}
           </div>`
       : a.tipo==="duplicada"
-      ? (isGestor()? `<div class="alert-acoes">
+      ? (podeEditarDados()? `<div class="alert-acoes">
             <button class="btn-icon" data-alerta-editar-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Editar atividade">✎</button>
             <button class="btn-icon" data-alerta-ignorar-dup="${a.atividadeId}" title="Ignorar — não é duplicata, não avisar de novo para esta atividade">🙈</button>
-            <button class="btn-icon del" data-alerta-excluir-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Excluir esta atividade duplicada">🗑</button>
+            ${podeExcluirDados()?`<button class="btn-icon del" data-alerta-excluir-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Excluir esta atividade duplicada">🗑</button>`:""}
           </div>` : "")
-      : isGestor()? (
-      a.tipo==="fisico"
-        ? `<div class="alert-acoes">
+      : a.tipo==="fisico"
+        ? (podeEditarDados()? `<div class="alert-acoes">
             ${a.secao==="vencidos"?`<button class="btn-icon" data-alerta-sprint="${a.atividadeId}" title="Retornar esta atividade para a sprint desta semana (o prazo previsto não é alterado)">📅</button>`:""}
             <button class="btn-icon" data-alerta-concluir-ativ="${a.atividadeId}" title="Marcar atividade como concluída">✓</button>
             <button class="btn-icon" data-alerta-editar-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Editar atividade (ex.: novo prazo)">✎</button>
-            <button class="btn-icon del" data-alerta-excluir-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Excluir atividade">🗑</button>
+            ${podeExcluirDados()?`<button class="btn-icon del" data-alerta-excluir-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Excluir atividade">🗑</button>`:""}
           </div>`
-        : `<div class="alert-acoes">
+          : podeEditarAtividade(getAtividade(a.atividadeId))? `<div class="alert-acoes">
+            <button class="btn-icon" data-alerta-editar-ativ="${a.atividadeId}" data-proj="${a.projetoId}" title="Lançar horas e anotações, datas reais ou concluir">✎</button>
+          </div>` : "")
+        : (podeEditarDados() && verFinanceiro)? `<div class="alert-acoes">
             <button class="btn-icon" data-alerta-realizar-fin="${a.financeiroId}" title="Marcar como realizado">✓</button>
             <button class="btn-icon" data-alerta-editar-fin="${a.financeiroId}" data-proj="${a.projetoId}" title="Editar lançamento (ex.: nova data)">✎</button>
-          </div>`
-    ) : "";
+          </div>` : "";
     const faltaHtml=(a.faltando&&a.faltando.length)
       ? `<div class="alert-resp sem"><span class="rl">Faltam dados:</span> ${esc(a.faltando.join(", "))}</div>` : "";
     return `<div class="alert-row"><div class="ab" style="background:${col}"></div>
@@ -3931,14 +4145,14 @@ function viewPainel(v){
   const sprintOcupHtml=`
     <div class="card-pad" style="border-top:1px solid var(--line)">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
-        <h4 style="font-size:14px">📊 Ocupação semanal da equipe</h4>
+        <h4 style="font-size:14px">📊 ${ehPerfilColaborador()?"Minha ocupação semanal":"Ocupação semanal da equipe"}</h4>
         <button class="btn ghost sm" id="sprint-sem-prev" title="Semana anterior">◀</button>
         <span style="font-size:12.5px;font-weight:600">${fmtDate(semOcupIni)} a ${fmtDate(addDays(semOcupIni,6))}${ST.sprintSemanaOffset?"":" (semana atual)"}</span>
         <button class="btn ghost sm" id="sprint-sem-next" title="Próxima semana">▶</button>
         ${ST.sprintSemanaOffset?`<button class="btn ghost sm" id="sprint-sem-hoje">Semana atual</button>`:""}
       </div>
       <div style="font-size:12px;color:var(--ink-faint);margin-bottom:8px">
-        Horas <b>restantes</b> (ainda não executadas) de cada atividade, <b>divididas pelos dias úteis</b> de hoje até o término previsto — cada semana mostra só a parte dos seus dias; as <b>atrasadas</b> entram inteiras na semana atual — mais as horas <b>já executadas</b> na semana (barra azul), em todos os projetos. O <b>limite</b> (│) é <b>80% da carga semanal</b> (${fmtNum(CAPACIDADE_SEMANAL_PADRAO*OCUP_LIMITE,0)} h de ${CAPACIDADE_SEMANAL_PADRAO} h): de 70% a 80% fica laranja e de 80% em diante, vermelho.
+        Horas <b>restantes</b> (ainda não executadas) de cada atividade, <b>divididas pelos dias úteis</b> de hoje até o término previsto — cada semana mostra só a parte dos seus dias; as <b>atrasadas</b> entram inteiras na semana atual — mais as horas <b>já executadas</b> na semana (barra azul), em todos os projetos${isGestor()?"":" — os que você não acessa aparecem como “Outros projetos”, sem nomes"}. O <b>limite</b> (│) é <b>80% da carga semanal</b> (${fmtNum(CAPACIDADE_SEMANAL_PADRAO*OCUP_LIMITE,0)} h de ${CAPACIDADE_SEMANAL_PADRAO} h): de 70% a 80% fica laranja e de 80% em diante, vermelho.
         ${isGestor()?"Edite o campo à direita para ajustar a carga semanal de uma pessoa (feriado, licença, férias).":""}
         ${CAPSEM.remoto?"":"<br><span style='color:var(--warn)'>⚠ Tabela <b>capacidade_semanal</b> não encontrada no Supabase: os ajustes ficam salvos só neste navegador.</span>"}
       </div>
@@ -3959,7 +4173,7 @@ function viewPainel(v){
     ${secaoCard("sprint","2. SPRINT","vencem (ou venceram) na semana corrente · "+fmtDate(sem.ini)+" a "+fmtDate(sem.fim),secSprint.length,"b-warn",
       secSprint.length? secSprint.map(alertaRowHtml).join("") : vazioHtml(alertas.some(a=>a.secao==="sprint")?"Nenhum alerta para o filtro selecionado.":"Nada vence no restante desta semana."),sprintOcupHtml)}
     ${secaoCard("reunioes","3. Próximas reuniões / reuniões em aberto","reuniões dos próximos 7 dias e as já realizadas que ainda não receberam OK",secReunioes.length,"b-info",reunioesCorpo)}
-    ${secaoCard("duplicidades","4. Duplicidades","atividades com o mesmo nome em um ou mais cronogramas",secDup.length,"b-warn",
+    ${ehPerfilColaborador()?"":secaoCard("duplicidades","4. Duplicidades","atividades com o mesmo nome em um ou mais cronogramas",secDup.length,"b-warn",
       secDup.length? secDup.map(alertaRowHtml).join("") : vazioHtml(alertas.some(a=>a.secao==="duplicidades")?"Nenhum alerta para o filtro selecionado.":"Nenhuma duplicidade encontrada."))}
   `;
 
@@ -3968,12 +4182,12 @@ function viewPainel(v){
   <div style="height:18px"></div>
   ${alertasSecoesHtml}
 
-  ${mciMdsPainelHtml()}
+  ${veQuadrosEstrategicos()?mciMdsPainelHtml():""}
 
   <div class="toolbar">
-    <span class="section-title" style="margin:0">Dashboards de horas</span>
+    <span class="section-title" style="margin:0">${ehPerfilColaborador()?"Minhas horas":"Dashboards de horas"}</span>
     <div class="spacer"></div>
-    <button class="btn ghost sm" id="btn-imp-pend" title="Envie a planilha de pendências preenchida para gravar as datas reais e as horas executadas de uma vez">⬆ Importar pendências preenchidas</button>
+    ${podeEditarDados()?`<button class="btn ghost sm" id="btn-imp-pend" title="Envie a planilha de pendências preenchida para gravar as datas reais e as horas executadas de uma vez">⬆ Importar pendências preenchidas</button>`:""}
     <button class="btn ghost sm" id="btn-pend-conc" title="Planilha com as atividades concluídas que estão sem datas reais ou horas executadas, uma aba por projeto">⬇ Pendências de conclusão (.xlsx)</button>
     <div class="field-inline">Ano
       <select class="select" id="dash-year">${anosDisponiveis().map(y=>`<option ${y===ST.dashYear?"selected":""}>${y}</option>`).join("")}</select>
@@ -3987,9 +4201,9 @@ function viewPainel(v){
       <select class="select" id="dash-mes">${MONTHS.map((m,i)=>`<option value="${i+1}" ${i+1===+ST.dashMes?"selected":""}>${m}</option>`).join("")}</select></div>`
     :ST.dashMode==="semestral"?`<div class="field-inline">Semestre
       <select class="select" id="dash-sem"><option value="1" ${+ST.dashSem===1?"selected":""}>1º</option><option value="2" ${+ST.dashSem===2?"selected":""}>2º</option></select></div>`:""}
-    <div class="field-inline">Colaborador
+    ${ehPerfilColaborador()?"":`<div class="field-inline">Colaborador
       <select class="select" id="dash-colab"><option value="">Todos</option>${colaboradoresDash().map(c=>`<option value="${esc(c.id)}" ${c.id===ST.dashColab?"selected":""}>${esc(c.nome)}</option>`).join("")}</select>
-    </div>
+    </div>`}
   </div>
 
   <div class="card" style="margin-bottom:18px">
@@ -4012,18 +4226,18 @@ function viewPainel(v){
 
   <div class="card" style="margin-top:18px">
     <div class="card-head"><h3>Ocupação por colaborador</h3><span class="hint">${esc(perDash.label)} · executado × planejado × capacidade (${CAPACIDADE_DIARIA_PADRAO} h por dia útil) · clique no nome para filtrar os gráficos</span></div>
-    <div class="card-pad">${ocupacaoColabPeriodoHtml(perDash,planPer)}</div>
+    <div class="card-pad">${comOutrosProjetos(()=>ocupacaoColabPeriodoHtml(perDash,horasPlanejadasPeriodo(perDash.ini,perDash.fim)))}</div>
   </div>`;
 
-  if(isGestor()) setTopAction(`<button class="btn">+ Novo projeto</button>`,()=>formProjeto());
-  wirePainelMciMds(v);
+  if(podeCriarProjeto()) setTopAction(`<button class="btn">+ Novo projeto</button>`,()=>formProjeto());
+  if(veQuadrosEstrategicos()) wirePainelMciMds(v);
   $("#btn-origem-horas").onclick=()=>abrirOrigemHoras();
   $("#painel-alerta-proj").onchange=e=>{ ST.painelAlertaProjeto=e.target.value; render(); };
   $("#painel-alerta-resp").onchange=e=>{ ST.painelAlertaResp=e.target.value; render(); };
   $("#dash-year").onchange=e=>{ ST.dashYear=e.target.value; render(); };
   if($("#dash-mes")) $("#dash-mes").onchange=e=>{ ST.dashMes=+e.target.value; render(); };
   if($("#dash-sem")) $("#dash-sem").onchange=e=>{ ST.dashSem=+e.target.value; render(); };
-  $("#dash-colab").onchange=e=>{ ST.dashColab=e.target.value; render(); };
+  if($("#dash-colab")) $("#dash-colab").onchange=e=>{ ST.dashColab=e.target.value; render(); };
   v.querySelectorAll("[data-bucket]").forEach(el=>{
     el.onclick=()=>{ const i=+el.dataset.bucket; if(ST.dashMode==="mensal") ST.dashMes=i+1; else if(ST.dashMode==="semestral") ST.dashSem=i+1; render(); };
   });
@@ -4045,7 +4259,7 @@ function viewPainel(v){
     b.onclick=async()=>{ await salvarCapacidadeSemanal(b.dataset.capsemReset,b.dataset.capsemSemana,null); render(); };
   });
   $("#btn-pend-conc").onclick=exportarPendenciasConclusao;
-  $("#btn-imp-pend").onclick=importarPendenciasConclusao;
+  if($("#btn-imp-pend")) $("#btn-imp-pend").onclick=importarPendenciasConclusao;
   $("#dash-mode").querySelectorAll("button").forEach(b=>{
     b.onclick=()=>{ ST.dashMode=b.dataset.m; render(); };
   });
@@ -4084,10 +4298,10 @@ function viewPainel(v){
   v.querySelectorAll("[data-alerta-ok-reuniao]").forEach(b=>{
     b.onclick=()=>marcarReuniaoOkRapido(b.dataset.alertaOkReuniao, b.dataset.proj);
   });
-  $("#kpi-captacao").onclick=()=>abrirDetalheReceitaPortfolio(projetosCaptacao,
+  if($("#kpi-captacao")) $("#kpi-captacao").onclick=()=>abrirDetalheReceitaPortfolio(projetosCaptacao,
     "◈ Captação (previsto) — por projeto",
     "Projetos da sessão \"Captação\" ainda com chance real de virar receita (status 01 a 04, 07, 09 e 10 — ou seja, tudo exceto declinados, não submetidos e não aprovados), ordenados do maior para o menor valor pleiteado. Propostas nos status \"05 - Declinado\", \"06 - Não Submetido\" ou \"08 - Não Aprovado\" não entram nesse total. Assim que um projeto é aprovado/contratado, ele é convertido para \"Gestão de Projetos\" e passa a contar em \"Receita já captada\". Clique num projeto para abri-lo e conferir/corrigir o campo \"Receita / Valor do projeto\".");
-  $("#kpi-receita").onclick=()=>abrirDetalheReceitaPortfolio(projetosNaoCaptacao,
+  if($("#kpi-receita")) $("#kpi-receita").onclick=()=>abrirDetalheReceitaPortfolio(projetosNaoCaptacao,
     "💰 Receita já captada — por projeto",
     "Todos os projetos do portfólio, exceto os que ainda estão em Captação, ordenados do maior para o menor valor contratado. Clique num projeto para abri-lo e conferir/corrigir o campo \"Receita / Valor do projeto\".");
 }
@@ -4497,6 +4711,7 @@ function ocupacaoColabPeriodoHtml(per,planPer){
   execTodos.forEach(h=>{ if(h.colaboradorId) ex[h.colaboradorId]=(ex[h.colaboradorId]||0)+(+h.horas||0); });
   planPer.forEach(x=>{ pl[x.colaboradorId]=(pl[x.colaboradorId]||0)+x.horas; });
   const ids=[...new Set([...Object.keys(ex),...Object.keys(pl)])].filter(id=>getColab(id))
+    .filter(id=>!ehPerfilColaborador() || id===(USER.current&&USER.current.colabId))
     .sort((a,b)=>Math.max(pl[b]||0,ex[b]||0)-Math.max(pl[a]||0,ex[a]||0));
   if(!ids.length) return `<div class="empty" style="padding:22px"><p>Sem horas no período.</p></div>`;
   const escala=Math.max(cap,...ids.map(id=>Math.max(ex[id]||0,pl[id]||0)))||1;
@@ -4698,14 +4913,14 @@ function viewPortfolio(v){
     render(); return;
   }
   const ps=DB.data.projetos.filter(p=> sessaoId ? p.sessaoId===sessaoId : !projetoSessaoValida(p));
-  if(isGestor()) setTopAction(`<button class="btn">+ Novo projeto</button>`,()=>formProjeto(null,sessaoId));
+  if(podeCriarProjeto(sessaoId)) setTopAction(`<button class="btn">+ Novo projeto</button>`,()=>formProjeto(null,sessaoId));
   if(!ps.length){
     const vazioMsg=sessaoId?`Nenhum projeto na sessão "${nomeSessao(sessaoId)}" ainda.`:"Nenhum projeto pendente de classificação.";
     v.innerHTML=`<div class="card"><div class="empty">
       <span class="ic">▤</span><h3>${sessaoId?"Sessão vazia":"Tudo classificado"}</h3>
-      <p>${isGestor()?vazioMsg:"Nenhum projeto cadastrado ainda."}</p>
-      ${isGestor()&&sessaoId?'<button class="btn" id="np">+ Criar projeto</button>':""}</div></div>`;
-    if(isGestor()&&sessaoId) $("#np").onclick=()=>formProjeto(null,sessaoId);
+      <p>${podeCriarProjeto(sessaoId)?vazioMsg:"Nenhum projeto liberado para você nesta sessão."}</p>
+      ${podeCriarProjeto(sessaoId)&&sessaoId?'<button class="btn" id="np">+ Criar projeto</button>':""}</div></div>`;
+    if($("#np")) $("#np").onclick=()=>formProjeto(null,sessaoId);
     return;
   }
   ST.portfolioOrdenar=ST.portfolioOrdenar||"status";
@@ -4717,6 +4932,7 @@ function viewPortfolio(v){
   const visiveis=ST.portfolioMostrarConcluidos?buscados:buscados.filter(p=>statusCalculado(p)!=="Concluído");
   const filtered=ordenarProjetos(visiveis, ST.portfolioOrdenar);
 
+  const verFin=temArea("financeiro");
   const rows=filtered.map(p=>{
     const prog=progressoProjeto(p.id);
     const margem=margemProjeto(p);
@@ -4728,15 +4944,15 @@ function viewPortfolio(v){
       <td>${statusBadge(statusCalculado(p))}</td>
       <td style="font-size:12px;color:var(--ink-soft)">${fmtDate(p.dataInicio)}<br>↓ ${fmtDate(p.dataFim)}</td>
       <td class="num">${fmtBRL(p.receita)}</td>
-      <td class="num">${fmtBRL(desp)}</td>
-      <td class="num"><b style="color:${margem==null?"var(--ink-faint)":margem<0?"var(--danger)":"var(--ok)"}">${margem==null?"—":fmtNum(margem,1)+"%"}</b></td>
+      ${verFin?`<td class="num">${fmtBRL(desp)}</td>
+      <td class="num"><b style="color:${margem==null?"var(--ink-faint)":margem<0?"var(--danger)":"var(--ok)"}">${margem==null?"—":fmtNum(margem,1)+"%"}</b></td>`:""}
       <td><div style="display:flex;align-items:center;gap:8px">
         <div class="pbar ${pcls}" style="flex:1"><div style="width:${prog}%"></div></div>
         <span style="font-size:11.5px;font-weight:600;width:34px">${prog}%</span></div></td>
       <td class="actions">
-        <button class="btn-icon" data-edit="${p.id}" title="Editar">✎</button>
+        ${podeEditarDados()?`<button class="btn-icon" data-edit="${p.id}" title="Editar">✎</button>`:""}
         ${isGestor()?`<button class="btn-icon" data-move="${p.id}" title="Mover de sessão">⇄</button>`:""}
-        ${isGestor()?`<button class="btn-icon del" data-del="${p.id}" title="Excluir">🗑</button>`:""}
+        ${podeExcluirDados()?`<button class="btn-icon del" data-del="${p.id}" title="Excluir">🗑</button>`:""}
       </td></tr>`;
   }).join("");
 
@@ -4758,9 +4974,9 @@ function viewPortfolio(v){
   <div class="card table-wrap">
     <table><thead><tr>
       <th>Projeto</th><th>Status</th><th>Período</th>
-      <th class="num">Receita</th><th class="num">Despesas</th><th class="num">Margem</th>
+      <th class="num">Receita</th>${verFin?`<th class="num">Despesas</th><th class="num">Margem</th>`:""}
       <th style="min-width:140px">Andamento</th><th></th>
-    </tr></thead><tbody>${rows||`<tr><td colspan="8" style="text-align:center;color:var(--ink-faint);padding:30px">Nenhum projeto encontrado.</td></tr>`}</tbody></table>
+    </tr></thead><tbody>${rows||`<tr><td colspan="${verFin?8:6}" style="text-align:center;color:var(--ink-faint);padding:30px">Nenhum projeto encontrado.</td></tr>`}</tbody></table>
   </div>`;
 
   $("#q").oninput=e=>{ ST.search.portfolio=e.target.value; viewPortfolio(v); };
@@ -4845,10 +5061,10 @@ function viewProjeto(v){
   let tabs=[
     ["resumo","Resumo"],["documentos","📎 Documentos"],["cronograma","Cronograma Físico"]
   ];
-  if(isGestor()) tabs.push(["ocupacao","👥 Ocupação da Equipe"]);
+  if(podeEditarDados()) tabs.push(["ocupacao","👥 Ocupação da Equipe"]);
   tabs.push(["reunioes","Reuniões"]);
-  // financeiro só para gestor
-  if(isGestor()) tabs.push(["financeiro","Financeiro"]);
+  // financeiro só para quem tem a área Financeiro liberada
+  if(temArea("financeiro")) tabs.push(["financeiro","Financeiro"]);
   tabs.push(["stakeholders","Stakeholders"],["raci","Matriz RACI"],["riscos","Riscos"]);
   // esconde as abas que essa sessão não usa (ex.: Financeiro/RACI em Captação)
   const abasOcultas=new Set(cfgSessao(p.sessaoId).abasOcultas||[]);
@@ -4917,7 +5133,8 @@ function projResumo(c,p){
     </table>` : "";
 
   const cfgAtual=cfgSessao(p.sessaoId);
-  const podeConverter = cfgAtual.conversao && [].concat(cfgAtual.conversao.statusGatilho).includes(p[cfgAtual.conversao.statusField]);
+  const podeConverter = podeEditarDados() && cfgAtual.conversao && [].concat(cfgAtual.conversao.statusGatilho).includes(p[cfgAtual.conversao.statusField]);
+  const verFinResumo=temArea("financeiro");
   const bannerConversao = podeConverter ? `<div class="card" style="margin-bottom:16px;border-color:var(--ok)">
       <div class="card-pad" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
         <div><b>Captação aprovada!</b><div style="font-size:12.5px;color:var(--ink-faint)">
@@ -4928,27 +5145,27 @@ function projResumo(c,p){
   c.innerHTML=`
   ${bannerConversao}
   ${cfgAtual.ocultarKpisResumo?"":`
-  <div class="grid g4">
+  <div class="grid ${verFinResumo?"g4":"g2"}">
     <div class="card kpi"><div class="lbl">Valor do projeto</div>
       <div class="val" style="font-size:21px">${fmtBRL(receita)}</div>
       <div class="sub">${campoOcultoSessao(p,"cliente")?"":esc(p.cliente||"Sem cliente definido")}</div></div>
-    <div class="card kpi"><div class="lbl">Despesas (total)</div>
+    ${verFinResumo?`<div class="card kpi"><div class="lbl">Despesas (total)</div>
       <div class="val" style="font-size:21px">${fmtBRL(despTotal)}</div>
       <div class="sub">Realizado ${fmtBRL(despReal)} · Previsto ${fmtBRL(despPrev)}</div></div>
     <div class="card kpi"><div class="lbl">Margem de lucro</div>
       <div class="val" style="color:${margem==null?"var(--ink)":margem<0?"var(--danger)":"var(--ok)"}">${margem==null?"—":fmtNum(margem,1)+"%"}</div>
-      <div class="sub">Resultado ${fmtBRL(receita-despTotal)}</div></div>
+      <div class="sub">Resultado ${fmtBRL(receita-despTotal)}</div></div>`:""}
     <div class="card kpi"><div class="lbl">Andamento físico</div>
       <div class="val">${prog}%</div><div class="sub">${concl}/${ats.length} atividades concluídas</div></div>
   </div>
   <div style="height:18px"></div>`}
   <div class="card">
     <div class="card-head"><h3>${esc(cfgAtual.tituloCardInformacoes||"Informações")}</h3>
-      ${isGestor()?'<button class="btn ghost sm" id="edit-p">✎ Editar</button>':""}</div>
+      ${podeEditarDados()?'<button class="btn ghost sm" id="edit-p">✎ Editar</button>':""}</div>
     <div class="card-pad">
       <div class="mini-stat"><span>Código</span><span class="v"><b>${esc(p.codigo||"—")}</b></span></div>
       ${cfgAtual.ocultarStatusResumo?"":`<div class="mini-stat"><span>Status</span><span title="${esc(motivoStatusCalculado(p))}">${statusBadge(statusCalculado(p))}
-        ${isGestor()&&!(p.status!=="Cancelado"&&motivoCancelamentoAuto(p))?`<button class="btn-icon" id="btn-cancelar-proj" title="${statusCalculado(p)==='Cancelado'?'Reativar projeto':'Marcar como cancelado'}" style="margin-left:6px;font-size:11px">${statusCalculado(p)==='Cancelado'?'↺':'✕'}</button>`:""}</span></div>
+        ${podeEditarDados()&&!(p.status!=="Cancelado"&&motivoCancelamentoAuto(p))?`<button class="btn-icon" id="btn-cancelar-proj" title="${statusCalculado(p)==='Cancelado'?'Reativar projeto':'Marcar como cancelado'}" style="margin-left:6px;font-size:11px">${statusCalculado(p)==='Cancelado'?'↺':'✕'}</button>`:""}</span></div>
       <div class="mini-stat" style="font-size:11px;color:var(--ink-faint)"><span></span><span>${esc(motivoStatusCalculado(p))}</span></div>`}
       ${campoOcultoSessao(p,"cliente")?"":`<div class="mini-stat"><span>Cliente / Área demandante</span><span class="v">${esc(p.cliente||"—")}</span></div>`}
       ${campoOcultoResumo(p,"dataInicio")?"":`<div class="mini-stat"><span>Início</span><span class="v">${fmtDate(p.dataInicio)}</span></div>`}
@@ -4999,14 +5216,14 @@ function fmtBytes(n){
 }
 function projDocumentos(c,p){
   p.documentos=p.documentos||[];
-  const podeEditar=isGestor();
+  const podeEditar=podeEditarDados();
   const rows=p.documentos.map(d=>`<tr>
       <td style="font-weight:600">📄 ${esc(d.nomeArquivo)}</td>
       <td style="font-size:12px;color:var(--ink-soft)">${fmtBytes(d.tamanhoBytes)}</td>
       <td style="font-size:12px;color:var(--ink-soft)">${d.criadoEm?fmtDate(d.criadoEm.slice(0,10)):"—"}</td>
       <td class="actions">
         <button class="btn-icon" data-verdoc="${d.id}" title="Visualizar / baixar">👁</button>
-        ${podeEditar?`<button class="btn-icon del" data-dldoc="${d.id}" title="Remover">🗑</button>`:""}
+        ${podeExcluirDados()?`<button class="btn-icon del" data-dldoc="${d.id}" title="Remover">🗑</button>`:""}
       </td></tr>`).join("");
   c.innerHTML=`
   <div class="help-banner"><span>ℹ️</span><span>Anexe aqui o(s) documento(s) de contratação do projeto (contrato, termo de referência, edital, etc.). Pode anexar mais de um arquivo.</span></div>
@@ -5083,7 +5300,8 @@ function responsaveisRaci(p,atividadeId){
     .map(([pessoaId])=>nomeColab(pessoaId));
 }
 function projCronograma(c,p){
-  const podeEditar=isGestor();
+  const podeEditar=podeEditarDados();
+  const podeExcluir=podeExcluirDados();
   // filtro de período: uma atividade "passa" se o intervalo dela
   // [dataInicioPrev, dataFimPrev] cruza com o período escolhido — não exige
   // que ela caiba 100% dentro, senão uma atividade longa que só começa
@@ -5180,7 +5398,8 @@ function projCronograma(c,p){
       <td class="actions">${podeEditar?`
         <button class="btn-icon" data-eda="${a.id}">✎</button>
         <button class="btn-icon" data-mva="${a.id}" title="Mover para outro projeto">⇄</button>
-        <button class="btn-icon del" data-dla="${a.id}">🗑</button>`:""}</td></tr>`;
+        ${podeExcluir?`<button class="btn-icon del" data-dla="${a.id}">🗑</button>`:""}`
+        : podeEditarAtividade(a)?`<button class="btn-icon" data-eda="${a.id}" title="Lançar horas e anotações, datas reais ou concluir">✎</button>`:""}</td></tr>`;
   }).join("");
 
   c.innerHTML=`
@@ -5241,7 +5460,12 @@ function projCronograma(c,p){
     };
   }
 
-  if(!podeEditar) return;
+  // Colaborador: só abre as atividades em que está vinculado
+  if(!podeEditar){
+    c.querySelectorAll("[data-eda]").forEach(b=>b.onclick=()=>formAtividade(p.id,getAtividade(b.dataset.eda)));
+    return;
+  }
+  if(!podeExcluir && $("#crono-excluir-sel")) $("#crono-excluir-sel").style.display="none";
   if($("#crono-bulk")){
     const sel=ST.cronoSelecionadas, todos=$("#crono-sel-all");
     const boxes=[...c.querySelectorAll("[data-sel]")];
@@ -5781,7 +6005,7 @@ function projFinanceiro(c,p){
       <td>${venc?`<span class="badge b-danger">Vencido</span>`:statusBadge(f.status==="realizado"?"Realizado":"Previsto")}</td>
       <td class="num" style="color:${f.tipo==="receita"?"var(--ok)":"var(--danger)"};font-weight:600">${f.tipo==="receita"?"+":"−"}${fmtBRL(f.valor)}${detalheQtdValor(f)}</td>
       <td class="actions"><button class="btn-icon" data-edf="${f.id}">✎</button>
-        <button class="btn-icon del" data-dlf="${f.id}">🗑</button></td></tr>`;
+        ${podeExcluirDados()?`<button class="btn-icon del" data-dlf="${f.id}">🗑</button>`:""}</td></tr>`;
   }).join("");
 
   c.innerHTML=`
@@ -5831,7 +6055,7 @@ function projFinanceiro(c,p){
 /* ---- STAKEHOLDERS ---- */
 function projStakeholders(c,p){
   p.stakeholders=p.stakeholders||[];
-  const podeEditar=isGestor();
+  const podeEditar=podeEditarDados();
   const rows=p.stakeholders.map((s,i)=>`<tr>
     <td style="font-weight:600">${esc(s.nome)}</td>
     <td>${esc(s.papel||"—")}</td>
@@ -5840,7 +6064,7 @@ function projStakeholders(c,p){
     <td style="font-size:12px;color:var(--ink-soft)">${esc(s.contato||"—")}</td>
     <td>${s.classificacao?`<span class="badge ${s.classificacao==="Primário"?"b-info":"b-mute"}">${esc(s.classificacao)}</span>`:"—"}</td>
     <td class="actions">${podeEditar?`<button class="btn-icon" data-es="${i}">✎</button>
-      <button class="btn-icon del" data-ds="${i}">🗑</button>`:""}</td></tr>`).join("");
+      ${podeExcluirDados()?`<button class="btn-icon del" data-ds="${i}">🗑</button>`:""}`:""}</td></tr>`).join("");
   c.innerHTML=`
   <div class="toolbar"><span class="section-title" style="margin:0">Partes interessadas</span>
     <div class="spacer"></div>${podeEditar?'<button class="btn" id="add-stk">+ Novo stakeholder</button>':""}</div>
@@ -5910,13 +6134,13 @@ function projRaci(c,p){
       const opcoesSelect=["","R","A","C","I"].map(o=>
         `<option value="${o}" ${o===val?"selected":""}>${o||"—"}</option>`).join("");
       tds+=`<td class="raci-cell ${val?"raci-"+val:""}" style="padding:0">
-        <select class="raci-select" data-ra="${a.id}" data-rc="${co.id}" ${isGestor()?"":"disabled"}>${opcoesSelect}</select>
+        <select class="raci-select" data-ra="${a.id}" data-rc="${co.id}" ${podeEditarDados()?"":"disabled"}>${opcoesSelect}</select>
       </td>`;
     });
     body+=`<tr>${tds}</tr>`;
   });
   c.innerHTML=`
-  <div class="help-banner"><span>ℹ️</span><span>${isGestor()?"Escolha o papel na lista suspensa de cada célula: <b>R</b> Responsável (executa), <b>A</b> Autoridade (aprova), <b>C</b> Consultado, <b>I</b> Informado, ou deixe em branco.":"Visualização da matriz RACI deste projeto."} Parceiros externos aparecem destacados.</span></div>
+  <div class="help-banner"><span>ℹ️</span><span>${podeEditarDados()?"Escolha o papel na lista suspensa de cada célula: <b>R</b> Responsável (executa), <b>A</b> Autoridade (aprova), <b>C</b> Consultado, <b>I</b> Informado, ou deixe em branco.":"Visualização da matriz RACI deste projeto."} Parceiros externos aparecem destacados.</span></div>
   <div class="card table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
   <div class="legend" style="margin-top:14px">
     <div class="it"><span class="sw raci-R" style="border-radius:3px"></span>R — Responsável</div>
@@ -5924,7 +6148,7 @@ function projRaci(c,p){
     <div class="it"><span class="sw raci-C" style="border-radius:3px"></span>C — Consultado</div>
     <div class="it"><span class="sw raci-I" style="border-radius:3px"></span>I — Informado</div>
   </div>`;
-  if(!isGestor()) return; // colaboradores visualizam a matriz, mas não editam
+  if(!podeEditarDados()) return; // o perfil Colaborador visualiza a matriz, mas não edita
   c.querySelectorAll(".raci-select").forEach(sel=>{
     sel.onchange=async()=>{
       const aid=sel.dataset.ra, cid=sel.dataset.rc;
@@ -5945,7 +6169,7 @@ function severidadeRisco(r){
 }
 function projRiscos(c,p){
   p.riscos=p.riscos||[];
-  const podeEditar=isGestor();
+  const podeEditar=podeEditarDados();
   const rows=p.riscos.map((r,i)=>{
     const sev=severidadeRisco(r);
     const sb=sev==="Alta"?"b-danger":sev==="Média"?"b-warn":"b-ok";
@@ -5958,7 +6182,7 @@ function projRiscos(c,p){
       <td>${statusBadge(r.status||"Identificado")}</td>
       <td style="font-size:12px">${esc(r.responsavel||"—")}</td>
       <td class="actions">${podeEditar?`<button class="btn-icon" data-er="${i}">✎</button>
-        <button class="btn-icon del" data-dr="${i}">🗑</button>`:""}</td></tr>`;
+        ${podeExcluirDados()?`<button class="btn-icon del" data-dr="${i}">🗑</button>`:""}`:""}</td></tr>`;
   }).join("");
   c.innerHTML=`
   <div class="toolbar"><span class="section-title" style="margin:0">Registro de riscos</span>
@@ -6028,7 +6252,7 @@ function reunioesLista(c,p){
         <div style="font-size:11.5px;color:var(--ink-faint);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden" title="${esc((r.participantes||[]).join(", "))}">${esc((r.participantes||[]).join(", ")||"Sem participantes")}</div></td>
       <td>${temAta?'<span class="badge b-ok">Ata pronta</span>':r.transcricao?'<span class="badge b-warn">Transcrição</span>':'<span class="badge b-mute">Pendente</span>'}</td>
       <td class="num">${nSaidas?nSaidas:'<span style="color:var(--ink-faint)">—</span>'}</td>
-      <td class="actions" style="width:44px"><button class="btn-icon del" data-dr="${r.id}" title="Excluir reunião">🗑</button></td></tr>`;
+      <td class="actions" style="width:44px">${podeExcluirDados()?`<button class="btn-icon del" data-dr="${r.id}" title="Excluir reunião">🗑</button>`:""}</td></tr>`;
   }).join("");
 
   c.innerHTML=`
@@ -6042,7 +6266,7 @@ function reunioesLista(c,p){
         <div class="field-inline">Até
           <input type="date" class="select" id="fr-ate" value="${ST.reunFiltroAte}"></div>
         <button class="btn ghost sm" id="fr-clr">Limpar</button>
-        <button class="btn" id="add-reu">+ Nova reunião</button>
+        ${podeEditarDados()?`<button class="btn" id="add-reu">+ Nova reunião</button>`:""}
       </div>
       ${lista.length?`<div class="card table-wrap"><table>
         <thead><tr><th style="width:130px">Data</th><th>Reunião</th><th>Status</th>
@@ -6050,8 +6274,8 @@ function reunioesLista(c,p){
         <tbody>${linhas}</tbody></table></div>`
         :`<div class="card"><div class="empty">
           <span class="ic">▣</span><h3>Nenhuma reunião registrada</h3>
-          <p>Cadastre reuniões com data, transcrição e gere atas estruturadas com apoio de IA.</p>
-          <button class="btn" id="add-reu2">+ Nova reunião</button></div></div>`}
+          <p>${podeEditarDados()?"Cadastre reuniões com data, transcrição e gere atas estruturadas com apoio de IA.":"Nenhuma reunião registrada neste projeto."}</p>
+          ${podeEditarDados()?`<button class="btn" id="add-reu2">+ Nova reunião</button>`:""}</div></div>`}
     </div>
     <div>
       <div class="card">
@@ -6064,7 +6288,7 @@ function reunioesLista(c,p){
     </div>
   </div>`;
 
-  $("#add-reu").onclick=()=>formReuniao(p);
+  if($("#add-reu")) $("#add-reu").onclick=()=>formReuniao(p);
   if($("#add-reu2")) $("#add-reu2").onclick=()=>formReuniao(p);
   $("#fr-de").onchange=e=>{ ST.reunFiltroDe=e.target.value; reunioesLista(c,p); };
   $("#fr-ate").onchange=e=>{ ST.reunFiltroAte=e.target.value; reunioesLista(c,p); };
@@ -6504,6 +6728,7 @@ function reuniaoDetalhe(c,p,r){
   }
 
   $("#reu-del").onclick=()=>excluirReuniao(p,r.id);
+  if(!podeExcluirDados()) $("#reu-del").style.display="none";
   $("#reu-back").onclick=async()=>{ coletarBasico(); await persistirReuniao(); ST.reuniaoId=null; render(); };
   $("#reu-save").onclick=async()=>{ coletarBasico(); await persistirReuniao(); toast("Reunião salva."); reuniaoDetalhe(c,p,r); };
   $("#reu-export").onclick=async()=>{ coletarBasico(); await persistirReuniao(); exportarAta(p,r); };
@@ -6571,6 +6796,19 @@ function reuniaoDetalhe(c,p,r){
     await persistirReuniao();
     toast("Atividade criada no cronograma."); reuniaoDetalhe(c,p,r);
   });
+  if(!podeEditarDados()) reuniaoSomenteLeitura(c,p,r);
+}
+
+/* Reunião aberta por quem não edita (perfil Colaborador): tudo só para leitura,
+   sem gravar nada ao voltar ou exportar. */
+function reuniaoSomenteLeitura(c,p,r){
+  ["reu-save","reu-ia","reu-del","add-topico","add-saida","add-res-real","add-res-prox","reu-resumo-regenerar"]
+    .forEach(id=>{ const b=document.getElementById(id); if(b) b.style.display="none"; });
+  c.querySelectorAll("[data-rmtop],[data-rmsai],[data-mksai],.res-real-rm,.res-prox-rm").forEach(b=>b.style.display="none");
+  c.querySelectorAll("input,textarea,select").forEach(el=>{ el.readOnly=true; if(el.tagName==="SELECT"||el.type==="checkbox") el.disabled=true; });
+  const back=document.getElementById("reu-back"); if(back) back.onclick=()=>{ ST.reuniaoId=null; render(); };
+  const exp=document.getElementById("reu-export"); if(exp) exp.onclick=()=>exportarAta(p,r);
+  const ppt=document.getElementById("reu-resumo-ppt"); if(ppt) ppt.onclick=()=>exportarChecklistPPT(p,r);
 }
 
 /* ---- GERAR ATA COM IA (via prompt copiável) ---- */
@@ -6746,7 +6984,7 @@ function viewFinanceiro(v){
     <td>${venc?'<span class="badge b-danger">Vencido</span>':statusBadge(x.status==="realizado"?"Realizado":"Previsto")}</td>
     <td class="num" style="color:${x.tipo==="receita"?"var(--ok)":"var(--danger)"};font-weight:600">${x.tipo==="receita"?"+":"−"}${fmtBRL(x.valor)}${detalheQtdValor(x)}</td>
     <td class="actions"><button class="btn-icon" data-edf="${x.id}">✎</button>
-      <button class="btn-icon del" data-dlf="${x.id}">🗑</button></td></tr>`;
+      ${podeExcluirDados()?`<button class="btn-icon del" data-dlf="${x.id}">🗑</button>`:""}</td></tr>`;
   }).join("");
 
   v.innerHTML=`
@@ -6798,7 +7036,15 @@ function viewFinanceiro(v){
    VIEW: EQUIPE
    ============================================================ */
 function viewEquipe(v){
-  setTopAction(`<button class="btn">+ Nova pessoa</button>`,()=>formColab());
+  // Liderança e Equipe com a área Equipe veem as pessoas e incluem/editam
+  // parceiros externos; pessoas internas e perfis, só o Gestor. Custo/hora,
+  // só para quem tem Financeiro.
+  const gestor=isGestor(), verCusto=temArea("financeiro");
+  if(podeEditarDados()) setTopAction(`<button class="btn">+ Nova pessoa</button>`,()=>formColab());
+  if(!gestor){
+    rowsForPerfil(v, verCusto);
+    return;
+  }
   // botão secundário para sincronizar usuários que entraram sem profile
   // (usa insertAdjacentHTML, não innerHTML+=, para não recriar o botão
   // "+ Nova pessoa" já existente e destruir o onclick que acabou de ser
@@ -6819,7 +7065,7 @@ function viewEquipe(v){
     return list.map(c=>{
       const h=horasConsolidadas().filter(x=>x.colaboradorId===c.id).reduce((s,x)=>s+(+x.horas||0),0);
       return `<tr>
-        <td style="font-weight:600">${esc(c.nome)}</td>
+        <td style="font-weight:600">${esc(c.nome)}${c.tipo!=="parceiro"?`<div style="font-size:11px;color:var(--ink-faint);font-weight:400">${esc(rotuloPerfil(c.papel))}</div>`:""}</td>
         <td>${esc(c.cargo||"—")}</td>
         <td style="font-size:12px;color:var(--ink-soft)">${esc(c.organizacao||"—")}</td>
         <td style="font-size:12px;color:var(--ink-soft)">${esc(c.email||"—")}</td>
@@ -6931,6 +7177,33 @@ function viewEquipe(v){
       }
     );
   });
+}
+
+/* Tela Equipe para Liderança e Equipe (com a área Equipe liberada) */
+function rowsForPerfil(v, verCusto){
+  const internos=getInternos(), parceiros=getParceiros();
+  const linha=(c,editavel)=>`<tr>
+      <td style="font-weight:600">${esc(c.nome)}</td>
+      <td>${esc(c.cargo||"—")}</td>
+      <td style="font-size:12px;color:var(--ink-soft)">${esc(c.organizacao||"—")}</td>
+      <td style="font-size:12px;color:var(--ink-soft)">${esc(c.email||"—")}</td>
+      ${verCusto?`<td class="num">${c.custoHora?fmtBRL(c.custoHora):"—"}</td>`:""}
+      <td class="actions">${editavel?`<button class="btn-icon" data-edc="${c.id}" title="Editar parceiro">✎</button>`:""}</td></tr>`;
+  const cab=`<tr><th>Nome</th><th>Cargo</th><th>Organização</th><th>E-mail</th>${verCusto?'<th class="num">Custo/hora</th>':""}<th></th></tr>`;
+  v.innerHTML=`
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-head"><h3>Equipe interna <span class="tag" style="margin-left:6px">${internos.length}</span></h3>
+        <span class="hint">Perfis e dados das pessoas internas: só o Gestor altera</span></div>
+      ${internos.length?`<div class="table-wrap"><table><thead>${cab}</thead><tbody>${internos.map(c=>linha(c,false)).join("")}</tbody></table></div>`
+        :`<div style="padding:24px;color:var(--ink-faint);font-size:13px;text-align:center">Nenhum colaborador interno.</div>`}
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>Parceiros externos <span class="tag" style="margin-left:6px;background:#fff1cf;color:#9a5b00">${parceiros.length}</span></h3>
+        <span class="hint">Participam da RACI · sem acesso ao app</span></div>
+      ${parceiros.length?`<div class="table-wrap"><table><thead>${cab}</thead><tbody>${parceiros.map(c=>linha(c,podeEditarDados())).join("")}</tbody></table></div>`
+        :`<div style="padding:24px;color:var(--ink-faint);font-size:13px;text-align:center">Nenhum parceiro cadastrado.</div>`}
+    </div>`;
+  v.querySelectorAll("[data-edc]").forEach(b=>b.onclick=()=>formColab(getColab(b.dataset.edc)));
 }
 
 /* Chama a Edge Function que revoga o login (auth.users) de verdade,
@@ -7073,6 +7346,181 @@ function abrirModalManutencao(){
 /* ============================================================
    VIEW: CONFIGURAÇÕES
    ============================================================ */
+/* ============================================================
+   CONFIGURAÇÕES › PERFIS E ACESSOS (só o Gestor entra aqui)
+   ============================================================ */
+function acessosDaPessoa(pessoaId){ return ACESSOS.todos.filter(a=>String(a.pessoaId)===String(pessoaId)); }
+function resumoAcessosHtml(c){
+  if(c.papel==="gestor") return `<span style="color:var(--ok);font-weight:600">Acesso total</span>`;
+  const lst=acessosDaPessoa(c.id);
+  const ses=lst.filter(a=>a.tipo==="sessao").map(a=>nomeSessao(a.valor));
+  const nProj=lst.filter(a=>a.tipo==="projeto" && getProjeto(a.valor)).length;
+  const areas=(c.papel==="lideranca"||c.papel==="equipe")
+    ? lst.filter(a=>a.tipo==="area").map(a=>(AREAS_OPERACAO.find(x=>x.id===a.valor)||{label:a.valor}).label) : [];
+  const partes=[
+    ...ses.map(n=>`${esc(n)} <span style="color:var(--ink-faint)">(sessão)</span>`),
+    ...(nProj?[`${nProj} projeto(s)`]:[]),
+    ...(areas.length?[`Operação: ${esc(areas.join(", "))}`]:[])
+  ];
+  return partes.length ? partes.join(" · ") : `<span style="color:var(--warn);font-weight:600">Nada liberado ainda</span>`;
+}
+function cardPerfisAcessosHtml(){
+  const legenda=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;margin-bottom:14px">
+      ${PERFIS.map(x=>`<div style="border:1px solid var(--line-soft);border-radius:8px;padding:8px 10px;background:#fafbfc">
+        <div style="font-weight:700;font-size:12.5px">${esc(x.label)}</div><div class="hint" style="margin-top:2px">${esc(x.desc)}</div></div>`).join("")}
+    </div>`;
+  if(ACESSOS.ok===false){
+    return `<div class="card" style="margin-bottom:18px">
+      <div class="card-head"><h3>👥 Perfis e acessos</h3></div>
+      <div class="card-pad">${legenda}
+        <div class="form-err" style="display:block">Os perfis ainda não estão ativos no banco. Rode uma vez, no SQL Editor do Supabase,
+          o arquivo <b>2026-11-10_perfis_e_acessos.sql</b> e recarregue a página.</div></div></div>`;
+  }
+  const me=USER.current&&USER.current.colabId;
+  const pessoas=getInternos().slice().sort((a,b)=>String(a.nome||"").localeCompare(String(b.nome||""),"pt-BR"));
+  const linhas=pessoas.map(c=>`<tr>
+      <td><div style="font-weight:600">${esc(c.nome)}${c.id===me?` <span class="tag">você</span>`:""}</div>
+        <div style="font-size:11.5px;color:var(--ink-faint)">${esc(c.email||"")}</div></td>
+      <td style="width:170px"><select class="select" data-perfil="${esc(c.id)}" style="width:100%">
+        ${PERFIS.map(x=>`<option value="${x.id}" ${(c.papel||"colaborador")===x.id?"selected":""}>${esc(x.label)}</option>`).join("")}
+      </select></td>
+      <td style="font-size:12.5px;line-height:1.5">${resumoAcessosHtml(c)}</td>
+      <td class="actions" style="white-space:nowrap">${c.papel==="gestor"?"":`<button class="btn ghost sm" data-acessos="${esc(c.id)}">Configurar acessos</button>`}</td>
+    </tr>`).join("");
+  return `<div class="card" style="margin-bottom:18px">
+    <div class="card-head" style="flex-wrap:wrap;row-gap:4px"><h3>👥 Perfis e acessos</h3>
+      <span class="hint" style="flex-basis:100%">Cada pessoa só vê as sessões, os projetos e as áreas da Operação que você liberar. O perfil define o que ela pode fazer com o que vê.</span></div>
+    <div class="card-pad">${legenda}</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Pessoa</th><th>Perfil</th><th>O que acessa</th><th></th></tr></thead>
+      <tbody>${linhas||`<tr><td colspan="4" style="color:var(--ink-faint);padding:18px">Nenhuma pessoa interna cadastrada. Quem cria a conta na tela de login aparece aqui.</td></tr>`}</tbody>
+    </table></div>
+    <div class="card-pad hint" style="border-top:1px solid var(--line-soft)">Pessoas que criam a conta entram como Colaborador, sem nada liberado. Parceiros externos não acessam o app.</div>
+  </div>`;
+}
+function wirePerfisAcessos(v){
+  const me=USER.current&&USER.current.colabId;
+  v.querySelectorAll("[data-perfil]").forEach(sel=>{
+    sel.onchange=()=>{
+      const c=getColab(sel.dataset.perfil); if(!c) return;
+      const antes=c.papel||"colaborador", novo=sel.value;
+      const salvar=async()=>{
+        try{
+          await sbUpdate("profiles", c.id, {papel:novo});
+          c.papel=novo;
+          if(c.id===me){ USER.current.tipo=novo; }
+          toast(`${c.nome}: perfil ${rotuloPerfil(novo)}.`);
+          if(c.id===me && novo!=="gestor"){ ST.view="painel"; await DB.load(); }
+        }catch(e){ sel.value=antes; toast("Erro ao mudar o perfil: "+e.message); }
+        render();
+      };
+      if(c.id===me && antes==="gestor" && novo!=="gestor"){
+        sel.value=antes;
+        confirmar("Deixar de ser Gestor?","Você vai perder o acesso a Configurações e passará a ver só o que estiver liberado para você. Só outro Gestor consegue desfazer.",()=>{ sel.value=novo; salvar(); });
+        return;
+      }
+      salvar();
+    };
+  });
+  v.querySelectorAll("[data-acessos]").forEach(b=>b.onclick=()=>abrirAcessosPessoa(getColab(b.dataset.acessos)));
+}
+function abrirAcessosPessoa(c){
+  if(!c) return;
+  const papel=c.papel||"colaborador";
+  const atuais=acessosDaPessoa(c.id);
+  const tem=(tipo,valor)=>atuais.some(a=>a.tipo===tipo && String(a.valor)===String(valor));
+  const grupos=[...SESSOES.map(s=>({id:s.id,label:s.label})),{id:"",label:"Não classificados"}]
+    .map(g=>({...g, projetos:DB.data.projetos.filter(p=>g.id?p.sessaoId===g.id:!projetoSessaoValida(p))
+      .sort((a,b)=>rotuloProjeto(a).localeCompare(rotuloProjeto(b),"pt-BR",{numeric:true}))}))
+    .filter(g=>g.projetos.length || g.id);
+  const areasLiberadas=papel==="lideranca"||papel==="equipe";
+  const chk=(attrs,marcado,label,extra="")=>`<label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;padding:4px 0;cursor:pointer">
+      <input type="checkbox" ${attrs} ${marcado?"checked":""} style="width:auto;margin:2px 0 0"> <span>${label}${extra}</span></label>`;
+  $("#modal-root").innerHTML=`
+  <div class="overlay"><div class="modal wide">
+    <div class="modal-head"><h3>Acessos de ${esc(c.nome)}</h3><button class="btn-icon" id="ac-x">✕</button></div>
+    <div class="modal-body" style="max-height:66vh;overflow:auto">
+      <div class="help-banner" style="margin-bottom:14px"><span>👤</span><span>Perfil <b>${esc(rotuloPerfil(papel))}</b>: ${esc((PERFIS.find(x=>x.id===papel)||{}).desc||"")}</span></div>
+      <h4 style="font-size:13.5px;margin-bottom:2px">Sessões do portfólio</h4>
+      <div class="hint" style="margin-bottom:6px">Marcar a sessão libera todos os projetos dela, inclusive os criados depois.</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 14px;margin-bottom:14px">
+        ${SESSOES.map(s=>chk(`data-ac-sessao="${s.id}"`, tem("sessao",s.id), esc(s.label))).join("")}
+      </div>
+      <h4 style="font-size:13.5px;margin-bottom:2px">Projetos específicos</h4>
+      <div class="hint" style="margin-bottom:6px">Para liberar só alguns projetos de uma sessão. Quem cria um projeto (Liderança) recebe o acesso a ele automaticamente.</div>
+      <input class="search" id="ac-busca" placeholder="Buscar projeto…" style="width:100%;margin-bottom:8px">
+      <div id="ac-projetos">
+        ${grupos.map(g=>`<details class="ac-grupo" data-grupo="${g.id}" ${g.projetos.some(p=>tem("projeto",p.id))?"open":""}
+            style="border:1px solid var(--line-soft);border-radius:8px;padding:6px 10px;margin-bottom:6px">
+          <summary style="cursor:pointer;font-weight:600;font-size:12.5px">${esc(g.label)} <span class="hint">(${g.projetos.length})</span></summary>
+          <div style="margin-top:4px">${g.projetos.length?g.projetos.map(p=>`<div class="ac-proj" data-busca="${esc(normTxt(rotuloProjeto(p)))}">
+              ${chk(`data-ac-projeto="${p.id}" data-ac-grupo="${g.id}"`, tem("projeto",p.id), esc(rotuloProjeto(p)), `<span class="ac-pela-sessao hint" style="display:none"> · liberado pela sessão</span>`)}
+            </div>`).join(""):`<div class="hint">Nenhum projeto nesta sessão.</div>`}</div>
+        </details>`).join("")}
+      </div>
+      <h4 style="font-size:13.5px;margin:14px 0 2px">Operação</h4>
+      <div class="hint" style="margin-bottom:6px">${areasLiberadas?"Áreas da Operação que esta pessoa abre.":"O perfil Colaborador não acessa a Operação. Mude o perfil para Liderança ou Equipe para liberar."}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 14px">
+        ${AREAS_OPERACAO.map(a=>chk(`data-ac-area="${a.id}" ${areasLiberadas?"":"disabled"}`, tem("area",a.id), esc(a.label), a.desc?`<span class="hint"> · ${esc(a.desc)}</span>`:"")).join("")}
+      </div>
+      <div class="form-err" id="ac-err"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="ac-cancel">Cancelar</button>
+      <button class="btn" id="ac-save">Salvar acessos</button>
+    </div></div></div>`;
+  const raiz=$("#modal-root");
+  // projeto de uma sessão marcada: fica marcado e travado ("liberado pela sessão")
+  const atualizarPelaSessao=()=>{
+    const sesMarcadas=new Set([...raiz.querySelectorAll("[data-ac-sessao]:checked")].map(x=>x.dataset.acSessao));
+    raiz.querySelectorAll("[data-ac-projeto]").forEach(cb=>{
+      const pela=!!cb.dataset.acGrupo && sesMarcadas.has(cb.dataset.acGrupo);
+      cb.disabled=pela;
+      cb.checked=pela || cb.dataset.marcado==="1";
+      const aviso=cb.closest("label").querySelector(".ac-pela-sessao"); if(aviso) aviso.style.display=pela?"inline":"none";
+    });
+  };
+  raiz.querySelectorAll("[data-ac-projeto]").forEach(cb=>cb.addEventListener("change",()=>{ cb.dataset.marcado=cb.checked?"1":"0"; }));
+  raiz.querySelectorAll("[data-ac-projeto]").forEach(cb=>{ cb.dataset.marcado=tem("projeto",cb.dataset.acProjeto)?"1":"0"; });
+  raiz.querySelectorAll("[data-ac-sessao]").forEach(cb=>cb.onchange=atualizarPelaSessao);
+  atualizarPelaSessao();
+  $("#ac-busca").oninput=e=>{
+    const q=normTxt(e.target.value);
+    raiz.querySelectorAll(".ac-proj").forEach(el=>{ el.style.display=!q||el.dataset.busca.includes(q)?"":"none"; });
+    if(q) raiz.querySelectorAll(".ac-grupo").forEach(d=>{ d.open=true; });
+  };
+  $("#ac-x").onclick=closeModal; $("#ac-cancel").onclick=closeModal;
+  $("#ac-save").onclick=async()=>{
+    const desejados=new Set();
+    raiz.querySelectorAll("[data-ac-sessao]:checked").forEach(x=>desejados.add("sessao|"+x.dataset.acSessao));
+    raiz.querySelectorAll("[data-ac-projeto]").forEach(x=>{
+      // travado pela sessão: mantém como estava; senão vale o que está marcado
+      if(x.disabled){ if(tem("projeto",x.dataset.acProjeto)) desejados.add("projeto|"+x.dataset.acProjeto); }
+      else if(x.checked) desejados.add("projeto|"+x.dataset.acProjeto);
+    });
+    raiz.querySelectorAll("[data-ac-area]").forEach(x=>{
+      if(x.disabled){ if(tem("area",x.dataset.acArea)) desejados.add("area|"+x.dataset.acArea); }
+      else if(x.checked) desejados.add("area|"+x.dataset.acArea);
+    });
+    const chaveDe=a=>a.tipo+"|"+a.valor;
+    const remover=atuais.filter(a=>!desejados.has(chaveDe(a)));
+    const existentes=new Set(atuais.map(chaveDe));
+    const incluir=[...desejados].filter(k=>!existentes.has(k)).map(k=>{ const [tipo,...r]=k.split("|"); return {pessoa_id:String(c.id), tipo, valor:r.join("|")}; });
+    const btn=$("#ac-save"); btn.disabled=true; btn.textContent="Salvando...";
+    try{
+      if(incluir.length) await sbInsert("acessos", incluir, {onConflict:"pessoa_id,tipo,valor", prefer:"resolution=ignore-duplicates,return=representation"});
+      for(const a of remover) await sbDelete("acessos", a.id);
+      await carregarAcessos();
+      closeModal();
+      toast(`Acessos de ${c.nome} salvos.`);
+      render();
+    }catch(e){
+      const err=$("#ac-err"); err.textContent="Erro ao salvar: "+(e.message||e); err.style.display="block";
+      btn.disabled=false; btn.textContent="Salvar acessos";
+    }
+  };
+}
+
 function viewConfig(v){
   const cats=DB.data.categorias.map((c,i)=>`<tr>
     <td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${c.cor};vertical-align:-1px;margin-right:7px"></span>${esc(c.nome)}</td>
@@ -7089,6 +7537,7 @@ function viewConfig(v){
       <button class="btn-icon del" data-dlptag="${t.id}" title="Excluir TAG">🗑</button></td></tr>`).join("");
 
   v.innerHTML=`
+  ${cardPerfisAcessosHtml()}
   <div class="grid g2">
     <div class="card">
       <div class="card-head"><h3>Categorias de atividade</h3><button class="btn ghost sm" id="add-cat">+ Adicionar</button></div>
@@ -7147,6 +7596,7 @@ function viewConfig(v){
     </div>
   </div>`;
 
+  wirePerfisAcessos(v);
   $("#add-cat").onclick=()=>formCategoria();
   $("#add-rub").onclick=()=>formRubrica();
   v.querySelectorAll("[data-edcat]").forEach(b=>b.onclick=()=>formCategoria(getCategoria(b.dataset.edcat)));
@@ -7270,9 +7720,9 @@ function relDados(o){
     if(f.tipo==="receita") m[k].ap+=+f.valor||0; else if(f.status==="realizado") m[k].dr+=+f.valor||0; else m[k].dp+=+f.valor||0;});
     return Object.keys(m).sort().map(k=>[relMes(k+"-01"),m[k]]);};
   return {ps,ids,ats,hoje,atrasada,noPer,fin,finPer,nomeP,nomesAt,preds,sit,bloq,sem,orc,real,prev,pct,riscos,superado,meses,
-    prog:p=>progressoProjeto(p.id),gest:isGestor()};
+    prog:p=>progressoProjeto(p.id),gest:temArea("financeiro")};
 }
-function relSemFin(){ return `<p class="rp-v">Informações financeiras disponíveis apenas para gestores.</p>`; }
+function relSemFin(){ return `<p class="rp-v">Informações financeiras disponíveis apenas para quem tem acesso ao Financeiro.</p>`; }
 function relTabMeses(d,modo){
   const m=d.meses();
   if(modo==="ope") return relTab(["Mês","Desembolso previsto","Desembolso realizado","A desembolsar"],
@@ -7756,7 +8206,7 @@ function gerarHtmlRelatorioProjeto(p){
   const margem=margemProjeto(p);
   const ats=DB.data.atividades.filter(a=>a.projetoId===p.id);
   const reuns=(p.reunioes||[]).slice().sort((a,b)=>(a.data||"").localeCompare(b.data||""));
-  const showFin=isGestor();
+  const showFin=temArea("financeiro");
 
   // pessoas envolvidas: horas + responsáveis de atividades (RACI) + RACI
   const envolvidos=new Set();
@@ -7897,7 +8347,7 @@ function gerarTextoRelatorioProjeto(p){
   out+="INDICADORES\n"+"-".repeat(11)+"\n";
   out+="Progresso físico: "+progressoProjeto(p.id)+"%\n";
   out+="Horas executadas: "+fmtNum(horasProjeto(p.id),1)+" h\n";
-  if(isGestor()){
+  if(temArea("financeiro")){
     out+="Despesas realizadas: "+fmtBRL(despesasProjeto(p.id,"realizado"))+"\n";
     out+="Margem prevista: "+fmtNum(margemProjeto(p),1)+"%\n";
   }
@@ -8710,9 +9160,15 @@ function openForm(cfg){
       <div class="form-grid ${grid} ${cfg.buscaEmLinha?"bs-inline":""}" id="f-grid">${fields.map(fieldHtml).join("")}</div>
     </div>
     <div class="modal-foot">
-      <button class="btn ghost" id="m-cancel">Cancelar</button>
-      <button class="btn" id="m-save">Salvar</button>
+      <button class="btn ghost" id="m-cancel">${cfg.somenteLeitura?"Fechar":"Cancelar"}</button>
+      ${cfg.somenteLeitura?"":`<button class="btn" id="m-save">Salvar</button>`}
     </div></div></div>`;
+  if(cfg.aviso){
+    const av=document.createElement("div");
+    av.className="help-banner"; av.style.marginBottom="12px";
+    av.innerHTML=`<span>🔒</span><span>${esc(cfg.aviso)}</span>`;
+    $("#f-grid").before(av);
+  }
 
   function wireEstimativasField(f){
     const container=()=>$("#f-grid").querySelector(`[data-k="${f.key}"]`);
@@ -8730,38 +9186,45 @@ function openForm(cfg){
     const somaLog=it=>(it.horasExecLog||[]).reduce((t,e)=>t+(parseFloat(e.horas)||0),0);
     function sincronizarTotal(it){ const t=Math.round(somaLog(it)*100)/100; it.horasExecutadas=t>0?t:""; }
     vals[f.key]=Array.isArray(vals[f.key])?vals[f.key].map(x=>{ const c=Object.assign({},x); c.horasExecLog=normLog(x); return c; }):[];
+    // f.somenteColab = id do Colaborador: só o quadro dele é editável
+    // f.semExcluirLancamentos: lançamentos já salvos não podem ser removidos (perfis sem exclusão)
+    const ehMinhaLinha=item=>!f.somenteColab || String(item.colaboradorId)===String(f.somenteColab);
     function boardHtml(item,idx){
       const log=item.horasExecLog||[];
       const tot=somaLog(item);
+      const travado=!ehMinhaLinha(item);
       return `<details class="estim-board" data-idx="${idx}" ${item._open||log.length?"open":""} style="margin:-2px 0 10px 0;padding:6px 10px;background:#f6f8fd;border:1px solid var(--line-soft);border-radius:8px">
         <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--ink-soft)">📝 Anotações de progresso <span data-erole="boardinfo">· ${log.length} lançamento(s) · ${fmtNum(tot,1)} h executadas</span></summary>
         <div style="margin-top:8px">
           ${log.length?`<div style="display:flex;gap:6px;font-size:10.5px;color:var(--ink-faint);font-weight:600;text-transform:uppercase;margin-bottom:4px">
             <span style="width:128px;flex-shrink:0">Data</span><span style="flex:1">Anotação</span><span style="width:78px;flex-shrink:0">Horas exec.</span><span style="width:26px;flex-shrink:0"></span></div>`:""}
           ${log.map((e,j)=>`<div class="estim-log" data-j="${j}" style="display:flex;gap:6px;align-items:flex-start;margin-bottom:6px">
-            <input type="date" data-lrole="data" value="${esc(e.data||"")}" style="width:128px;flex-shrink:0"
+            <input type="date" data-lrole="data" value="${esc(e.data||"")}" style="width:128px;flex-shrink:0" ${travado?"disabled":""}
               class="${e._novo&&!e.data?"falta-data":""}" title="${e._novo&&!e.data?"Informe a data em que as horas foram executadas (pode ser retroativa)":"Data do lançamento"}">
-            <textarea data-lrole="nota" rows="2" placeholder="O que foi feito, pendências, próximos passos…" style="flex:1;min-width:0;resize:vertical">${esc(e.nota||"")}</textarea>
-            <input type="number" min="0" step="0.5" data-lrole="horas" placeholder="h" value="${e.horas!==""&&e.horas!=null?e.horas:""}" style="width:78px;flex-shrink:0">
-            <button type="button" class="btn-icon del" data-lrole="rm" title="Remover lançamento" style="width:26px;flex-shrink:0">✕</button>
+            <textarea data-lrole="nota" rows="2" placeholder="O que foi feito, pendências, próximos passos…" style="flex:1;min-width:0;resize:vertical" ${travado?"disabled":""}>${esc(e.nota||"")}</textarea>
+            <input type="number" min="0" step="0.5" data-lrole="horas" placeholder="h" value="${e.horas!==""&&e.horas!=null?e.horas:""}" style="width:78px;flex-shrink:0" ${travado?"disabled":""}>
+            ${(!travado && (!f.semExcluirLancamentos || e._novo))
+              ? `<button type="button" class="btn-icon del" data-lrole="rm" title="Remover lançamento" style="width:26px;flex-shrink:0">✕</button>`
+              : `<span style="width:26px;flex-shrink:0"></span>`}
           </div>`).join("")}
-          <button type="button" class="btn ghost sm" data-erole="addlog">+ Anotação</button>
+          ${travado?"":`<button type="button" class="btn ghost sm" data-erole="addlog">+ Anotação</button>`}
         </div>
       </details>`;
     }
     function rowHtml(item,idx){
       const opts=(f.dynamic?f.optionsFn(vals):f.options)||[];
       const horasExec=item.horasExecutadas!=null&&item.horasExecutadas!==""?item.horasExecutadas:"";
+      const soMinhas=!!f.somenteColab, minha=ehMinhaLinha(item);
       return `<div class="estim-row" data-idx="${idx}" style="display:flex;gap:8px;align-items:center;margin-bottom:7px;flex-wrap:wrap">
-        <select data-erole="colab" style="flex:1;min-width:150px">
+        <select data-erole="colab" style="flex:1;min-width:150px" ${soMinhas?"disabled":""}>
           <option value="">Selecione o colaborador…</option>
           ${opts.map(o=>`<option value="${esc(o.value)}" ${String(item.colaboradorId||"")===String(o.value)?"selected":""}>${esc(o.label)}</option>`).join("")}
         </select>
-        <input type="number" min="0" step="0.5" data-erole="horas" placeholder="Horas" value="${item.horas!=null&&item.horas!==""?item.horas:""}" style="width:90px;flex-shrink:0" title="Horas previstas">
-        <button type="button" class="btn ghost sm" data-erole="ok" style="width:76px;flex-shrink:0;justify-content:center"
-          title="Lança no quadro as horas que faltam para completar as previstas — depois informe a data em que foram executadas">✓ OK</button>
+        <input type="number" min="0" step="0.5" data-erole="horas" placeholder="Horas" value="${item.horas!=null&&item.horas!==""?item.horas:""}" style="width:90px;flex-shrink:0" title="Horas previstas" ${soMinhas?"disabled":""}>
+        <button type="button" class="btn ghost sm" data-erole="ok" style="width:76px;flex-shrink:0;justify-content:center;${minha?"":"visibility:hidden"}"
+          title="Lança no quadro as horas que faltam para completar as previstas — depois informe a data em que foram executadas" ${minha?"":"disabled"}>✓ OK</button>
         <input type="number" data-erole="horasExec" placeholder="0" value="${horasExec}" readonly tabindex="-1" style="width:100px;flex-shrink:0;background:#f1f4fa" title="Soma das horas lançadas no quadro de anotações abaixo">
-        <button type="button" class="btn-icon del" data-erole="rm" title="Remover">✕</button>
+        ${soMinhas?`<span style="width:30px;flex-shrink:0"></span>`:`<button type="button" class="btn-icon del" data-erole="rm" title="Remover">✕</button>`}
       </div>${boardHtml(item,idx)}`;
     }
     function bindRows(){
@@ -8803,9 +9266,11 @@ function openForm(cfg){
             };
             lr.querySelector('[data-lrole="nota"]').oninput=ev=>{ it.horasExecLog[j].nota=ev.target.value; };
             lr.querySelector('[data-lrole="horas"]').oninput=ev=>{ it.horasExecLog[j].horas=ev.target.value; atualizarTotais(); };
-            lr.querySelector('[data-lrole="rm"]').onclick=()=>{ it.horasExecLog.splice(j,1); it._open=true; sincronizarTotal(it); renderRows(); avisar(); };
+            const rmLog=lr.querySelector('[data-lrole="rm"]');
+            if(rmLog) rmLog.onclick=()=>{ it.horasExecLog.splice(j,1); it._open=true; sincronizarTotal(it); renderRows(); avisar(); };
           });
-          board.querySelector('[data-erole="addlog"]').onclick=()=>{
+          const addLog=board.querySelector('[data-erole="addlog"]');
+          if(addLog) addLog.onclick=()=>{
             // a data NÃO é mais preenchida com hoje: o lançamento pode ser retroativo,
             // e uma data automática induzia ao erro. É obrigatória ao salvar.
             it.horasExecLog.push({data:"",horas:"",nota:"",_novo:true}); it._open=true; renderRows();
@@ -8826,7 +9291,7 @@ function openForm(cfg){
           const campo=container().querySelector(`.estim-board[data-idx="${idx}"] .estim-log[data-j="${novoIdx}"] [data-lrole="data"]`); if(campo) campo.focus();
           toast("Horas lançadas. Informe a data em que foram executadas.");
         };
-        btnRm.onclick=()=>{ vals[f.key].splice(idx,1); renderRows(); avisar(); };
+        if(btnRm) btnRm.onclick=()=>{ vals[f.key].splice(idx,1); renderRows(); avisar(); };
       });
     }
     function renderRows(){
@@ -8839,9 +9304,17 @@ function openForm(cfg){
     }
     const el=container();
     if(el){
-      el.querySelector(".estim-add").onclick=()=>{ vals[f.key].push({colaboradorId:"",horas:"",horasExecutadas:"",horasExecLog:[]}); renderRows(); };
+      const btnAdd=el.querySelector(".estim-add");
+      if(f.somenteColab){
+        btnAdd.style.display="none";
+        if(!vals[f.key].some(x=>String(x.colaboradorId)===String(f.somenteColab))){
+          btnAdd.insertAdjacentHTML("afterend",`<span class="hint">Você não está em "Horas previstas" desta atividade. Para lançar horas, peça para incluírem você aqui.</span>`);
+        }
+      }
+      btnAdd.onclick=()=>{ vals[f.key].push({colaboradorId:"",horas:"",horasExecutadas:"",horasExecLog:[]}); renderRows(); };
       const btnPrefill=el.querySelector(".estim-prefill");
-      if(btnPrefill && f.prefillButton){
+      if(btnPrefill && f.somenteColab) btnPrefill.style.display="none";
+      if(btnPrefill && f.prefillButton && !f.somenteColab){
         btnPrefill.onclick=()=>{
           const idsExistentes=new Set(vals[f.key].map(x=>x.colaboradorId).filter(Boolean));
           const novosIds=(f.prefillButton.getIds(vals)||[]).filter(id=>id && !idsExistentes.has(id));
@@ -9013,9 +9486,20 @@ function openForm(cfg){
       }
     };
   });
+  // campos travados (disabled) de qualquer tipo: trava também as caixinhas
+  // auxiliares (ex.: "Data indeterminada", listas de seleção)
+  fields.forEach(f=>{
+    if(!f.disabled || f.type==="estimativas") return;
+    const el=$("#f-grid").querySelector(`[data-k="${f.key}"]`);
+    const fld=el&&el.closest(".fld");
+    if(fld) fld.querySelectorAll("input,select,textarea,button").forEach(x=>{ x.disabled=true; });
+  });
+  if(cfg.somenteLeitura){
+    $("#f-grid").querySelectorAll("input,select,textarea,button").forEach(x=>{ x.disabled=true; });
+  }
   $("#m-x").onclick=closeModal;
   $("#m-cancel").onclick=closeModal;
-  $("#m-save").onclick=async()=>{
+  if($("#m-save")) $("#m-save").onclick=async()=>{
     collect();
     const faltando=fields.filter(f=>f.required&&!f.disabled&&!f.computed&&!String(vals[f.key]||"").trim());
     if(faltando.length){
@@ -9043,6 +9527,9 @@ function openForm(cfg){
 /* ---- FORM: PROJETO ---- */
 function formProjeto(p,sessaoIdDefault){
   const edit=!!p;
+  if(edit ? !podeEditarDados() : !podeCriarProjeto(sessaoIdDefault||null)){ avisoSemPermissao(); return; }
+  // Liderança cria projetos só nas sessões em que tem acesso
+  const sessoesDoForm=(edit||isGestor()) ? SESSOES : SESSOES.filter(s=>sessoesComAcesso().includes(s.id));
 
   // monta os campos do formulário a partir da sessão atual: campos padrão
   // menos os que essa sessão esconde, mais os campos extras dela.
@@ -9055,7 +9542,7 @@ function formProjeto(p,sessaoIdDefault){
     const base=[
       {key:"nome",label:"Nome do projeto",required:true,full:true,placeholder:"Ex.: Implantação do Sistema X"},
       {key:"sessaoId",label:"Sessão",type:"select",required:true,
-        options:SESSOES.map(s=>({value:s.id,label:s.label})),
+        options:sessoesDoForm.map(s=>({value:s.id,label:s.label})),
         help:"Área do portfólio onde este projeto vai aparecer no menu."},
       {key:"codigo",label:"Código / Sigla",placeholder:"Ex.: PRJ-2026-01"},
       {key:"cliente",label:"Cliente / Área demandante",placeholder:"Ex.: Diretoria Comercial"},
@@ -9123,6 +9610,9 @@ function formProjeto(p,sessaoIdDefault){
           // do Painel Geral, contagens etc.) depois que o insert for confirmado.
           await sbInsert("projetos", toSnake(rest));
           DB.data.projetos.push(novo);
+          // quem cria continua vendo o projeto (o banco já registrou o acesso)
+          if(!isGestor() && !ACESSOS.meus.some(a=>a.tipo==="sessao"&&a.valor===novo.sessaoId))
+            ACESSOS.meus.push({tipo:"projeto", valor:novo.id, pessoaId:USER.current&&USER.current.colabId});
           ST.view="projeto"; ST.projetoId=novo.id; ST.projTab="resumo";
           toast("Projeto criado.");
         }
@@ -9135,8 +9625,28 @@ function formProjeto(p,sessaoIdDefault){
 }
 
 /* ---- FORM: ATIVIDADE (removido campo responsavelId) ---- */
+/* Perfil Colaborador, numa atividade em que está vinculado: lança as próprias
+   horas e anotações, as datas reais, a situação e o % concluído. O resto fica
+   travado (o banco também ignora qualquer outra alteração dele). */
+const CAMPOS_ATIVIDADE_TRAVADOS_COLAB=new Set(["nome","categoriaId","marco","responsaveisIds","predecessorasIds","dataInicioPrev","dataFimPrev"]);
+function ajustarCamposAtividade(fields,modo){
+  if(modo==="colaborador"){
+    const me=USER.current&&USER.current.colabId;
+    fields.forEach(f=>{
+      if(CAMPOS_ATIVIDADE_TRAVADOS_COLAB.has(f.key)) f.disabled=true;
+      if(f.key==="status") f.options=(f.options||[]).filter(o=>o.value!=="Cancelada");
+      if(f.type==="estimativas"){ f.somenteColab=me; f.prefillButton=null; }
+    });
+  }
+  // quem não exclui não remove lançamentos de horas já salvos
+  if(!podeExcluirDados()) fields.forEach(f=>{ if(f.type==="estimativas") f.semExcluirLancamentos=true; });
+  return fields;
+}
 function formAtividade(projetoId,a,opts){
   const edit=!!a;
+  const modo=podeEditarDados() ? "total"
+    : (edit && ehPerfilColaborador() && usuarioVinculadoAtividade(a)) ? "colaborador" : "leitura";
+  if(!edit && modo!=="total"){ avisoSemPermissao(); return; }
   // opts.semPredecessoras: usado quando o formulário abre pelo Painel Geral,
   // onde não faz sentido definir "Depende de" (isso fica só no cronograma do
   // projeto). As predecessoras já salvas são preservadas.
@@ -9169,10 +9679,13 @@ function formAtividade(projetoId,a,opts){
       :`Situação ajustada para "${nova}" pelas horas lançadas.`);
   };
   openForm({
-    title:edit?"Editar atividade":"Nova atividade",
+    title:modo==="leitura"?"Atividade (somente leitura)":edit?"Editar atividade":"Nova atividade",
     wide:true,
+    somenteLeitura:modo==="leitura",
+    aviso:modo==="colaborador"?"Perfil Colaborador: você pode lançar as suas horas e anotações, as datas reais, a situação e o % concluído. Os demais campos ficam com o Gestor, a Liderança ou a Equipe."
+      :modo==="leitura"?"Você não está vinculado a esta atividade, por isso ela abre só para leitura.":"",
     values:a||{projetoId,status:"Não iniciada",progresso:0,dataInicioPrev:todayStr(),marco:false},
-    fields:[
+    fields:ajustarCamposAtividade([
       {key:"nome",label:"Nome da atividade",required:true,full:true,placeholder:"Ex.: Levantamento de requisitos"},
       ...(semCat?[]:[{key:"categoriaId",label:"Categoria",type:"select",required:true,
         options:categoriasParaSelect(a&&a.categoriaId)}]),
@@ -9219,7 +9732,7 @@ function formAtividade(projetoId,a,opts){
             return Object.entries(raciAtiv).filter(([,papel])=>papel==="R").map(([pid])=>pid);
           }
         } : null}
-    ],
+    ], modo),
     // % Concluído acompanha as horas: soma executada ÷ soma prevista de todos os
     // colaboradores, atualizada a cada digitação/clique em OK (limitada a 100%).
     // Só calcula quando há horas previstas e ao menos uma executada informada;
@@ -9352,7 +9865,7 @@ function formAtividade(projetoId,a,opts){
       // o Início real informado é novo/mudou nesta gravação e ficou atrasado
       // em relação ao Início previsto. O modal é aberto com um pequeno atraso
       // (setTimeout) para não ser fechado junto pelo closeModal() deste form.
-      if(edit && v.dataInicioReal && v.dataInicioReal!==inicioRealAntes && v.dataInicioPrev){
+      if(edit && podeEditarDados() && v.dataInicioReal && v.dataInicioReal!==inicioRealAntes && v.dataInicioPrev){
         const atrasoDias=daysBetween(v.dataInicioPrev,v.dataInicioReal);
         const temGantt=cfgSessao(proj.sessaoId).linhaDoTempo!==false;
         if(temGantt && atrasoDias>0){
@@ -9456,12 +9969,9 @@ function formColab(c){
       {key:"nome",label:"Nome completo",required:true,full:true,
         help: ehInterno?"Corrige o nome exibido no app (a conta de login não muda).":""},
       ...(ehInterno ? [
-        {key:"papel",label:"Papel no sistema",type:"select",required:true,
-          options:[
-            {value:"colaborador",label:"Colaborador (edita só as próprias horas)"},
-            {value:"gestor",label:"Gestor (acesso total ao portfólio)"}
-          ],
-          help:"Define o nível de acesso desta pessoa no app."}
+        {key:"papel",label:"Perfil de acesso",type:"select",required:true,
+          options:PERFIS.map(x=>({value:x.id,label:x.label+" — "+x.desc})),
+          help:"O que cada perfil enxerga (sessões, projetos e áreas da Operação) é liberado em Configurações › Perfis e acessos."}
       ] : [
         {key:"tipo",label:"Tipo de pessoa",type:"select",required:true,
           options:[{value:"parceiro",label:"Parceiro externo (sem remuneração / sem acesso ao app)"}],
@@ -9474,8 +9984,8 @@ function formColab(c){
       {key:"cargo",label:"Cargo / Função",placeholder:"Ex.: Analista de Projetos"},
       {key:"email",label:"E-mail",type:"email",
         help: ehInterno?"E-mail de contato exibido no app (diferente do e-mail de login).":""},
-      {key:"custoHora",label:"Custo por hora (R$)",type:"number",min:0,
-        placeholder:"Opcional — só para internos",help:"Deixe 0 para parceiros"}
+      ...(temArea("financeiro")?[{key:"custoHora",label:"Custo por hora (R$)",type:"number",min:0,
+        placeholder:"Opcional — só para internos",help:"Deixe 0 para parceiros. Visível só para quem tem acesso ao Financeiro."}]:[])
     ],
     onSave:async(v)=>{
       v.custoHora=parseFloat(v.custoHora)||0;
@@ -9483,11 +9993,13 @@ function formColab(c){
       if(edit){
         Object.assign(c,v);
         if(ehInterno){
-          // atualiza profile existente (nome, papel, cargo, custo e e-mail)
-          await sbUpdate("profiles", c.id, toSnake({
-            nome:v.nome, papel:v.papel, cargo:v.cargo, organizacao:v.organizacao,
-            custoHora:v.custoHora, email:v.email||null
-          }));
+          // atualiza profile existente (nome, perfil, cargo e e-mail); o custo/hora
+          // vai para custos_pessoa (só quem tem Financeiro lê) quando a migração já foi rodada
+          await sbUpdate("profiles", c.id, toSnake(Object.assign({
+            nome:v.nome, papel:v.papel, cargo:v.cargo, organizacao:v.organizacao, email:v.email||null
+          }, CUSTOS.ok===true?{custoHora:0}:{custoHora:v.custoHora})));
+          if(CUSTOS.ok===true) await sbUpsert("custos_pessoa",
+            {pessoa_id:String(c.id), custo_hora:v.custoHora||0, atualizado_em:new Date().toISOString()}, {onConflict:"pessoa_id"});
         } else {
           c.projetosIds=projetosIds;
           await sbUpdate("profiles", c.id, toSnake({
@@ -9728,8 +10240,9 @@ function selecionarUsuario(){
       <div class="user-pick" style="cursor:default">
         <div class="ava" style="background:${isGestor()?'#164194':'#164194'}">${esc((nomeUsuarioAtual()[0]||"?").toUpperCase())}</div>
         <div><div class="nm">${esc(nomeUsuarioAtual())}</div>
-          <div class="rl">${isGestor()?"Gestor do portfólio":"Colaborador"} · ${esc(USER.current.email||"")}</div></div>
+          <div class="rl">${isGestor()?"Gestor do portfólio":rotuloPerfil(perfilAtual())} · ${esc(USER.current.email||"")}</div></div>
       </div>
+      <div class="hint" style="margin-top:10px">${esc((PERFIS.find(x=>x.id===perfilAtual())||{}).desc||"")}</div>
       <button class="btn danger" id="uu-logout" style="width:100%;margin-top:14px;justify-content:center">Sair da conta</button>
     </div>
   </div></div>`;
@@ -9982,7 +10495,7 @@ async function iniciarApp(session){
       console.log("[PMO] criar profile:", novo?JSON.stringify(novo):"null", "err:", criarErrMsg||"ok");
       if(!novo){ showAuthErr("Erro ao criar perfil: "+(criarErrMsg||"desconhecido")); return; }
       prof=novo;
-      toast("Perfil criado. O gestor pode ajustar seu papel em Equipe.");
+      toast("Conta criada. Peça ao Gestor para liberar seus acessos em Configurações › Perfis e acessos.");
     }
     console.log("[PMO] configurando USER, papel:", prof.papel);
     USER.session=session; USER.profile=prof;
