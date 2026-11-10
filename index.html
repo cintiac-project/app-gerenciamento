@@ -2542,7 +2542,7 @@ function ocupacaoSemanalPessoasBase(semanaIni){
     // de hoje (ou do início previsto, se for futuro) até o término previsto;
     // cada semana mostra só a fatia dos seus dias úteis. Sem prazo, ou já
     // atrasada, o saldo todo fica na semana corrente.
-    let fracaoSemana=0;
+    let fracaoSemana=0, diasNa=0, diasTot=0;
     if(!a.dataFimPrev || atrasada){
       fracaoSemana=ehSemanaCorrente?1:0;
     } else {
@@ -2550,7 +2550,8 @@ function ocupacaoSemanalPessoasBase(semanaIni){
       if(ini>a.dataFimPrev) ini=a.dataFimPrev;
       const dias=diasUteisEntre(ini,a.dataFimPrev);
       if(dias.length){
-        fracaoSemana=dias.filter(d=>d>=semanaIni&&d<=semanaFim).length/dias.length;
+        diasTot=dias.length; diasNa=dias.filter(d=>d>=semanaIni&&d<=semanaFim).length;
+        fracaoSemana=diasNa/diasTot;
       } else {
         // intervalo sem dia útil (ex.: só fim de semana): tudo na semana do término
         fracaoSemana=(a.dataFimPrev>=semanaIni&&a.dataFimPrev<=semanaFim)?1:0;
@@ -2567,7 +2568,7 @@ function ocupacaoSemanalPessoasBase(semanaIni){
       const h=restante*fracaoSemana;
       if(!e.colaboradorId||h<=0) return;
       const p=pessoas[e.colaboradorId]||(pessoas[e.colaboradorId]={id:e.colaboradorId,planejado:0,atrasado:0,foraSprint:0,porProjeto:{},porAtividade:[]});
-      p.porAtividade.push({atividadeId:a.id,projetoId:a.projetoId,horas:h,atrasada,foraSprint});
+      p.porAtividade.push({atividadeId:a.id,projetoId:a.projetoId,horas:h,atrasada,foraSprint,restante,diasNa,diasTot});
       if(foraSprint){ p.foraSprint+=h; return; }
       p.planejado+=h; if(atrasada) p.atrasado+=h;
       p.porProjeto[a.projetoId]=(p.porProjeto[a.projetoId]||0)+h;
@@ -2615,6 +2616,12 @@ function ocupacaoSemanalHtml(semanaIni){
     const fora=p.porAtividade.filter(x=>x.foraSprint).sort((a,b)=>b.horas-a.horas);
     const tip=([...naCarga.filter(x=>!ehOutro(x)).map(linhaAtiv),...linhaOutros(naCarga)].join("\n")||"Sem horas previstas")
       +(fora.length?"\n\nATRASADAS FORA DA SPRINT (não somadas na carga):\n"+[...fora.filter(x=>!ehOutro(x)).map(linhaAtiv),...linhaOutros(fora)].join("\n"):"");
+    // versão clicável (cada atividade abre no cronograma do projeto) + de onde vem a fatia da semana
+    const nota=x=>(x.diasTot>0&&x.diasNa<x.diasTot)?` <span style="color:var(--ink-faint)">— ${x.diasNa} de ${x.diasTot} dias úteis de ${fmtNum(x.restante,1)} h restantes</span>`:"";
+    const linhaAtivHtml=x=>`<div>• <a href="#" data-ir-ativ="${esc(x.atividadeId)}" title="Abrir esta atividade no cronograma do projeto" style="color:var(--accent);text-decoration:underline;text-underline-offset:2px">${esc(nomeAtividade(x.atividadeId))}</a> (${esc((getProjeto(x.projetoId)||{}).codigo||nomeProjeto(x.projetoId))}): ${fmtNum(x.horas,1)} h${x.atrasada?" — atrasada":""}${nota(x)}</div>`;
+    const linhasOutrosHtml=lst=>linhaOutros(lst).map(t=>`<div>${esc(t)}</div>`).join("");
+    const tipHtml=([...naCarga.filter(x=>!ehOutro(x)).map(linhaAtivHtml),linhasOutrosHtml(naCarga)].join("")||"Sem horas previstas")
+      +(fora.length?`<div style="margin-top:6px;font-weight:600">ATRASADAS FORA DA SPRINT (não somadas na carga):</div>`+[...fora.filter(x=>!ehOutro(x)).map(linhaAtivHtml),linhasOutrosHtml(fora)].join(""):"");
     const nItensSaldo=p.porAtividade.filter(x=>!ehOutro(x)).length+(p.porAtividade.some(ehOutro)?1:0);
     const tipExec=Object.entries(p.execPorProjeto).sort((a,b)=>b[1]-a[1]).map(([pid,h])=>(pid===PROJETO_OUTROS?"Outros projetos (sem acesso)":nomeProjetoCod(pid))+": "+fmtNum(h,1)+" h").join("\n");
     const tipFull=(tipExec?"EXECUTADAS na semana:\n"+tipExec+"\n\nPLANEJADAS (restantes):\n":"")+tip+(p.atrasado>0.04?"\n— inclui "+fmtNum(p.atrasado,1)+" h de atividades atrasadas":"");
@@ -2647,7 +2654,7 @@ function ocupacaoSemanalHtml(semanaIni){
         <div style="font-size:11.5px;color:var(--ink-soft);margin-top:2px">${txt}</div>
         ${p.porAtividade.length?`<details style="font-size:11.5px;color:var(--ink-soft);margin-top:2px">
           <summary style="cursor:pointer;color:var(--ink-faint)">ver saldo por atividade (${nItensSaldo})</summary>
-          <div style="white-space:pre-line;margin-top:3px">${esc(tip)}</div></details>`:""}
+          <div style="margin-top:3px">${tipHtml}</div></details>`:""}
       </div>
       <div style="display:flex;align-items:center;gap:4px;justify-content:flex-end">${campo}</div>
     </div>`;
@@ -4428,6 +4435,9 @@ function viewPainel(v){
       const h=inp.value===""?null:Math.max(0,+inp.value);
       await salvarCapacidadeSemanal(inp.dataset.capsemColab,inp.dataset.capsemSemana,h); render();
     };
+  });
+  v.querySelectorAll("[data-ir-ativ]").forEach(a=>{
+    a.onclick=e=>{ e.preventDefault(); irParaAtividade(a.dataset.irAtiv); };
   });
   v.querySelectorAll("[data-capsem-reset]").forEach(b=>{
     b.onclick=async()=>{ await salvarCapacidadeSemanal(b.dataset.capsemReset,b.dataset.capsemSemana,null); render(); };
