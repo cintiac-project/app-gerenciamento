@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestão de Portfólio — SENAI ES</title>
+<title>Gestão de Portfólio — SENAI ES · Versão Beta</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
@@ -465,6 +465,66 @@
   .mm-sub .mm-projnome{color:var(--ink-soft);font-weight:600}
   /* data obrigatória nos lançamentos de horas novos (não é mais preenchida sozinha) */
   .estim-log input[data-lrole="data"].falta-data{border-color:var(--warn);background:var(--warn-bg)}
+
+  /* ---- Versão Beta ---- */
+  .beta-tag{display:inline-block;margin-left:8px;padding:2px 9px;border-radius:10px;background:var(--orange);color:#fff;
+    font-family:var(--fh);font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;vertical-align:middle;white-space:nowrap;line-height:1.5}
+  .brand .logo{flex-wrap:wrap;row-gap:6px}
+  .brand .logo .beta-tag{margin-left:0}
+  /* ---- Nome do projeto em destaque (SPRINT / MDS): fundo azul SENAI ---- */
+  .proj-chip{display:inline-block;max-width:100%;background:var(--accent);color:#fff;padding:2px 10px;border-radius:6px;
+    font-weight:600;line-height:1.45;overflow-wrap:anywhere}
+  .proj-chip b{color:#fff;font-weight:800}
+  /* ---- Quadro estratégico (MCI · Metas Mensais · MDS) em janela paisagem ---- */
+  .qd-resumo{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+  @media(max-width:900px){.qd-resumo{grid-template-columns:1fr}}
+  .qd-mini{border:1px solid var(--line-soft);border-radius:10px;padding:12px 14px;background:#fafbfd;min-width:0}
+  .qd-mini h4{font-size:13px;margin-bottom:6px}
+  .qd-mini .n{font-family:var(--fh);font-size:26px;font-weight:700;color:var(--accent);line-height:1.1}
+  .qd-mini ul{margin:6px 0 0 16px;font-size:12.5px;color:var(--ink-soft)}
+  .qd-mini li{margin-bottom:2px;overflow-wrap:anywhere}
+  .qd-semchips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .qd-semchips span{font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--accent-soft);color:var(--accent)}
+  .qd-overlay{position:fixed;inset:0;z-index:90;background:rgba(16,32,46,.55);backdrop-filter:blur(2px);
+    display:flex;align-items:center;justify-content:center;padding:2.5vh 1.5vw}
+  .qd-win{width:min(1760px,97vw);height:94vh;background:var(--surface);border-radius:14px;box-shadow:0 24px 60px rgba(16,32,46,.35);
+    display:flex;flex-direction:column;overflow:hidden;animation:pop .16s ease-out}
+  .qd-head{display:flex;align-items:center;gap:14px;padding:12px 20px;background:linear-gradient(160deg,var(--navy),var(--navy-2));
+    border-bottom:3px solid var(--orange);color:#fff;flex-shrink:0}
+  .qd-head h3{font-size:16px;color:#fff;flex:1;min-width:0}
+  .qd-head .hint{color:#c9d8f5;font-size:12px}
+  .qd-rotate{display:none;padding:8px 14px;background:var(--warn-bg);color:var(--warn);font-size:12px;font-weight:600}
+  @media(orientation:portrait) and (max-width:760px){.qd-rotate{display:block}}
+  .qd-aviso{padding:8px 16px 0;flex-shrink:0}
+  .qd-grid{flex:1;min-height:0;display:grid;grid-template-columns:minmax(250px,23%) minmax(0,1fr) minmax(260px,25%)}
+  @media(orientation:portrait) and (max-width:900px){.qd-grid{grid-template-columns:1fr;overflow:auto}.qd-col{min-height:420px}}
+  .qd-col{display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid var(--line)}
+  .qd-col:last-child{border-right:none}
+  .qd-col-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;background:#eef2fa;border-bottom:3px solid var(--accent);flex-shrink:0}
+  .qd-col-head h4{font-size:13.5px;flex:1 1 auto;min-width:0}
+  .qd-col-head .hint{font-size:11.5px;color:var(--ink-faint);flex-basis:100%}
+  .qd-col-head select{padding:5px 8px;border:1px solid var(--line);border-radius:7px;font-family:inherit;font-size:12.5px;background:#fff}
+  .qd-scroll{flex:1;min-height:0;overflow:auto;padding:12px}
+  .qd-foot{padding:8px 12px;border-top:1px solid var(--line-soft);background:#f8fafb;flex-shrink:0}
+  .qd-card{border:1px solid var(--line-soft);border-radius:9px;padding:10px;margin-bottom:10px;background:#fff;min-width:0}
+  .qd-resp{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;font-size:12px;color:var(--ink-soft)}
+  .qd-resp select{flex:1 1 160px;min-width:0;padding:6px 8px;border:1px solid var(--line);border-radius:7px;font-family:inherit;font-size:12.5px;background:#fff}
+  .qd-resp select.vazio{border-style:dashed;color:var(--ink-faint)}
+  .qd-semanas{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(215px,1fr);gap:10px;align-items:stretch;min-height:100%}
+  .qd-sem{display:flex;flex-direction:column;min-width:0;border:1px solid var(--line);border-radius:10px;background:#f6f8fd}
+  .qd-sem-h{display:flex;align-items:center;gap:6px;padding:8px 10px;background:var(--accent);color:#fff;border-radius:9px 9px 0 0;font-family:var(--fh);font-size:12.5px}
+  .qd-sem-h b{flex:1}
+  .qd-sem-h .qd-cnt{background:rgba(255,255,255,.2);border-radius:10px;padding:0 8px;font-size:11.5px;font-weight:700}
+  .qd-sem-h .btn{padding:2px 9px;background:#fff;color:var(--accent);border-color:#fff}
+  .qd-sem-b{padding:8px;flex:1;min-height:60px}
+  .qd-vazio{padding:10px 4px;text-align:center}
+  .qd-meta-top{display:flex;gap:6px;align-items:flex-start}
+  .qd-meta-top textarea{flex:1;min-width:0;width:100%;min-height:34px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;font-family:inherit;font-size:12.5px;font-weight:600;line-height:1.4;resize:none;overflow:hidden}
+  .qd-meta-bot{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  .qd-meta-bot input[type=month]{flex:1 1 110px;min-width:0;padding:5px 6px;border:1px solid var(--line);border-radius:7px;font-family:inherit;font-size:12px}
+  .qd-meta-bot .mm-sem{flex:1 1 90px;width:auto;padding:5px 6px;font-size:12px}
+  .qd-meta-bot .mm-proj{flex:1 1 100%;max-width:100%}
+  .qd-card .mm-handle{width:26px;min-height:30px}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
@@ -475,7 +535,7 @@
   <div class="card" style="width:100%;max-width:380px;padding:0;border-top:4px solid var(--orange)">
     <div style="padding:26px 26px 6px;text-align:center">
       <img data-logo="azul" alt="SENAI" width="150" style="display:block;width:150px;height:auto;margin:0 auto 14px">
-      <h2 style="font-size:18px">Gestão de Portfólio</h2>
+      <h2 style="font-size:18px">Gestão de Portfólio <span class="beta-tag">Versão Beta</span></h2>
       <p style="font-size:12.5px;color:var(--ink-faint);margin-top:4px">Gerenciamento de Projetos Estratégicos</p>
     </div>
     <div class="card-pad" style="padding-top:18px">
@@ -494,7 +554,7 @@
   <aside>
     <div class="brand">
       <img data-logo="branco" class="brand-logo" alt="SENAI" width="134">
-      <div class="logo"><span>Gestão de Portfólio</span></div>
+      <div class="logo"><span>Gestão de Portfólio</span><span class="beta-tag">Versão Beta</span></div>
       <div class="sub">Gerenciamento de Projetos Estratégicos</div>
     </div>
     <nav id="nav"></nav>
@@ -519,6 +579,7 @@
   </main>
 </div>
 <div id="modal-root"></div>
+<div id="quadro-root"></div>
 <div id="toast-root"></div>
 
 <script>
@@ -955,6 +1016,7 @@ const DB = {
     await carregarCapacidadeSemanal();   // não derruba o load se a tabela ainda não existir
     await carregarMetasMensais();        // idem: sem a tabela metas_mensais o app continua funcionando
     await carregarPainelTags();          // TAGs dos painéis (MCI · Metas Mensais · MDS); sem a migração, segue sem elas
+    await verificarMciResponsavel();     // campo Responsável da MCI (coluna mci.responsavel_id)
   },
 
   // grava de volta no Supabase tudo que está em memória.
@@ -1898,15 +1960,22 @@ function abrirHistoricoMetasMensais(){
 async function salvarOrdemMetasMensais(ids){
   const achar=id=>(DB.data.metasMensais||[]).find(m=>m.id===id);
   const mudancas=[];
-  ids.forEach((id,i)=>{ const m=achar(id); if(m && +m.ordem!==i+1){ m.ordem=i+1; mudancas.push([id,i+1]); } });
+  // "ids" pode ser só uma coluna (semana): ocupa as mesmas posições que já tinha na fila
+  // geral de prioridades, só trocando a ordem entre si; as demais metas não mudam de lugar
+  const global=metasMensaisAtivas().map(m=>m.id), sub=new Set(ids);
+  const posicoes=global.map((id,i)=>sub.has(id)?i:-1).filter(i=>i>=0);
+  const nova=global.slice();
+  posicoes.forEach((pos,k)=>{ if(ids[k]!==undefined) nova[pos]=ids[k]; });
+  ids.forEach(id=>{ if(!nova.includes(id)) nova.push(id); });
+  nova.forEach((id,i)=>{ const m=achar(id); if(m && +m.ordem!==i+1){ m.ordem=i+1; mudancas.push([id,i+1]); } });
   render();
   if(!mudancas.length) return;
   try{ await Promise.all(mudancas.map(([id,o])=>sbUpdate("metas_mensais",id,{ordem:o}))); }
   catch(e){ toast("Erro ao salvar a prioridade das metas: "+e.message); await carregarMetasMensais(); render(); }
 }
 /* arrastar pela alça ⠿ (mouse ou toque) e setas ↑ ↓ pelo teclado */
-function wireArrasteMetasMensais(v){
-  const lista=v.querySelector("#mm-lista"); if(!lista) return;
+function wireArrasteMetasMensais(v){ v.querySelectorAll(".mm-lista").forEach(wireArrasteMetasMensaisLista); }
+function wireArrasteMetasMensaisLista(lista){
   const idsNaTela=()=>[...lista.querySelectorAll(".mm-row")].map(r=>r.dataset.id);
   lista.querySelectorAll(".mm-handle").forEach(h=>{
     h.addEventListener("pointerdown",ev=>{
@@ -1920,7 +1989,9 @@ function wireArrasteMetasMensais(v){
       row.classList.add("arrastando"); document.body.classList.add("mm-arrastando");
       const mover=e=>{
         const y=e.clientY;
-        if(y<70) window.scrollBy(0,-12); else if(y>window.innerHeight-70) window.scrollBy(0,12);
+        const sc=lista.closest(".qd-scroll");
+        if(sc){ const rc=sc.getBoundingClientRect(); if(y<rc.top+40) sc.scrollTop-=12; else if(y>rc.bottom-40) sc.scrollTop+=12; }
+        else if(y<70) window.scrollBy(0,-12); else if(y>window.innerHeight-70) window.scrollBy(0,12);
         const outras=[...lista.querySelectorAll(".mm-row")].filter(r=>r!==row);
         const alvo=outras.find(r=>{ const b=r.getBoundingClientRect(); return y<b.top+b.height/2; });
         if(alvo){ if(row.nextElementSibling!==alvo) lista.insertBefore(row,alvo); }
@@ -1952,15 +2023,16 @@ function wireMetasMensais(v){
     try{ await sbUpdate("metas_mensais", id, patch); return true; }
     catch(e){ toast("Erro ao salvar meta mensal: "+e.message); return false; }
   };
-  if($("#mm-add")) $("#mm-add").onclick=async()=>{
-    const novo={id:uid(), mes:todayStr().slice(0,7), texto:"", concluido:false, concluidoEm:null, criadoEm:todayStr()};
+  const criarMeta=async(semNova)=>{
+    const mesNovo=/^\d{4}-\d{2}$/.test(mesSelecionadoQuadro())?mesSelecionadoQuadro():todayStr().slice(0,7);
+    const novo={id:uid(), mes:mesNovo, texto:"", concluido:false, concluidoEm:null, criadoEm:todayStr()};
     if(METAS_PROJETO_OK===true) novo.projetoId=null;
     if(PAINEL_MIGRACAO_OK===true){
       // a nova meta entra no fim da fila de prioridades; metas antigas ainda
       // sem ordem recebem a posição em que já aparecem na tela
       const ativas=metasMensaisAtivas();
       if(ativas.some(m=>m.ordem==null)) await salvarOrdemMetasMensais(ativas.map(m=>m.id));
-      novo.ordem=ativas.length+1; novo.semana=null; novo.tags=[];
+      novo.ordem=ativas.length+1; novo.semana=semNova||null; novo.tags=[];
     }
     DB.data.metasMensais=DB.data.metasMensais||[];
     DB.data.metasMensais.push(novo);
@@ -1972,6 +2044,8 @@ function wireMetasMensais(v){
     render();
     const ta=document.querySelector(`.mm-meta[data-id="${novo.id}"]`); if(ta) ta.focus();
   };
+  if($("#mm-add")) $("#mm-add").onclick=()=>criarMeta(null);
+  v.querySelectorAll(".mm-add-sem").forEach(b=>{ b.onclick=()=>criarMeta(+b.dataset.sem||null); });
   if($("#mm-hist")) $("#mm-hist").onclick=abrirHistoricoMetasMensais;
   v.querySelectorAll(".mm-meta").forEach(ta=>{
     ta.onblur=async()=>{
@@ -1985,7 +2059,7 @@ function wireMetasMensais(v){
     inp.onchange=async()=>{
       const m=achar(inp.dataset.id); if(m) m.mes=inp.value||null;
       await salvar(inp.dataset.id,{mes:inp.value||null});
-      if(PAINEL_MIGRACAO_OK!==true) render();   // sem prioridade manual, reordena por mês
+      if(QUADRO.aberto || PAINEL_MIGRACAO_OK!==true) render();   // no quadro, a meta muda de mês/coluna; sem prioridade manual, reordena por mês
     };
   });
   v.querySelectorAll(".mm-proj").forEach(sel=>{
@@ -2001,6 +2075,7 @@ function wireMetasMensais(v){
       const m=achar(sel.dataset.id), sem=sel.value?+sel.value:null, antes=m?m.semana:null;
       if(m) m.semana=sem;
       if(!(await salvar(sel.dataset.id,{semana:sem})) && m){ m.semana=antes; render(); }
+      else if(QUADRO.aberto) render();   // a meta passa para a coluna da nova semana
     };
   });
   v.querySelectorAll(".mm-check").forEach(chk=>{
@@ -2542,23 +2617,29 @@ function ocupacaoSemanalPessoasBase(semanaIni){
     // de hoje (ou do início previsto, se for futuro) até o término previsto;
     // cada semana mostra só a fatia dos seus dias úteis. Sem prazo, ou já
     // atrasada, o saldo todo fica na semana corrente.
-    let fracaoSemana=0, diasNa=0, diasTot=0;
-    if(!a.dataFimPrev || atrasada){
-      fracaoSemana=ehSemanaCorrente?1:0;
-    } else {
+    let modoSem="corrente", diasAtiv=[];
+    if(a.dataFimPrev && !atrasada){
       let ini=(a.dataInicioPrev && a.dataInicioPrev>hoje)?a.dataInicioPrev:hoje;
       if(ini>a.dataFimPrev) ini=a.dataFimPrev;
-      const dias=diasUteisEntre(ini,a.dataFimPrev);
-      if(dias.length){
-        diasTot=dias.length; diasNa=dias.filter(d=>d>=semanaIni&&d<=semanaFim).length;
-        fracaoSemana=diasNa/diasTot;
+      diasAtiv=diasUteisEntre(ini,a.dataFimPrev);
+      modoSem=diasAtiv.length?"dias":"fim";
+    }
+    (a.estimativasPessoas||[]).forEach(e=>{
+      // fatia do saldo DESTA pessoa que cai na semana exibida. Semanas em que ela
+      // está pausada (ver pausasPessoaAtividade) ficam sem horas dela, e o saldo é
+      // redistribuído pelos demais dias úteis; na semana seguinte ela volta a contar.
+      const pausada=pessoaPausadaNaSemana(e,semanaIni);
+      let fracaoSemana=0, diasNa=0, diasTot=0;
+      if(modoSem==="corrente") fracaoSemana=(ehSemanaCorrente&&!pausada)?1:0;
+      else if(modoSem==="dias"){
+        const efet=diasSemPausa(diasAtiv,e);
+        diasTot=efet.length; diasNa=efet.filter(d=>d>=semanaIni&&d<=semanaFim).length;
+        fracaoSemana=diasTot?diasNa/diasTot:0;
       } else {
         // intervalo sem dia útil (ex.: só fim de semana): tudo na semana do término
-        fracaoSemana=(a.dataFimPrev>=semanaIni&&a.dataFimPrev<=semanaFim)?1:0;
+        fracaoSemana=(!pausada&&a.dataFimPrev>=semanaIni&&a.dataFimPrev<=semanaFim)?1:0;
       }
-    }
-    if(fracaoSemana<=0) return;
-    (a.estimativasPessoas||[]).forEach(e=>{
+      if(fracaoSemana<=0) return;
       // as horas já executadas ficam na semana em que foram lançadas (ver
       // horasExecutadasSemanaPorPessoa); aqui entra só o que falta executar.
       const execTotal=parseFloat(e.horasExecutadas)||0;
@@ -2680,7 +2761,7 @@ function calcularAlertas(){
     // gente numa atividade hoje). RACI "R" só como fallback, caso a atividade
     // não tenha estimativas de horas por pessoa preenchidas.
     const proj=getProjeto(a.projetoId);
-    const resp=nomesResponsaveisAtividade(a,proj).join(", ");
+    const resp=nomesResponsaveisSprint(a,proj).join(", ");
     // atrasada, mas com prazo DENTRO da semana corrente: permanece na SPRINT
     // (ainda dá tempo de entregar). Só vai para "vencidos" quando a semana virar.
     // Atrasada e RETORNADA para a sprint desta semana (sprintSemana): também
@@ -2861,6 +2942,30 @@ function sessaoUsaCampoResponsaveis(proj){
 function nomesResponsaveisAtividade(a,proj){
   return responsaveisIdsAtividade(a,proj).map(nomeColab);
 }
+/* ---------- PAUSA DE UMA PESSOA POR SPRINT ----------
+   Em atividades com mais de uma pessoa, cada pessoa pode ser "pausada" numa
+   semana (sprint). Fica guardada em estimativasPessoas[].pausasSemanas = lista
+   das segundas-feiras das semanas pausadas (dentro do jsonb que já existe —
+   não precisa de migração). Na semana pausada a pessoa: não conta na ocupação,
+   não aparece como responsável na SPRINT/MDS e suas horas restantes são
+   redistribuídas pelos demais dias úteis. Na semana seguinte volta sozinha. */
+function pausasPessoaAtividade(e){ return Array.isArray(e&&e.pausasSemanas)?e.pausasSemanas.filter(Boolean):[]; }
+function pessoaPausadaNaSemana(e,semanaIni){ return pausasPessoaAtividade(e).includes(semanaIni); }
+function diasSemPausa(dias,e){
+  const ps=pausasPessoaAtividade(e);
+  return ps.length ? dias.filter(d=>!ps.includes(semanaDaData(d).ini)) : dias;
+}
+function idsPausadosNaSprint(a){
+  const ini=limitesSemanaCorrente().ini;
+  return (a.estimativasPessoas||[]).filter(e=>e&&e.colaboradorId&&pessoaPausadaNaSemana(e,ini)).map(e=>e.colaboradorId);
+}
+/* responsáveis exibidos na SPRINT / MDS: tira quem está em pausa na semana corrente */
+function nomesResponsaveisSprint(a,proj){
+  const pausados=new Set(idsPausadosNaSprint(a).map(String));
+  if(!pausados.size) return nomesResponsaveisAtividade(a,proj);
+  const ids=responsaveisIdsAtividade(a,proj).filter(id=>!pausados.has(String(id)));
+  return ids.length ? ids.map(nomeColab) : nomesResponsaveisAtividade(a,proj);
+}
 /* horas previstas de UMA pessoa específica numa atividade (0 se não estiver na lista) */
 function horasPrevistasDaPessoa(a,colaboradorId){
   const item=(a.estimativasPessoas||[]).find(e=>e.colaboradorId===colaboradorId);
@@ -2884,9 +2989,11 @@ function construirMapaOcupacaoGlobal(){
     estimativas.forEach(e=>{
       const horas=+e.horas||0;
       if(!e.colaboradorId||horas<=0) return;
-      const horasPorDia=horas/dias.length;
+      const diasP=diasSemPausa(dias,e);   // semanas de pausa da pessoa ficam de fora
+      if(!diasP.length) return;
+      const horasPorDia=horas/diasP.length;
       mapa[e.colaboradorId]=mapa[e.colaboradorId]||{};
-      dias.forEach(d=>{
+      diasP.forEach(d=>{
         mapa[e.colaboradorId][d]=(mapa[e.colaboradorId][d]||0)+horasPorDia;
       });
     });
@@ -2903,8 +3010,10 @@ function detalheOcupacaoDia(colaboradorId,dia){
     const horasPessoa=horasPrevistasDaPessoa(a,colaboradorId);
     if(horasPessoa<=0) return;
     const dias=diasUteisEntre(a.dataInicioPrev,a.dataFimPrev);
-    if(!dias.includes(dia)) return;
-    const horasDia=horasPessoa/dias.length;
+    const itPausa=(a.estimativasPessoas||[]).find(e=>e.colaboradorId===colaboradorId);
+    const diasP=diasSemPausa(dias,itPausa);
+    if(!diasP.includes(dia)) return;
+    const horasDia=horasPessoa/diasP.length;
     out.push({projetoId:a.projetoId, projetoNome:nomeProjeto(a.projetoId), atividadeId:a.id, atividadeNome:a.nome, horas:horasDia});
   });
   return out;
@@ -3504,6 +3613,7 @@ function render(){
       if(el) el.scrollTop=scrollsInternosAntes[id];
     });
   }
+  if(QUADRO.aberto) renderQuadroPopup();   // mantém o quadro (pop-up) em dia após qualquer alteração
 }
 
 function renderUserWidget(){
@@ -3828,50 +3938,153 @@ function setTopAction(html,handler){
    "MDS — Medidas de Direção Semanal" (chegou a aparecer como "MCS"); os
    identificadores internos (tabela "mds" no Supabase, ids "mds-…") seguem
    o mesmo nome. ---------- */
-function mciMdsPainelHtml(){
-  const mcis=mciAtivas();
-  const histMci=mciHistorico();
-  const mdsList=mdsAtivas();
-  const histMds=mdsHistorico();
+/* ---------- QUADRO ESTRATÉGICO: MCI · METAS MENSAIS · MDS ----------
+   No Painel Geral aparece só um resumo; o quadro completo abre numa janela
+   (pop-up) em paisagem, com os três lado a lado: MCI | Metas Mensais (uma
+   coluna por semana do mês) | MDS. A janela usa #quadro-root (separado do
+   #modal-root), então confirmações e históricos abrem por cima dela. */
+const QUADRO={aberto:false, mes:null};   // mes: null = mês corrente · "AAAA-MM" · "todos" · "sem"
+/* null = não verificado · true = coluna mci.responsavel_id existe · false = falta rodar o SQL */
+let MCI_RESP_OK=null;
+const SQL_MCI_RESPONSAVEL=[
+"-- Responsável de cada MCI (lista suspensa com a equipe)",
+"alter table public.mci add column if not exists responsavel_id uuid references public.profiles(id) on delete set null;",
+"notify pgrst, 'reload schema';"
+].join("\n");
+async function verificarMciResponsavel(){
+  if((DB.data.mci||[]).some(m=>"responsavelId" in m)){ MCI_RESP_OK=true; return; }
+  if(MCI_RESP_OK===true) return;
+  try{ await sbFetch("mci?select=responsavel_id&limit=1"); MCI_RESP_OK=true; }
+  catch(e){ MCI_RESP_OK=false; }
+}
+/* equipe para "puxar" o responsável da MCI (ordem alfabética) */
+function colabsParaMci(){
+  return getInternos().slice().sort((a,b)=>String(a.nome||"").localeCompare(String(b.nome||""),"pt-BR"));
+}
+function mesSelecionadoQuadro(){ return QUADRO.mes || todayStr().slice(0,7); }
 
-  const gestorMci=isGestor();
-  const mciItens=mcis.map((m,i)=>`
-    <div class="mci-item" data-id="${m.id}" style="border:1px solid var(--line-soft);border-radius:10px;padding:12px;margin-bottom:12px;background:#fff">
-      ${gestorMci
+/* ---- coluna 1: MCI ---- */
+function mciColunaHtml(){
+  const mcis=mciAtivas(), hist=mciHistorico(), gestor=isGestor(), equipe=colabsParaMci();
+  const avisoResp=(gestor&&MCI_RESP_OK===false)?`<details class="form-err" style="display:block;margin-bottom:10px">
+    <summary style="cursor:pointer;font-weight:600">⚙️ Falta rodar uma migração no Supabase para ativar o campo Responsável — clique para ver o SQL</summary>
+    <div style="margin-top:6px">Copie e rode uma vez no SQL Editor do Supabase e depois recarregue a página:</div>
+    <code style="user-select:all;white-space:pre-wrap;display:block;margin-top:6px;font-size:11.5px">${esc(SQL_MCI_RESPONSAVEL)}</code></details>`:"";
+  const itens=mcis.map(m=>{
+    const rc=m.responsavelId?getColab(m.responsavelId):null;
+    const opcoes=equipe.concat(rc&&!equipe.some(c=>c.id===rc.id)?[rc]:[]);
+    const respHtml=MCI_RESP_OK!==true ? "" : gestor
+      ? `<label class="qd-resp"><span>👤 Responsável</span>
+          <select class="mci-resp ${m.responsavelId?"":"vazio"}" data-id="${m.id}" title="Escolha quem é o responsável por esta MCI">
+            <option value="">— Selecionar responsável —</option>
+            ${opcoes.map(c=>`<option value="${esc(c.id)}" ${String(c.id)===String(m.responsavelId||"")?"selected":""}>${esc(c.nome)}</option>`).join("")}
+          </select></label>`
+      : `<div class="qd-resp"><span>👤 Responsável</span> <b>${rc?esc(rc.nome):"<i>não definido</i>"}</b></div>`;
+    return `<div class="mci-item qd-card" data-id="${m.id}">
+      ${gestor
         ? `<textarea class="mci-texto auto-altura" data-id="${m.id}" rows="2" placeholder="Descreva a Meta Crucialmente Importante…"
-             style="width:100%;min-height:70px;padding:11px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13.5px;font-weight:600;line-height:1.45;resize:none;overflow:hidden">${esc(m.texto||"")}</textarea>
-           ${tagsPickerHtml("mci",m)}`
-        : `<div style="padding:11px;border:1px solid var(--line-soft);border-radius:8px;background:#fafbfc;font-size:13.5px;font-weight:600;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere">${esc(m.texto||"(sem descrição)")}</div>
-           ${tagsChipsHtml(m)}`}
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:8px">
-        <span class="hint">Definida em ${fmtDate(m.criadoEm)}${gestorMci?"":" · só o Gestor altera"}</span>
-        ${gestorMci?`<div style="display:flex;gap:8px;align-items:center">
+             style="width:100%;min-height:64px;padding:9px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;line-height:1.45;resize:none;overflow:hidden">${esc(m.texto||"")}</textarea>`
+        : `<div style="padding:9px;border:1px solid var(--line-soft);border-radius:8px;background:#fafbfc;font-size:13px;font-weight:600;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere">${esc(m.texto||"(sem descrição)")}</div>`}
+      ${respHtml}
+      ${gestor?tagsPickerHtml("mci",m):tagsChipsHtml(m)}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;flex-wrap:wrap;gap:6px">
+        <span class="hint">Definida em ${fmtDate(m.criadoEm)}${gestor?"":" · só o Gestor altera"}</span>
+        ${gestor?`<div style="display:flex;gap:6px;align-items:center">
           <button class="btn-icon del mci-rm" data-id="${m.id}" title="Excluir esta MCI">🗑</button>
-          <button class="btn sm mci-concluir" data-id="${m.id}">✓ Marcar como concluída</button></div>`:""}
-      </div>
-    </div>`).join("");
-  const mciHtml = `
-    ${mciItens || `<div class="empty" style="padding:20px 10px"><span class="ic">🎯</span><p>Nenhuma MCI ativa no momento.</p>${gestorMci?`<p class="hint">Use o botão “+ MCI” para adicionar.</p>`:""}</div>`}
-    <div style="display:flex;justify-content:flex-start;margin-top:2px">
-      <button class="btn ghost sm" id="mci-hist">🕘 Histórico${histMci.length?` (${histMci.length})`:""}</button>
-    </div>`;
+          <button class="btn sm mci-concluir" data-id="${m.id}">✓ Concluir</button></div>`:""}
+      </div></div>`;
+  }).join("");
+  return `<section class="qd-col">
+    <div class="qd-col-head"><h4>🎯 MCI — Meta Crucialmente Importante</h4>
+      ${gestor?`<button class="btn ghost sm" id="mci-nova" title="Adicionar mais uma MCI">+ MCI</button>`:""}</div>
+    <div class="qd-scroll">${avisoResp}${itens||`<div class="empty" style="padding:20px 10px"><span class="ic">🎯</span><p>Nenhuma MCI ativa no momento.</p>${gestor?`<p class="hint">Use o botão “+ MCI” para adicionar.</p>`:""}</div>`}</div>
+    <div class="qd-foot"><button class="btn ghost sm" id="mci-hist">🕘 Histórico${hist.length?` (${hist.length})`:""}</button></div>
+  </section>`;
+}
 
-  const semAtualMcs=limitesSemanaCorrente();
-  const mdsRows = mdsList.length ? mdsList.map(m=>{
-      const at=m.atividadeId?getAtividade(m.atividadeId):null;
-      const proj=at?getProjeto(at.projetoId):null;
-      // espelho da atividade da sprint (sem campos para preencher)
-      const titulo=at?at.nome:(m.texto||"(MDS sem descrição)");
-      const nomes=at?nomesResponsaveisAtividade(at,proj):(m.responsavelId&&getColab(m.responsavelId)?[getColab(m.responsavelId).nome]:[]);
-      const info=at?`${rotuloProjetoHtml(proj)} · ${at.dataFimPrev?"prazo "+fmtDate(at.dataFimPrev)+" · ":""}${at.progresso||0}% concluído`:"";
-      const ref=semanaDaData(m.criadoEm||todayStr());
-      const antiga=ref.ini<semAtualMcs.ini;
-      return `
-    <div class="mds-row" data-id="${m.id}" style="display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line-soft);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fafbfc">
+/* ---- coluna 2: Metas Mensais, uma coluna por semana ---- */
+function metasColunaHtml(){
+  const gestor=isGestor();
+  const extras=PAINEL_MIGRACAO_OK===true, comProjeto=METAS_PROJETO_OK===true;
+  const todas=metasMensaisAtivas(), hist=metasMensaisHistorico();
+  const rank=new Map(todas.map((m,i)=>[m.id,i+1]));
+  const mesSel=mesSelecionadoQuadro();
+  const meses=[...new Set(todas.map(m=>m.mes).filter(Boolean).concat([todayStr().slice(0,7)]))].sort();
+  const temSemMes=todas.some(m=>!m.mes);
+  const visiveis=todas.filter(m=>mesSel==="todos"?true:mesSel==="sem"?!m.mes:m.mes===mesSel);
+  const seletorMes=`<select id="qd-mes" title="Mês das metas exibidas">
+      ${meses.map(ym=>`<option value="${ym}" ${mesSel===ym?"selected":""}>${esc(fmtMesAno(ym))}</option>`).join("")}
+      ${temSemMes?`<option value="sem" ${mesSel==="sem"?"selected":""}>Sem mês</option>`:""}
+      <option value="todos" ${mesSel==="todos"?"selected":""}>Todos os meses</option></select>`;
+  const aviso=(gestor&&!METAS_MENSAIS_OK)?`<div class="form-err" style="display:block;margin-bottom:10px">
+    A tabela <b>metas_mensais</b> ainda não existe no banco. Rode no SQL Editor do Supabase:
+    <code style="user-select:all;white-space:pre-wrap;display:block;margin-top:6px;font-size:11.5px">${esc(SQL_METAS_MENSAIS)}</code></div>`
+    :(gestor&&METAS_PROJETO_OK===false)?`<div class="form-err" style="display:block;margin-bottom:10px">
+    Para vincular as metas a projetos, rode no SQL Editor do Supabase o arquivo <b>sql/2026-11-10_perfis_e_acessos_2_ajustes.sql</b> e recarregue a página.</div>`:"";
+  const cartao=m=>{
+    if(!gestor) return `<div class="mm-row qd-card">
+      <div style="display:flex;gap:6px;align-items:flex-start">
+        <span class="tag" style="flex-shrink:0;font-weight:700" title="Prioridade definida pelo Gestor">${m.ordem!=null?rank.get(m.id)+"º":"—"}</span>
+        <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:12.5px;white-space:pre-wrap;overflow-wrap:anywhere">${esc(m.texto||"(sem descrição)")}</div>
+        <div class="mm-sub">${infoMetaMensalHtml(m)}</div>${tagsChipsHtml(m)}</div></div></div>`;
+    return `<div class="mm-row qd-card" data-id="${m.id}">
+      <div class="qd-meta-top">
+        ${extras?`<button type="button" class="mm-handle" data-id="${m.id}" aria-label="Prioridade ${rank.get(m.id)}: arraste para mudar a ordem (ou use as setas ↑ ↓)"
+          title="Prioridade ${rank.get(m.id)} — arraste para mudar a ordem dentro da coluna (ou use as setas ↑ ↓ com o foco aqui)"><span class="gr">⠿</span><span class="rk">${rank.get(m.id)}º</span></button>`:""}
+        <input type="checkbox" class="mm-check" data-id="${m.id}" title="Marcar como concluída (vai para o histórico)" style="margin-top:8px;width:16px;height:16px;flex-shrink:0">
+        <textarea class="mm-meta auto-altura" data-id="${m.id}" rows="1" placeholder="Descreva a meta…">${esc(m.texto||"")}</textarea>
+        <button class="btn-icon del mm-rm" data-id="${m.id}" title="Excluir meta" style="flex-shrink:0">✕</button>
+      </div>
+      <div class="qd-meta-bot">
+        <input type="month" class="mm-mes" data-id="${m.id}" value="${esc(m.mes||"")}" title="Mês da meta">
+        ${extras?`<select class="mm-sem" data-id="${m.id}" title="Mover para outra semana do mês">
+          <option value="">Semana…</option>${[1,2,3,4,5].map(n=>`<option value="${n}" ${+m.semana===n?"selected":""}>Semana ${n}</option>`).join("")}</select>`:""}
+        ${comProjeto?`<select class="mm-proj ${m.projetoId?"":"vazio"}" data-id="${m.id}" aria-label="Projeto vinculado à meta"
+          title="Projeto vinculado — Liderança e Equipe veem só as metas dos projetos a que têm acesso">${opcoesProjetoMetaHtml(m.projetoId)}</select>`:""}
+      </div>
+      ${tagsPickerHtml("mm",m)}
+    </div>`;
+  };
+  const coluna=(n,titulo,itens)=>`<div class="qd-sem">
+      <div class="qd-sem-h"><b>${titulo}</b><span class="qd-cnt">${itens.length}</span>
+        ${gestor&&METAS_MENSAIS_OK?`<button class="btn sm mm-add-sem" data-sem="${n||""}" title="Adicionar uma meta ${n?"na "+titulo.toLowerCase():"sem semana definida"}">+</button>`:""}</div>
+      <div class="mm-lista qd-sem-b" data-sem="${n||""}">${itens.length?itens.map(cartao).join(""):`<div class="hint qd-vazio">Sem metas</div>`}</div>
+    </div>`;
+  let colunas;
+  if(extras){
+    const semSem=visiveis.filter(m=>!(+m.semana>=1&&+m.semana<=5));
+    colunas=[1,2,3,4,5].map(n=>coluna(n,"Semana "+n,visiveis.filter(m=>+m.semana===n))).join("")
+      +((semSem.length||gestor)?coluna(0,"Sem semana",semSem):"");
+  } else {
+    colunas=coluna(0,"Metas do mês",visiveis);
+  }
+  return `<section class="qd-col">
+    <div class="qd-col-head"><h4>🗓️ Metas Mensais</h4>
+      ${seletorMes}
+      ${gestor?`<button class="btn sm" id="mm-add" ${METAS_MENSAIS_OK?"":"disabled"} title="Adicionar meta sem semana definida">+ Adicionar meta</button>`:""}
+      <span class="hint">${extras?(gestor?"divididas por semana · arraste ⠿ para priorizar na coluna · ":"divididas por semana · em ordem de prioridade · "):""}${gestor?"marque ao concluir → vai para o histórico":"dos seus projetos · definidas pelo Gestor"}</span></div>
+    <div class="qd-scroll">${aviso}<div class="qd-semanas">${colunas}</div></div>
+    <div class="qd-foot"><button class="btn ghost sm" id="mm-hist">🕘 Histórico${hist.length?` (${hist.length})`:""}</button></div>
+  </section>`;
+}
+
+/* ---- coluna 3: MDS ---- */
+function mdsColunaHtml(){
+  const mdsList=mdsAtivas(), histMds=mdsHistorico();
+  const semAtual=limitesSemanaCorrente();
+  const rows=mdsList.length ? mdsList.map(m=>{
+    const at=m.atividadeId?getAtividade(m.atividadeId):null;
+    const proj=at?getProjeto(at.projetoId):null;
+    const titulo=at?at.nome:(m.texto||"(MDS sem descrição)");
+    const nomes=at?nomesResponsaveisSprint(at,proj):(m.responsavelId&&getColab(m.responsavelId)?[getColab(m.responsavelId).nome]:[]);
+    const info=at?`<span class="proj-chip">${rotuloProjetoHtml(proj)}</span><div style="margin-top:3px">${at.dataFimPrev?"prazo "+fmtDate(at.dataFimPrev)+" · ":""}${at.progresso||0}% concluído</div>`:"";
+    const ref=semanaDaData(m.criadoEm||todayStr());
+    const antiga=ref.ini<semAtual.ini;
+    return `<div class="mds-row qd-card" data-id="${m.id}" style="display:flex;gap:9px;align-items:flex-start">
       <input type="checkbox" class="mds-check" data-id="${m.id}" title="Marcar como concluída (conclui também a atividade da sprint)" style="margin-top:3px;width:16px;height:16px;flex-shrink:0">
       <div style="flex:1;min-width:0">
-        <div style="font-weight:600;font-size:13.5px;line-height:1.35">${esc(titulo)}</div>
-        ${info?`<div style="font-size:11.5px;color:var(--ink-soft);margin-top:2px">${info}</div>`:""}
+        <div style="font-weight:600;font-size:13px;line-height:1.35">${esc(titulo)}</div>
+        ${info?`<div style="font-size:11.5px;color:var(--ink-soft);margin-top:4px">${info}</div>`:""}
         <div style="display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap;margin-top:6px;min-width:0;max-width:100%">
           <span style="font-size:11.5px;background:#f4f6fb;padding:3px 9px;border-radius:5px"><span style="color:var(--ink-faint)">Responsável:</span> <b>${nomes.length?esc(nomes.join(", ")):"<i>não atribuído</i>"}</b></span>
           <span class="mds-semana" title="Semana (segunda a domingo) em que esta atividade foi fixada como MDS${antiga?" — ainda não concluída, vem de semana anterior":""}"
@@ -3883,30 +4096,64 @@ function mciMdsPainelHtml(){
       <button class="btn-icon del mds-rm" data-id="${m.id}" title="Tirar do quadro de MDS (a atividade continua na sprint)">📍✕</button>
     </div>`;}).join("")
     : `<div class="empty" style="padding:16px 10px"><span class="ic">📌</span><p>Nenhuma MDS ativa esta semana.</p><p class="hint">Clique no 📍 de uma atividade da Sprint para trazê-la para cá.</p></div>`;
+  return `<section class="qd-col">
+    <div class="qd-col-head"><h4>📍 MDS — Medidas de Direção Semanal</h4>
+      <span class="hint">semana corrente · ${fmtDate(semAtual.ini)} a ${fmtDate(semAtual.fim)} · espelho das atividades da Sprint marcadas com 📍</span></div>
+    <div class="qd-scroll">${rows}</div>
+    <div class="qd-foot"><button class="btn ghost sm" id="mds-hist">🕘 Histórico${histMds.length?` (${histMds.length})`:""}</button></div>
+  </section>`;
+}
 
-  const mdsHtml = `
-    ${mdsRows}
-    <div style="display:flex;justify-content:flex-start;align-items:center;margin-top:6px;flex-wrap:wrap;gap:8px">
-      <button class="btn ghost sm" id="mds-hist">🕘 Histórico${histMds.length?` (${histMds.length})`:""}</button>
-    </div>`;
+function quadroPopupHtml(){
+  return `<div class="qd-overlay"><div class="qd-win" role="dialog" aria-label="Quadro estratégico: MCI, Metas Mensais e MDS">
+    <div class="qd-head"><h3>🎯 MCI · 🗓️ Metas Mensais · 📍 MDS</h3>
+      <span class="hint">quadro paralelo · as alterações são salvas na hora</span>
+      <button class="btn ghost sm" id="qd-fechar" title="Fechar (Esc)">✕ Fechar</button></div>
+    <div class="qd-rotate">↻ Para ver melhor, gire o aparelho para a posição horizontal (paisagem).</div>
+    ${avisoMigracaoPainelHtml()?`<div class="qd-aviso">${avisoMigracaoPainelHtml()}</div>`:""}
+    <div class="qd-grid">${mciColunaHtml()}${metasColunaHtml()}${mdsColunaHtml()}</div>
+  </div></div>`;
+}
+function abrirQuadro(){ QUADRO.aberto=true; renderQuadroPopup(); }
+function fecharQuadro(){ QUADRO.aberto=false; const r=$("#quadro-root"); if(r) r.innerHTML=""; }
+function renderQuadroPopup(){
+  const root=$("#quadro-root"); if(!root) return;
+  if(!QUADRO.aberto || !veQuadrosEstrategicos()){ root.innerHTML=""; return; }
+  // guarda a rolagem de cada coluna: o quadro é recriado a cada alteração
+  const rolagens=[...root.querySelectorAll(".qd-scroll")].map(e=>[e.scrollTop,e.scrollLeft]);
+  root.innerHTML=quadroPopupHtml();
+  [...root.querySelectorAll(".qd-scroll")].forEach((e,i)=>{ if(rolagens[i]){ e.scrollTop=rolagens[i][0]; e.scrollLeft=rolagens[i][1]; } });
+  wirePainelMciMds(root);
+  $("#qd-fechar").onclick=fecharQuadro;
+  const selMes=$("#qd-mes");
+  if(selMes) selMes.onchange=()=>{ QUADRO.mes=selMes.value; renderQuadroPopup(); };
+}
 
-  // um quadro abaixo do outro, nesta ordem: MCI → Metas Mensais → MDS
+/* ---- resumo no Painel Geral ---- */
+function mciMdsPainelHtml(){
+  const mcis=mciAtivas(), metas=metasMensaisAtivas(), mds=mdsAtivas();
+  const mesAtual=todayStr().slice(0,7);
+  const metasMes=metas.filter(m=>m.mes===mesAtual);
+  const porSem=[1,2,3,4,5].map(n=>metasMes.filter(m=>+m.semana===n).length);
+  const semSem=metasMes.filter(m=>!(+m.semana>=1&&+m.semana<=5)).length;
+  const lista=(arr,fn)=>arr.length?`<ul>${arr.slice(0,3).map(x=>`<li>${fn(x)}</li>`).join("")}${arr.length>3?`<li style="list-style:none;color:var(--ink-faint)">+ ${arr.length-3} …</li>`:""}</ul>`:`<div class="hint" style="margin-top:6px">Nada ativo.</div>`;
+  const cort=s=>{ s=String(s||"(sem descrição)"); return esc(s.length>90?s.slice(0,90)+"…":s); };
   return `
   ${avisoMigracaoPainelHtml()}
-  <div style="display:flex;flex-direction:column;gap:18px;margin-bottom:18px;min-width:0">
-    <div class="card">
-      <div class="card-head"><h3>🎯 MCI — Meta Crucialmente Importante</h3>
-        ${isGestor()?`<button class="btn ghost sm" id="mci-nova" title="Adicionar mais uma MCI">+ MCI</button>`:""}</div>
-      <div class="card-pad">${mciHtml}</div>
-    </div>
-    ${metasMensaisCardHtml()}
-    <div class="card">
-      <div class="card-head" style="flex-wrap:wrap;row-gap:4px"><h3>📍 MDS — Medidas de Direção Semanal</h3>
-        <span class="hint">semana corrente · ${fmtDate(semAtualMcs.ini)} a ${fmtDate(semAtualMcs.fim)}</span>
-        <span class="hint" style="flex-basis:100%">Espelho das atividades da Sprint marcadas com 📍 · concluída → sai da lista e vai pro histórico</span></div>
-      <div class="card-pad">${mdsHtml}</div>
-    </div>
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-head" style="flex-wrap:wrap;row-gap:6px"><h3>🎯 MCI · 🗓️ Metas Mensais · 📍 MDS</h3>
+      <button class="btn sm" id="qd-abrir" title="Abre o quadro paralelo em uma janela horizontal (paisagem)">⤢ Abrir quadro completo (paisagem)</button></div>
+    <div class="card-pad"><div class="qd-resumo">
+      <div class="qd-mini"><h4>🎯 MCI</h4><div class="n">${mcis.length}</div>${lista(mcis,m=>{ const rc=m.responsavelId?getColab(m.responsavelId):null; return cort(m.texto)+(rc?` <span class="hint">· ${esc(rc.nome)}</span>`:""); })}</div>
+      <div class="qd-mini"><h4>🗓️ Metas do mês (${esc(fmtMesAno(mesAtual))})</h4><div class="n">${metasMes.length}</div>
+        <div class="qd-semchips">${porSem.map((q,i)=>`<span>S${i+1}: ${q}</span>`).join("")}${semSem?`<span style="background:var(--line-soft);color:var(--ink-soft)">s/ semana: ${semSem}</span>`:""}</div></div>
+      <div class="qd-mini"><h4>📍 MDS da semana</h4><div class="n">${mds.length}</div>${lista(mds,m=>{ const at=m.atividadeId?getAtividade(m.atividadeId):null; return cort(at?at.nome:m.texto); })}</div>
+    </div></div>
   </div>`;
+}
+function wireQuadroResumo(v){
+  const b=v.querySelector("#qd-abrir"); if(b) b.onclick=abrirQuadro;
+  v.querySelectorAll(".qd-mini").forEach(c=>{ c.style.cursor="pointer"; c.onclick=abrirQuadro; });
 }
 
 /* Marca/desmarca uma atividade da SPRINT como MDS. Cria (ou remove) uma linha na
@@ -3944,7 +4191,7 @@ function abrirHistoricoMci(){
       ${lista.length? lista.map(m=>`
         <div style="border-bottom:1px solid var(--line-soft);padding:10px 0">
           <div style="font-weight:600">${esc(m.texto||"(sem descrição)")}</div>
-          <div class="hint">Concluída em ${fmtDate(m.concluidoEm)} · definida em ${fmtDate(m.criadoEm)}</div>
+          <div class="hint">Concluída em ${fmtDate(m.concluidoEm)} · definida em ${fmtDate(m.criadoEm)}${m.responsavelId&&getColab(m.responsavelId)?` · responsável: ${esc(getColab(m.responsavelId).nome)}`:""}</div>
           ${tagsChipsHtml(m)}
         </div>`).join("") : `<div class="empty"><span class="ic">🎯</span><p>Nenhuma MCI concluída ainda.</p></div>`}
     </div>
@@ -4067,6 +4314,19 @@ function wirePainelMciMds(v){
     };
   });
   if($("#mci-hist")) $("#mci-hist").onclick=abrirHistoricoMci;
+  v.querySelectorAll(".mci-resp").forEach(sel=>{
+    sel.onchange=async()=>{
+      const m=mciPorId(sel.dataset.id); if(!m) return;
+      const antes=m.responsavelId||null, novo=sel.value||null;
+      m.responsavelId=novo; sel.classList.toggle("vazio",!novo);
+      try{ await sbUpdate("mci", m.id, {responsavel_id:novo}); }
+      catch(err){
+        m.responsavelId=antes;
+        if(/responsavel_id|PGRST204/i.test(err.message||"")) MCI_RESP_OK=false;
+        toast("Erro ao salvar o responsável da MCI: "+err.message); render();
+      }
+    };
+  });
 
   wireMetasMensais(v);
   wirePainelTags(v);
@@ -4275,7 +4535,7 @@ function viewPainel(v){
     return `<div class="alert-row"><div class="ab" style="background:${col}"></div>
       <div class="at">${a.rotulo?`<div class="alert-head"><span class="alert-tag ${a.sev==="danger"?"danger":a.sev==="info"?"info":"warn"}">${esc(a.rotulo)}</span>${a.meta?`<span class="alert-meta">${esc(a.meta)}</span>`:""}</div>`:""}
         <div class="t">${esc(a.rotulo&&String(a.titulo).startsWith(a.rotulo+": ")?String(a.titulo).slice(a.rotulo.length+2):a.titulo)}</div>
-        <div class="d">${a.descHtml||esc(a.desc)}</div>
+        <div class="d">${(a.secao==="sprint"&&a.descHtml)?`<span class="proj-chip">${a.descHtml}</span>`:(a.descHtml||esc(a.desc))}</div>
         ${respHtml}${notasHtml}${faltaHtml}</div>
       <span class="badge ${a.sev==="danger"?"b-danger":a.sev==="info"?"b-info":"b-warn"}">${a.tipo==="fisico"?"Físico":a.tipo==="financeiro"?"Financeiro":a.tipo==="duplicada"?"Duplicada":"Reunião"}</span>
       ${mcsBtnHtml}${acoesHtml}</div>`;
@@ -4411,7 +4671,7 @@ function viewPainel(v){
   </div>`:""}`;
 
   if(podeCriarProjeto()) setTopAction(`<button class="btn">+ Novo projeto</button>`,()=>formProjeto());
-  if(veQuadrosEstrategicos()) wirePainelMciMds(v);
+  if(veQuadrosEstrategicos()) wireQuadroResumo(v);
   $("#btn-origem-horas").onclick=()=>abrirOrigemHoras();
   $("#painel-alerta-proj").onchange=e=>{ ST.painelAlertaProjeto=e.target.value; render(); };
   $("#painel-alerta-resp").onchange=e=>{ ST.painelAlertaResp=e.target.value; render(); };
@@ -9419,10 +9679,34 @@ function openForm(cfg){
           title="Lança no quadro as horas que faltam para completar as previstas — depois informe a data em que foram executadas" ${minha?"":"disabled"}>✓ OK</button>
         <input type="number" data-erole="horasExec" placeholder="0" value="${horasExec}" readonly tabindex="-1" style="width:100px;flex-shrink:0;background:#f1f4fa" title="Soma das horas lançadas no quadro de anotações abaixo">
         ${removivel?`<button type="button" class="btn-icon del" data-erole="rm" title="Remover">✕</button>`:`<span style="width:30px;flex-shrink:0"></span>`}
-      </div>${boardHtml(item,idx)}`;
+      </div>${pausaHtml(item,idx)}${boardHtml(item,idx)}`;
+    }
+    /* pausa por sprint: só com 2+ pessoas na atividade e só para quem edita tudo */
+    function pausaHtml(item,idx){
+      if(f.somenteColab || (vals[f.key]||[]).length<2) return "";
+      const cur=limitesSemanaCorrente().ini, nxt=addDays(cur,7), ps=pausasPessoaAtividade(item);
+      const rot=ini=>fmtDate(ini)+" a "+fmtDate(addDays(ini,6));
+      const lbl="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-weight:500";
+      return `<div class="estim-pausa" data-idx="${idx}" style="margin:-3px 0 8px 2px;display:flex;gap:6px 16px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--ink-soft)">
+        <span title="Na semana pausada esta pessoa não conta na ocupação nem aparece na sprint. O grupo segue normalmente. Na semana seguinte ela volta sozinha.">⏸ Pausar esta pessoa:</span>
+        <label style="${lbl}"><input type="checkbox" data-erole="pausa" data-sem="${cur}" ${ps.includes(cur)?"checked":""} style="width:auto;margin:0"> nesta sprint (${rot(cur)})</label>
+        <label style="${lbl}"><input type="checkbox" data-erole="pausa" data-sem="${nxt}" ${ps.includes(nxt)?"checked":""} style="width:auto;margin:0"> na próxima (${rot(nxt)})</label>
+        ${(ps.includes(cur)||ps.includes(nxt))?`<span class="badge b-warn">⏸ horas não contadas na(s) semana(s) pausada(s)</span>`:""}
+      </div>`;
     }
     function bindRows(){
       const el=container(); if(!el) return;
+      el.querySelectorAll(".estim-pausa").forEach(box=>{
+        const it=vals[f.key][+box.dataset.idx]; if(!it) return;
+        box.querySelectorAll('[data-erole="pausa"]').forEach(chk=>{
+          chk.onchange=()=>{
+            const set=new Set(pausasPessoaAtividade(it));
+            if(chk.checked) set.add(chk.dataset.sem); else set.delete(chk.dataset.sem);
+            it.pausasSemanas=[...set].sort();
+            it._open=it._open; renderRows();
+          };
+        });
+      });
       el.querySelectorAll(".estim-row").forEach(row=>{
         const idx=+row.dataset.idx;
         const selColab=row.querySelector('[data-erole="colab"]');
@@ -10046,6 +10330,7 @@ function formAtividade(projetoId,a,opts){
         .filter(x=>x.colaboradorId && parseFloat(x.horas)>0)
         .map(x=>({
           colaboradorId:x.colaboradorId, horas:parseFloat(x.horas),
+          pausasSemanas:pausasPessoaAtividade(x),   // pausa por sprint (só vale com 2+ pessoas)
           // horas realmente executadas por esta pessoa (preenchidas pelo botão
           // "OK" — igual à prevista — ou digitadas manualmente quando o tempo
           // gasto foi diferente do previsto). Fica null enquanto não informado.
@@ -10055,6 +10340,7 @@ function formAtividade(projetoId,a,opts){
             .map(e=>({data:e.data||"",horas:parseFloat(e.horas)||0,nota:String(e.nota||"").trim()}))
             .filter(e=>e.horas>0 || e.nota))
         }));
+      if(v.estimativasPessoas.length<2) v.estimativasPessoas.forEach(x=>{ x.pausasSemanas=[]; });   // pausa só existe com 2+ pessoas
       if(v.notasProgresso && String(v.notasProgresso).trim()) v.notasProgresso=ordenarNotasTexto(v.notasProgresso);
       if(usaCampoResp) v.responsaveisIds=Array.isArray(v.responsaveisIds)?v.responsaveisIds:[];
       else delete v.responsaveisIds; // sem o campo no formulário: não mexe no valor antigo
@@ -10659,7 +10945,11 @@ function traduzErroAuth(msg){
 /* ============================================================
    INICIALIZAÇÃO
    ============================================================ */
-document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeModal(); });
+document.addEventListener("keydown",e=>{
+  if(e.key!=="Escape") return;
+  if($("#modal-root").innerHTML.trim()) closeModal();
+  else if(QUADRO.aberto) fecharQuadro();
+});
 
 // Trava contra execuções concorrentes/duplicadas de iniciarApp: o listener
 // onAuthStateChange dispara SIGNED_IN automaticamente logo depois de
