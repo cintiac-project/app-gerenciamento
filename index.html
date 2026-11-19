@@ -321,6 +321,20 @@
     font-size:12.5px;font-weight:500;margin-bottom:14px;display:none}
 
   /* alerts list */
+  /* ---- Carrossel da SPRINT (Painel Geral) ---- */
+  .sp-car{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px}
+  .sp-car-arrow{width:38px;height:38px;border-radius:50%;border:1px solid var(--line);background:var(--surface);color:var(--ink);
+    font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .sp-car-arrow:hover:not(:disabled){border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+  .sp-car-arrow:disabled{opacity:.35;cursor:default}
+  .sp-car-slides{min-width:0}
+  .sp-car-foot{grid-column:1 / -1;display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;
+    font-size:12px;color:var(--ink-faint)}
+  .sp-car-dots{display:flex;gap:6px}
+  .sp-car-dot{width:8px;height:8px;border-radius:50%;background:var(--line);border:0;padding:0;cursor:pointer}
+  .sp-car-dot.on{background:var(--accent)}
+  @media(max-width:640px){ .sp-car{grid-template-columns:minmax(0,1fr)} .sp-car-arrow.prev{grid-row:2;justify-self:start}
+    .sp-car-arrow.next{grid-row:2;justify-self:end;grid-column:1} .sp-car-slides{grid-row:1} .sp-car-foot{grid-row:3} }
   .alert-row{
     display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:9px;
     border:1px solid var(--line-soft);margin-bottom:8px;
@@ -3207,6 +3221,8 @@ const ST = {
   dashColab:"",                                    // "" = todos os colaboradores
   search:{},
   painelAlertaProjeto:"",   // filtro de projeto dos Alertas de prazo (Painel Geral)
+  painelAlertaPortfolio:"", // filtro de portfólio (sessão) dos Alertas de prazo (Painel Geral)
+  sprintSlide:0,            // página atual do carrossel da SPRINT (Painel Geral)
   sprintSemanaOffset:0,     // semana do gráfico de ocupação do SPRINT (0 = corrente, -1 anterior, +1 próxima)
   painelAlertaResp:"",      // filtro de responsável dos Alertas de prazo (Painel Geral)
   // status visíveis no cronograma físico de cada projeto — "Concluída" some
@@ -3335,6 +3351,7 @@ const STATUS_CAPTACAO_LEGADO={
 const SESSAO_CONFIG={
   captacao:{
     camposExtras:[
+      {key:"pontoFocal",label:"Ponto focal",placeholder:"Nome do ponto focal (contato) no cliente"},
       {key:"orgaoEdital",label:"Órgão / Edital",placeholder:"Ex.: FINEP, BNDES, Prefeitura..."},
       // "Valor do projeto" (campo padrão "receita") já cobre o valor pleiteado/contratado —
       // este campo é só para o valor TOTAL do edital/programa, quando fizer sentido informar
@@ -4458,10 +4475,16 @@ function viewPainel(v){
   const SEM_RESP="__sem__";
   const temAlertaSemResp=alertas.some(a=>a.tipo!=="reuniao" && !a.responsavel);
   // se o valor selecionado deixou de existir (ex.: alerta resolvido), volta para "Todos"
-  if(ST.painelAlertaProjeto && !projetosComAlerta.some(p=>p.id===ST.painelAlertaProjeto)) ST.painelAlertaProjeto="";
+  // FILTRO DE PORTFÓLIO: só lista as sessões que têm alertas; o filtro de projeto
+  // passa a mostrar apenas os projetos do portfólio escolhido.
+  const portfoliosComAlerta=SESSOES.filter(s=>projetosComAlerta.some(p=>p.sessaoId===s.id));
+  if(ST.painelAlertaPortfolio && !portfoliosComAlerta.some(s=>s.id===ST.painelAlertaPortfolio)) ST.painelAlertaPortfolio="";
+  const projetosOpcoes=projetosComAlerta.filter(p=>!ST.painelAlertaPortfolio || p.sessaoId===ST.painelAlertaPortfolio);
+  if(ST.painelAlertaProjeto && !projetosOpcoes.some(p=>p.id===ST.painelAlertaProjeto)) ST.painelAlertaProjeto="";
   if(ST.painelAlertaResp && ST.painelAlertaResp!==SEM_RESP && !responsaveisComAlerta.includes(ST.painelAlertaResp)) ST.painelAlertaResp="";
   if(ST.painelAlertaResp===SEM_RESP && !temAlertaSemResp) ST.painelAlertaResp="";
   const alertasFiltrados=alertas.filter(a=>
+    (!ST.painelAlertaPortfolio || ((getProjeto(a.projetoId)||{}).sessaoId===ST.painelAlertaPortfolio)) &&
     (!ST.painelAlertaProjeto || a.projetoId===ST.painelAlertaProjeto) &&
     (!ST.painelAlertaResp || (
       ST.painelAlertaResp===SEM_RESP
@@ -4589,10 +4612,16 @@ function viewPainel(v){
 
   const alertasFiltroHtml=`
     <div class="alertas-filtros">
+      <div class="field-inline">Portfólio
+        <select class="select" id="painel-alerta-port">
+          <option value="">Todos</option>
+          ${portfoliosComAlerta.map(s=>`<option value="${s.id}" ${s.id===ST.painelAlertaPortfolio?"selected":""}>${esc(s.label)}</option>`).join("")}
+        </select>
+      </div>
       <div class="field-inline">Projeto
         <select class="select" id="painel-alerta-proj">
           <option value="">Todos</option>
-          ${projetosComAlerta.map(p=>`<option value="${p.id}" ${p.id===ST.painelAlertaProjeto?"selected":""}>${esc(rotuloProjetoSelect(p))}</option>`).join("")}
+          ${projetosOpcoes.map(p=>`<option value="${p.id}" ${p.id===ST.painelAlertaProjeto?"selected":""}>${esc(rotuloProjetoSelect(p))}</option>`).join("")}
         </select>
       </div>
       <div class="field-inline">Responsável
@@ -4615,13 +4644,29 @@ function viewPainel(v){
   const reuAberto=secReunioes.filter(a=>a.dias<0).sort((a,b)=>b.dias-a.dias);
   const vazioHtml=msg=>`<div class="empty" style="padding:26px"><span class="ic">✓</span><p>${msg}</p></div>`;
   const subTitulo=t=>`<div style="font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-faint);margin:6px 2px 8px">${t}</div>`;
+  // CARROSSEL da SPRINT: em vez de uma barra de rolagem, as atividades ficam em
+  // páginas (SPRINT_POR_PAGINA por vez) com setas ◀ ▶ para navegar.
+  const SPRINT_POR_PAGINA=3;
+  const sprintCarrosselHtml=lista=>{
+    const rows=lista.map(alertaRowHtml);
+    const n=Math.ceil(rows.length/SPRINT_POR_PAGINA);
+    if(n<=1) return rows.join("");
+    const slides=Array.from({length:n},(_,i)=>`<div class="sp-car-slide" ${i===0?"":"hidden"}>${rows.slice(i*SPRINT_POR_PAGINA,(i+1)*SPRINT_POR_PAGINA).join("")}</div>`).join("");
+    const dots=Array.from({length:n},(_,i)=>`<button type="button" class="sp-car-dot ${i===0?"on":""}" title="Página ${i+1}" aria-label="Ir para a página ${i+1}"></button>`).join("");
+    return `<div class="sp-car" id="sprint-car" data-total="${rows.length}" data-por="${SPRINT_POR_PAGINA}">
+      <button type="button" class="sp-car-arrow prev" title="Anteriores" aria-label="Página anterior">◀</button>
+      <div class="sp-car-slides">${slides}</div>
+      <button type="button" class="sp-car-arrow next" title="Próximas" aria-label="Próxima página">▶</button>
+      <div class="sp-car-foot"><span class="sp-car-info"></span><span class="sp-car-dots">${dots}</span></div>
+    </div>`;
+  };
   const secaoCard=(id,titulo,hint,qtd,sev,corpo,extra="")=>`
     <div class="card" style="margin-bottom:18px">
       <div class="card-head" style="flex-wrap:wrap;gap:10px">
         <h3>${titulo} <span class="badge ${qtd?sev:"b-ok"}" style="margin-left:6px">${qtd}</span></h3>
         <span class="hint">${hint}</span>
       </div>
-      <div class="card-pad" id="alertas-scroll-box-${id}" style="${qtd>5?"max-height:440px;overflow-y:auto":""}">${corpo}</div>
+      <div class="card-pad" id="alertas-scroll-box-${id}" style="${(qtd>5&&id!=="sprint")?"max-height:440px;overflow-y:auto":""}">${corpo}</div>
       ${extra}
     </div>`;
   const reunioesCorpo=secReunioes.length
@@ -4658,7 +4703,7 @@ function viewPainel(v){
     ${secaoCard("vencidos","1. Alertas de prazos vencidos","atividades e lançamentos financeiros com prazo anterior a hoje",secVencidos.length,"b-danger",
       secVencidos.length? secVencidos.map(alertaRowHtml).join("") : vazioHtml(alertas.some(a=>a.secao==="vencidos")?"Nenhum alerta para o filtro selecionado.":"Nenhum prazo vencido. 🎉"))}
     ${secaoCard("sprint","2. SPRINT","vencem (ou venceram) na semana corrente · "+fmtDate(sem.ini)+" a "+fmtDate(sem.fim),secSprint.length,"b-warn",
-      secSprint.length? secSprint.map(alertaRowHtml).join("") : vazioHtml(alertas.some(a=>a.secao==="sprint")?"Nenhum alerta para o filtro selecionado.":"Nada vence no restante desta semana."),sprintOcupHtml)}
+      secSprint.length? sprintCarrosselHtml(secSprint) : vazioHtml(alertas.some(a=>a.secao==="sprint")?"Nenhum alerta para o filtro selecionado.":"Nada vence no restante desta semana."),sprintOcupHtml)}
     ${secaoCard("reunioes","3. Próximas reuniões / reuniões em aberto","reuniões dos próximos 7 dias e as já realizadas que ainda não receberam OK",secReunioes.length,"b-info",reunioesCorpo)}
     ${(ehPerfilColaborador()||!alertas.some(a=>a.secao==="duplicidades"))?"":secaoCard("duplicidades","4. Duplicidades","atividades com o mesmo nome em um ou mais cronogramas",secDup.length,"b-warn",
       secDup.length? secDup.map(alertaRowHtml).join("") : vazioHtml(alertas.some(a=>a.secao==="duplicidades")?"Nenhum alerta para o filtro selecionado.":"Nenhuma duplicidade encontrada."))}
@@ -4719,8 +4764,34 @@ function viewPainel(v){
   if(podeCriarProjeto()) setTopAction(`<button class="btn">+ Novo projeto</button>`,()=>formProjeto());
   if(veQuadrosEstrategicos()) wireQuadroResumo(v);
   $("#btn-origem-horas").onclick=()=>abrirOrigemHoras();
-  $("#painel-alerta-proj").onchange=e=>{ ST.painelAlertaProjeto=e.target.value; render(); };
-  $("#painel-alerta-resp").onchange=e=>{ ST.painelAlertaResp=e.target.value; render(); };
+  $("#painel-alerta-port").onchange=e=>{ ST.painelAlertaPortfolio=e.target.value; ST.painelAlertaProjeto=""; ST.sprintSlide=0; render(); };
+  $("#painel-alerta-proj").onchange=e=>{ ST.painelAlertaProjeto=e.target.value; ST.sprintSlide=0; render(); };
+  $("#painel-alerta-resp").onchange=e=>{ ST.painelAlertaResp=e.target.value; ST.sprintSlide=0; render(); };
+  // CARROSSEL da SPRINT: setas / bolinhas trocam a página sem recarregar a tela
+  (function(){
+    const car=$("#sprint-car"); if(!car) return;
+    const slides=[...car.querySelectorAll(".sp-car-slide")], n=slides.length;
+    const prev=car.querySelector(".sp-car-arrow.prev"), next=car.querySelector(".sp-car-arrow.next");
+    const info=car.querySelector(".sp-car-info"), dots=[...car.querySelectorAll(".sp-car-dot")];
+    const total=+car.dataset.total||0, porPag=+car.dataset.por||1;
+    function ir(i){
+      i=Math.max(0,Math.min(n-1,i)); ST.sprintSlide=i;
+      slides.forEach((el,k)=>{ el.hidden=(k!==i); });
+      dots.forEach((d,k)=>d.classList.toggle("on",k===i));
+      prev.disabled=(i===0); next.disabled=(i===n-1);
+      const a=i*porPag+1, b=Math.min(total,(i+1)*porPag);
+      info.textContent=`${a}–${b} de ${total} atividade(s) · página ${i+1} de ${n}`;
+    }
+    prev.onclick=()=>ir((ST.sprintSlide||0)-1);
+    next.onclick=()=>ir((ST.sprintSlide||0)+1);
+    dots.forEach((d,k)=>d.onclick=()=>ir(k));
+    // deslizar com o dedo (celular)
+    let x0=null;
+    car.addEventListener("touchstart",e=>{ x0=e.touches[0].clientX; },{passive:true});
+    car.addEventListener("touchend",e=>{ if(x0==null) return; const dx=e.changedTouches[0].clientX-x0; x0=null;
+      if(Math.abs(dx)>60) ir((ST.sprintSlide||0)+(dx<0?1:-1)); });
+    ir(Math.min(ST.sprintSlide||0,n-1));
+  })();
   $("#dash-year").onchange=e=>{ ST.dashYear=e.target.value; render(); };
   if($("#dash-mes")) $("#dash-mes").onchange=e=>{ ST.dashMes=+e.target.value; render(); };
   if($("#dash-sem")) $("#dash-sem").onchange=e=>{ ST.dashSem=+e.target.value; render(); };
@@ -5419,16 +5490,19 @@ function viewPortfolio(v){
     if($("#np")) $("#np").onclick=()=>formProjeto(null,sessaoId);
     return;
   }
-  ST.portfolioOrdenar=ST.portfolioOrdenar||"status";
+  // CAPTAÇÃO: ordem alfabética por padrão, sem Despesas/Margem e com Cliente + Ponto Focal
+  const ehCapt=(sessaoId==="captacao");
+  const kOrd=ehCapt?"portfolioOrdenarCaptacao":"portfolioOrdenar";
+  ST[kOrd]=ST[kOrd]||(ehCapt?"nome":"status");
   const q=(ST.search.portfolio||"").toLowerCase();
-  const buscados=ps.filter(p=>!q||p.nome.toLowerCase().includes(q)||(p.codigo||"").toLowerCase().includes(q)||(p.cliente||"").toLowerCase().includes(q));
+  const buscados=ps.filter(p=>!q||p.nome.toLowerCase().includes(q)||(p.codigo||"").toLowerCase().includes(q)||(p.cliente||"").toLowerCase().includes(q)||(p.pontoFocal||"").toLowerCase().includes(q));
   // projetos "Concluído" ficam escondidos por padrão; o botão-filtro no
   // toolbar liga/desliga a exibição deles.
   const concluidosOcultos=buscados.filter(p=>statusCalculado(p)==="Concluído").length;
   const visiveis=ST.portfolioMostrarConcluidos?buscados:buscados.filter(p=>statusCalculado(p)!=="Concluído");
-  const filtered=ordenarProjetos(visiveis, ST.portfolioOrdenar);
+  const filtered=ordenarProjetos(visiveis, ST[kOrd]);
 
-  const verFin=temArea("financeiro");
+  const verFin=temArea("financeiro") && !ehCapt; // Captação não mostra Despesas/Margem
   const rows=filtered.map(p=>{
     const prog=progressoProjeto(p.id);
     const margem=margemProjeto(p);
@@ -5436,7 +5510,9 @@ function viewPortfolio(v){
     const pcls=prog>=100?"ok":prog<35?"danger":prog<70?"warn":"";
     return `<tr class="clickable" data-pid="${p.id}">
       <td><div style="font-weight:600">${esc(p.nome)}</div>
-        <div style="font-size:11.5px;color:var(--ink-faint)">${p.codigo?`<b style="color:var(--ink)">${esc(p.codigo)}</b>`:""}${p.cliente?(p.codigo?" · ":"")+esc(p.cliente):""}</div></td>
+        <div style="font-size:11.5px;color:var(--ink-faint)">${p.codigo?`<b style="color:var(--ink)">${esc(p.codigo)}</b>`:""}${(!ehCapt&&p.cliente)?(p.codigo?" · ":"")+esc(p.cliente):""}</div></td>
+      ${ehCapt?`<td style="font-size:12.5px">${esc(p.cliente||"—")}</td>
+      <td style="font-size:12.5px">${esc(p.pontoFocal||"—")}</td>`:""}
       <td>${statusBadge(statusCalculado(p))}</td>
       <td style="font-size:12px;color:var(--ink-soft)">${fmtDate(p.dataInicio)}<br>↓ ${fmtDate(p.dataFim)}</td>
       <td class="num">${fmtBRL(p.receita)}</td>
@@ -5454,12 +5530,12 @@ function viewPortfolio(v){
 
   v.innerHTML=`
   <div class="toolbar">
-    <input class="search" id="q" placeholder="Buscar por nome, código ou cliente…" value="${esc(ST.search.portfolio||"")}">
+    <input class="search" id="q" placeholder="Buscar por nome, código, cliente ou ponto focal…" value="${esc(ST.search.portfolio||"")}">
     <div class="field-inline">Ordenar por
       <select class="select" id="ord-portfolio">
-        <option value="status" ${ST.portfolioOrdenar==="status"?"selected":""}>Status</option>
-        <option value="nome" ${ST.portfolioOrdenar==="nome"?"selected":""}>Nome (A-Z)</option>
-        <option value="data" ${ST.portfolioOrdenar==="data"?"selected":""}>Data de início (mais recente)</option>
+        <option value="status" ${ST[kOrd]==="status"?"selected":""}>Status</option>
+        <option value="nome" ${ST[kOrd]==="nome"?"selected":""}>Nome (A-Z)</option>
+        <option value="data" ${ST[kOrd]==="data"?"selected":""}>Data de início (mais recente)</option>
       </select></div>
     <button class="btn${ST.portfolioMostrarConcluidos?" active":""}" id="btn-concluidos">
       ${ST.portfolioMostrarConcluidos?"✓ ":""}Mostrar concluídos${concluidosOcultos>0&&!ST.portfolioMostrarConcluidos?" ("+concluidosOcultos+")":""}
@@ -5469,14 +5545,14 @@ function viewPortfolio(v){
   </div>
   <div class="card table-wrap">
     <table><thead><tr>
-      <th>Projeto</th><th>Status</th><th>Período</th>
+      <th>Projeto</th>${ehCapt?`<th>Cliente</th><th>Ponto Focal</th>`:""}<th>Status</th><th>Período</th>
       <th class="num">Receita</th>${verFin?`<th class="num">Despesas</th><th class="num">Margem</th>`:""}
       <th style="min-width:140px">Andamento</th><th></th>
-    </tr></thead><tbody>${rows||`<tr><td colspan="${verFin?8:6}" style="text-align:center;color:var(--ink-faint);padding:30px">Nenhum projeto encontrado.</td></tr>`}</tbody></table>
+    </tr></thead><tbody>${rows||`<tr><td colspan="${(verFin?8:6)+(ehCapt?2:0)}" style="text-align:center;color:var(--ink-faint);padding:30px">Nenhum projeto encontrado.</td></tr>`}</tbody></table>
   </div>`;
 
   $("#q").oninput=e=>{ ST.search.portfolio=e.target.value; viewPortfolio(v); };
-  $("#ord-portfolio").onchange=e=>{ ST.portfolioOrdenar=e.target.value; viewPortfolio(v); };
+  $("#ord-portfolio").onchange=e=>{ ST[kOrd]=e.target.value; viewPortfolio(v); };
   $("#btn-concluidos").onclick=()=>{ ST.portfolioMostrarConcluidos=!ST.portfolioMostrarConcluidos; viewPortfolio(v); };
   v.querySelectorAll("[data-pid]").forEach(tr=>{
     tr.onclick=e=>{ if(e.target.closest("[data-edit],[data-del]")) return;
