@@ -247,6 +247,11 @@
   .form-grid{display:grid;gap:15px}
   .form-grid.two{grid-template-columns:1fr 1fr}
   @media(max-width:560px){.form-grid.two{grid-template-columns:1fr}}
+  /* formulário em 12 colunas (ex.: Editar projeto): cada campo define --sp (nº de colunas) */
+  .modal.xwide{max-width:980px}
+  .form-grid.g12{grid-template-columns:repeat(12,minmax(0,1fr))}
+  .form-grid.g12 .fld{grid-column:span var(--sp,12);min-width:0}
+  @media(max-width:760px){.form-grid.g12 .fld{grid-column:1/-1}}
   .fld{display:flex;flex-direction:column;gap:5px}
   .fld.full{grid-column:1/-1}
   .fld label{font-size:12px;font-weight:600;color:var(--ink-soft)}
@@ -354,9 +359,18 @@
   .alert-row .alert-resp{font-size:11.5px;margin-top:4px;color:var(--ink);
     background:#f4f6fb;padding:3px 9px;border-radius:5px;display:inline-block}
   .alert-row .alert-resp .rl{color:var(--ink-faint);font-weight:500}
-  .alertas-filtros{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;width:100%;max-width:100%;min-width:0;box-sizing:border-box}
-  .alertas-filtros .field-inline{display:flex;align-items:center;flex-wrap:nowrap;gap:7px;min-width:0;max-width:100%;width:auto}
-  .alertas-filtros .field-inline .select{flex:1 1 0;width:0;min-width:0;max-width:100%;text-overflow:ellipsis}
+  .alertas-filtros{display:grid;grid-template-columns:minmax(140px,1fr) minmax(220px,2.4fr) minmax(170px,1.4fr);gap:14px;width:100%;max-width:100%;min-width:0;box-sizing:border-box;align-items:end}
+  .alertas-filtros .field-inline{display:flex;flex-direction:column;align-items:stretch;flex-wrap:nowrap;gap:5px;min-width:0;max-width:100%;width:auto;
+    font-size:12px;font-weight:600;color:var(--ink-soft)}
+  .alertas-filtros .field-inline .select{flex:none;width:100%;min-width:0;max-width:100%;text-overflow:ellipsis}
+  @media(max-width:760px){.alertas-filtros{grid-template-columns:minmax(0,1fr)}}
+  /* ---- Carrossel dos Dashboards de horas (Painel Geral) ---- */
+  .hr-car-tabs{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin:0 0 10px}
+  .hr-car-tab{border:1px solid var(--line);background:var(--surface);color:var(--ink-soft);font-size:12px;font-weight:600;
+    padding:5px 12px;border-radius:999px;cursor:pointer}
+  .hr-car-tab:hover{border-color:var(--accent);color:var(--accent)}
+  .hr-car-tab.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  #horas-car .sp-car-slide>.card{margin:0}
   .btn-icon.mcs-on{background:var(--info-bg);color:var(--info);border-color:var(--info)}
   .alert-row .alert-resp.sem{background:#fdf0e8;color:#a8551f}
   .alert-row .alert-resp.sem .rl{color:#a8551f}
@@ -3223,6 +3237,7 @@ const ST = {
   painelAlertaProjeto:"",   // filtro de projeto dos Alertas de prazo (Painel Geral)
   painelAlertaPortfolio:"", // filtro de portfólio (sessão) dos Alertas de prazo (Painel Geral)
   sprintSlide:0,            // página atual do carrossel da SPRINT (Painel Geral)
+  horasSlide:0,             // slide atual do carrossel dos Dashboards de horas (Painel Geral)
   sprintSemanaOffset:0,     // semana do gráfico de ocupação do SPRINT (0 = corrente, -1 anterior, +1 próxima)
   painelAlertaResp:"",      // filtro de responsável dos Alertas de prazo (Painel Geral)
   // status visíveis no cronograma físico de cada projeto — "Concluída" some
@@ -3358,11 +3373,16 @@ const SESSAO_CONFIG={
       // (pode ser diferente do valor pleiteado neste projeto). Por isso é opcional.
       {key:"valorEdital",label:"Valor do Edital (R$)",type:"number",min:0,placeholder:"0,00",
         help:"Opcional. Valor total do edital/programa de fomento, quando for diferente do valor pleiteado neste projeto."},
+      {key:"valorSenai",label:"Valor SENAI (R$)",type:"number",min:0,placeholder:"0,00"},
       {key:"prazoSubmissao",label:"Prazo de submissão",type:"date"},
       {key:"statusCaptacao",label:"Status da captação",type:"select",
         options:STATUS_CAPTACAO.map(s=>({value:s,label:s}))}
     ],
     abasOcultas:["financeiro","raci"],
+    // no formulário de Captação o "Gerente responsável" dá lugar ao "Ponto focal"
+    // (o dado de gerente continua no banco) e a receita vira "Valor total do projeto"
+    camposOcultosForm:["gerente"],
+    rotuloReceita:"Valor total do projeto (R$)",
     // Captação não tem o campo "Responsável(is)" no formulário da atividade:
     // quem responde é quem tem horas previstas em "Horas previstas por colaborador".
     semCampoResponsaveis:true,
@@ -4738,28 +4758,45 @@ function viewPainel(v){
     </div>`}
   </div>
 
-  <div class="card" style="margin-bottom:18px">
-    <div class="card-head"><h3>Horas executadas — visão ${ST.dashMode}</h3>
-      <button class="btn ghost sm" id="btn-origem-horas" title="Lista cada lançamento que compõe as horas executadas: de onde veio, atividade, pessoa e data">🔍 Ver origem das horas</button>
-      <span class="hint">${ST.dashMode==="anual"?"Todos os anos":"Ano "+ST.dashYear}${ST.dashColab?" · "+esc(nomeColab(ST.dashColab)):""} · total ${fmtH(serieCat.reduce((s,d)=>s+d.total,0))}${ST.dashMode!=="anual"?" · clique numa coluna para ver o período nos gráficos abaixo":""}</span></div>
-    <div class="card-pad">${stackedBarChart(serieCat,{fmt:v=>fmtNum(v,0)+"h",legend:legendDeBuckets(serieCat),clicavel:ST.dashMode!=="anual",selecionado:ST.dashMode==="mensal"?+ST.dashMes-1:ST.dashMode==="semestral"?+ST.dashSem-1:-1})}</div>
-  </div>
-
-  <div class="grid g2">
-    <div class="card">
-      <div class="card-head"><h3>Horas por categoria de atividade</h3><span class="hint">${esc(perDash.label)}${ST.dashColab?" · "+esc(nomeColab(ST.dashColab)):""}</span></div>
-      <div class="card-pad">${donutChart(catData,{horas:true})}</div>
-    </div>
-    <div class="card">
-      <div class="card-head"><h3>Horas por projeto</h3><span class="hint">${esc(perDash.label)}${ST.dashColab?" · "+esc(nomeColab(ST.dashColab)):""}</span></div>
-      <div class="card-pad">${horasPorProjetoHtml(dadosHoras,planPer)}</div>
-    </div>
-  </div>
-
-  ${veOcupacao()?`<div class="card" style="margin-top:18px">
-    <div class="card-head"><h3>Ocupação por colaborador</h3><span class="hint">${esc(perDash.label)} · executado × planejado × capacidade (${CAPACIDADE_DIARIA_PADRAO} h por dia útil) · clique no nome para filtrar os gráficos</span></div>
-    <div class="card-pad">${comOutrosProjetos(()=>ocupacaoColabPeriodoHtml(perDash,horasPlanejadasPeriodo(perDash.ini,perDash.fim)))}</div>
-  </div>`:""}`;
+  ${(()=>{
+    /* CARROSSEL DOS DASHBOARDS DE HORAS: cada gráfico vira um slide; setas ◀ ▶,
+       abas, bolinhas e deslizar com o dedo trocam de slide sem recarregar a tela. */
+    const sub=(ST.dashMode==="anual"?"Todos os anos":"Ano "+ST.dashYear)+(ST.dashColab?" · "+esc(nomeColab(ST.dashColab)):"");
+    const slides=[
+      {titulo:"Horas executadas", html:`
+        <div class="card">
+          <div class="card-head"><h3>Horas executadas — visão ${ST.dashMode}</h3>
+            <button class="btn ghost sm" id="btn-origem-horas" title="Lista cada lançamento que compõe as horas executadas: de onde veio, atividade, pessoa e data">🔍 Ver origem das horas</button>
+            <span class="hint">${sub} · total ${fmtH(serieCat.reduce((s,d)=>s+d.total,0))}${ST.dashMode!=="anual"?" · clique numa coluna para ver o período nos gráficos seguintes":""}</span></div>
+          <div class="card-pad">${stackedBarChart(serieCat,{fmt:v=>fmtNum(v,0)+"h",legend:legendDeBuckets(serieCat),clicavel:ST.dashMode!=="anual",selecionado:ST.dashMode==="mensal"?+ST.dashMes-1:ST.dashMode==="semestral"?+ST.dashSem-1:-1})}</div>
+        </div>`},
+      {titulo:"Por categoria", html:`
+        <div class="card">
+          <div class="card-head"><h3>Horas por categoria de atividade</h3><span class="hint">${esc(perDash.label)}${ST.dashColab?" · "+esc(nomeColab(ST.dashColab)):""}</span></div>
+          <div class="card-pad">${donutChart(catData,{horas:true})}</div>
+        </div>`},
+      {titulo:"Por projeto", html:`
+        <div class="card">
+          <div class="card-head"><h3>Horas por projeto</h3><span class="hint">${esc(perDash.label)}${ST.dashColab?" · "+esc(nomeColab(ST.dashColab)):""}</span></div>
+          <div class="card-pad">${horasPorProjetoHtml(dadosHoras,planPer)}</div>
+        </div>`}
+    ];
+    if(veOcupacao()) slides.push({titulo:"Ocupação", html:`
+        <div class="card">
+          <div class="card-head"><h3>Ocupação por colaborador</h3><span class="hint">${esc(perDash.label)} · executado × planejado × capacidade (${CAPACIDADE_DIARIA_PADRAO} h por dia útil) · clique no nome para filtrar os gráficos</span></div>
+          <div class="card-pad">${comOutrosProjetos(()=>ocupacaoColabPeriodoHtml(perDash,horasPlanejadasPeriodo(perDash.ini,perDash.fim)))}</div>
+        </div>`});
+    const n=slides.length;
+    return `<div id="horas-car" data-total="${n}">
+      <div class="hr-car-tabs">${slides.map((x,k)=>`<button type="button" class="hr-car-tab ${k===0?"on":""}" data-k="${k}">${x.titulo}</button>`).join("")}</div>
+      <div class="sp-car">
+        <button type="button" class="sp-car-arrow prev" title="Gráfico anterior" aria-label="Gráfico anterior">◀</button>
+        <div class="sp-car-slides">${slides.map((x,k)=>`<div class="sp-car-slide" ${k===0?"":"hidden"}>${x.html}</div>`).join("")}</div>
+        <button type="button" class="sp-car-arrow next" title="Próximo gráfico" aria-label="Próximo gráfico">▶</button>
+        <div class="sp-car-foot"><span class="sp-car-info"></span><span class="sp-car-dots">${slides.map((x,k)=>`<button type="button" class="sp-car-dot ${k===0?"on":""}" title="${x.titulo}" aria-label="Ir para ${x.titulo}"></button>`).join("")}</span></div>
+      </div>
+    </div>`;
+  })()}`;
 
   if(podeCriarProjeto()) setTopAction(`<button class="btn">+ Novo projeto</button>`,()=>formProjeto());
   if(veQuadrosEstrategicos()) wireQuadroResumo(v);
@@ -4791,6 +4828,31 @@ function viewPainel(v){
     car.addEventListener("touchend",e=>{ if(x0==null) return; const dx=e.changedTouches[0].clientX-x0; x0=null;
       if(Math.abs(dx)>60) ir((ST.sprintSlide||0)+(dx<0?1:-1)); });
     ir(Math.min(ST.sprintSlide||0,n-1));
+  })();
+  // CARROSSEL DOS DASHBOARDS DE HORAS: setas, abas, bolinhas e deslize (celular)
+  (function(){
+    const car=$("#horas-car"); if(!car) return;
+    const slides=[...car.querySelectorAll(".sp-car-slide")], n=slides.length;
+    const tabs=[...car.querySelectorAll(".hr-car-tab")], dots=[...car.querySelectorAll(".sp-car-dot")];
+    const prev=car.querySelector(".sp-car-arrow.prev"), next=car.querySelector(".sp-car-arrow.next");
+    const info=car.querySelector(".sp-car-info");
+    function ir(i){
+      i=Math.max(0,Math.min(n-1,i)); ST.horasSlide=i;
+      slides.forEach((el,k)=>{ el.hidden=(k!==i); });
+      tabs.forEach((t,k)=>t.classList.toggle("on",k===i));
+      dots.forEach((d,k)=>d.classList.toggle("on",k===i));
+      prev.disabled=(i===0); next.disabled=(i===n-1);
+      info.textContent=`${i+1} de ${n} · ${tabs[i]?tabs[i].textContent:""}`;
+    }
+    prev.onclick=()=>ir((ST.horasSlide||0)-1);
+    next.onclick=()=>ir((ST.horasSlide||0)+1);
+    tabs.forEach((t,k)=>t.onclick=()=>ir(k));
+    dots.forEach((d,k)=>d.onclick=()=>ir(k));
+    let x0=null;
+    car.addEventListener("touchstart",e=>{ x0=e.touches[0].clientX; },{passive:true});
+    car.addEventListener("touchend",e=>{ if(x0==null) return; const dx=e.changedTouches[0].clientX-x0; x0=null;
+      if(Math.abs(dx)>60) ir((ST.horasSlide||0)+(dx<0?1:-1)); });
+    ir(Math.min(ST.horasSlide||0,n-1));
   })();
   $("#dash-year").onchange=e=>{ ST.dashYear=e.target.value; render(); };
   if($("#dash-mes")) $("#dash-mes").onchange=e=>{ ST.dashMes=+e.target.value; render(); };
@@ -9719,13 +9781,13 @@ function openForm(cfg){
       const extra=t==="number"?`step="${f.step||"any"}" min="${f.min!=null?f.min:""}"`:"";
       input=`<input type="${t}" data-k="${f.key}" ${dis} value="${esc(v==null?"":v)}" placeholder="${esc(f.placeholder||"")}" ${extra}>`;
     }
-    return `<div class="fld ${f.full?"full":""}">
+    return `<div class="fld ${f.full?"full":""}" ${cfg.grid12&&f.span?`style="--sp:${f.span}"`:""}>
       <label>${esc(f.label)}${req}</label>${input}
       ${f.help?`<span class="help">${esc(f.help)}</span>`:""}</div>`;
   }
-  const grid=fields.length>1?"two":"";
+  const grid=cfg.grid12?"g12":(fields.length>1?"two":"");
   $("#modal-root").innerHTML=`
-  <div class="overlay"><div class="modal ${cfg.wide?"wide":""}">
+  <div class="overlay"><div class="modal ${cfg.wide?"wide":""} ${cfg.xwide?"xwide":""}">
     <div class="modal-head"><h3>${esc(cfg.title)}</h3>
       <button class="btn-icon" id="m-x">✕</button></div>
     <div class="modal-body">
@@ -10175,12 +10237,36 @@ function formProjeto(p,sessaoIdDefault){
         ? {key:"dataFim",label:"Data de término prevista",type:"date",allowIndeterminate:true,
             help:"Marque \"Data indeterminada\" para rotinas sem previsão de término."}
         : {key:"dataFim",label:"Data de término prevista",type:"date"},
-      {key:"receita",label:"Receita / Valor do projeto (R$)",type:"number",min:0,
+      {key:"receita",label:cfg.rotuloReceita||"Receita / Valor do projeto (R$)",type:"number",min:0,
         placeholder:"0,00",help:"Valor total contratado do projeto"},
       {key:"descricao",label:"Descrição / Escopo",type:"textarea",full:true,
         placeholder:"Objetivo e escopo resumido do projeto"}
     ].filter(f=>!ocultos.has(f.key));
-    return [...base, ...extras];
+    return layoutProjeto([...base, ...extras]);
+  }
+
+  // LAYOUT EM 12 COLUNAS (como no modelo): Nome e Descrição em linha cheia; depois
+  // Sessão · Código · Início · Término · Prazo; Cliente · Gerente (· Ponto focal);
+  // Órgão · Valor do Edital · Receita; Status da captação. Campos que a sessão
+  // esconde simplesmente não entram — as larguras se ajustam ao que existir.
+  function layoutProjeto(campos){
+    const tem=k=>campos.some(f=>f.key===k);
+    const comPrazo=tem("prazoSubmissao"), comOrgao=tem("orgaoEdital"), comPonto=tem("pontoFocal"),
+          comGer=tem("gerente"), comSenai=tem("valorSenai");
+    const tres=comPonto&&comGer;
+    const span={
+      nome:12, descricao:12,
+      sessaoId: comPrazo?2:3, codigo:3, dataInicio: comPrazo?2:3, dataFim: comPrazo?2:3, prazoSubmissao:3,
+      cliente: tres?4:6, gerente: tres?4:6, pontoFocal: tres?4:6,
+      orgaoEdital:6, statusCaptacao:6,
+      valorEdital:4, valorSenai:4, receita: comSenai?4:6
+    };
+    const ordem=["nome","descricao","sessaoId","codigo","dataInicio","dataFim","prazoSubmissao",
+      "cliente","gerente","pontoFocal","orgaoEdital","statusCaptacao","valorEdital","valorSenai","receita"];
+    const pos=k=>{ const i=ordem.indexOf(k); return i<0?999:i; };
+    return campos.map((f,i)=>({f,i}))
+      .sort((a,b)=>(pos(a.f.key)-pos(b.f.key))||(a.i-b.i))
+      .map(x=>Object.assign({},x.f,{span:span[x.f.key]||((x.f.full||x.f.type==="textarea")?12:6), full:false}));
   }
 
   // reabre o formulário com os campos certos sempre que a sessão muda (ou um
@@ -10190,7 +10276,7 @@ function formProjeto(p,sessaoIdDefault){
     const fields=camposParaSessao(valsAtuais.sessaoId||null,valsAtuais);
     openForm({
       title:edit?"Editar projeto":"Novo projeto",
-      wide:true,
+      wide:true, xwide:true, grid12:true,
       values:valsAtuais,
       fields,
       onFieldChange:(vv,key)=>{ if(key==="sessaoId"||key==="modalidade") abrir(vv); },
