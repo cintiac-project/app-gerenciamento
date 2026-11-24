@@ -500,6 +500,9 @@
   .brand .logo{flex-wrap:wrap;row-gap:6px}
   .brand .logo .beta-tag{margin-left:0}
   /* ---- Nome do projeto em destaque (SPRINT / MDS): fundo azul SENAI ---- */
+  .badge-wrap{white-space:normal;line-height:1.3;display:inline-block;max-width:210px;text-align:left;font-size:11.5px}
+  .alert-cli{font-size:12px;color:var(--ink-soft);margin-top:3px}
+  .alert-cli span{color:var(--ink-faint);font-weight:600}
   .proj-chip{display:inline-block;max-width:100%;background:var(--accent);color:#fff;padding:2px 10px;border-radius:6px;
     font-weight:600;line-height:1.45;overflow-wrap:anywhere}
   .proj-chip b,.alert-row .at .d .proj-chip,.alert-row .at .d .proj-chip b{color:#fff;font-weight:800}
@@ -1263,7 +1266,20 @@ const LOGO_SENAI_BRANCO_B64="iVBORw0KGgoAAAANSUhEUgAAAeAAAACACAYAAADTV7p7AABFkkl
 const logoSrc=t=>"data:image/png;base64,"+(t==="branco"?LOGO_SENAI_BRANCO_B64:LOGO_SENAI_AZUL_B64);
 const logoImg=(t,w,extra)=>`<img data-logo="${t}" src="${logoSrc(t)}" alt="SENAI" width="${w}" style="width:${w}px;height:auto;${extra||""}">`;
 document.querySelectorAll("img[data-logo]").forEach(i=>{ if(!i.getAttribute("src")) i.src=logoSrc(i.dataset.logo); });
-const PALETTE=["#164194","#e84910","#43bdd9","#4c3189","#f3ab15","#2f8f4e","#6b86c9","#a064c8","#8a98a6","#0e7a8c"];
+/* PALETA SENAI dos gráficos: azul institucional, laranja de destaque, ciano, tons de azul e cinza.
+   Ordenada para que fatias vizinhas tenham bom contraste. */
+const PALETA_SENAI=["#164194","#e84910","#43bdd9","#0f2c66","#f3ab15","#6b86c9","#0e7a8c","#f08a5d",
+  "#8a98a6","#2a5cb8","#4c3189","#a9bde3","#2f8f4e","#c67a12","#4a5a6b","#9fd9e8"];
+const PALETTE=PALETA_SENAI;
+/* cor da categoria nos gráficos: segue a paleta SENAI pela posição da categoria na lista.
+   Para voltar a usar as cores cadastradas em Configurações, troque para false. */
+const USAR_PALETA_SENAI=true;
+function corCatGraf(c){
+  if(!c) return "#8a98a6";
+  if(!USAR_PALETA_SENAI) return c.cor||"#8a98a6";
+  const i=DB.data.categorias.findIndex(x=>x.id===c.id);
+  return i<0?(c.cor||"#8a98a6"):PALETA_SENAI[i%PALETA_SENAI.length];
+}
 
 function toast(msg){
   const r=$("#toast-root");
@@ -1321,7 +1337,7 @@ function categoriasParaSelect(idAtual){
 function legendaCategoriasHtml(){
   return CATEGORIA_LEGENDA.map(item=>{
     const catDb=DB.data.categorias.find(c=>{ const pd=categoriaPadraoDe(c); return pd===item; });
-    const cor=catDb?catDb.cor:"#8a97a3";
+    const cor=catDb?corCatGraf(catDb):"#8a97a3";
     return `<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
       <span style="width:10px;height:10px;border-radius:50%;background:${cor};flex-shrink:0;margin-top:5px"></span>
       <div><div style="font-weight:600;font-size:13px;margin-bottom:2px">${esc(item.cod)}. ${esc(item.nome)}</div>
@@ -2205,7 +2221,7 @@ function rotuloProjetoSelect(p){
 function nomeColab(id){ const c=getColab(id); return c?c.nome:"—"; }
 function colabBadge(c){ return c && c.tipo==="parceiro" ? ' <span class="tag" style="background:#fff1cf;color:#9a5b00;font-size:10px;padding:1px 6px">Parceiro</span>' : ""; }
 function nomeCategoria(id){ const c=getCategoria(id); return c?c.nome:"—"; }
-function corCategoria(id){ const c=getCategoria(id); return c?c.cor:"#8a98a6"; }
+function corCategoria(id){ const c=getCategoria(id); return c?corCatGraf(c):"#8a98a6"; }
 function nomeRubrica(id){ const r=getRubrica(id); return r?r.nome:"—"; }
 /* linha auxiliar "3 × R$ 150,00" exibida sob o valor total de um lançamento
    financeiro, só quando fizer diferença mostrar (quantidade≠1 ou valor
@@ -2220,6 +2236,12 @@ function nomeAtividade(id){ const a=getAtividade(id); return a?a.nome:"—"; }
 
 const STATUS_PROJ=["Planejado","Em andamento","Em risco","Concluído","Cancelado"];
 const STATUS_ATIV=["Não iniciada","Em andamento","Concluída","Atrasada","Cancelada"];
+/* status de captação: texto completo com quebra de linha (cabe em coluna estreita) */
+function statusCaptacaoBadge(st){
+  if(!st) return '<span style="color:var(--ink-faint)">—</span>';
+  const cls=STATUS_CAPTACAO_GATILHO.includes(st)?"b-ok":STATUS_CAPTACAO_FORA_PREVISTO.includes(st)?"b-mute":"b-info";
+  return `<span class="badge ${cls} badge-wrap" title="${esc(st)}">${esc(st)}</span>`;
+}
 function statusBadge(s){
   const map={
     "Em andamento":"b-info","Planejado":"b-mute","Concluído":"b-ok","Concluída":"b-ok",
@@ -4560,7 +4582,7 @@ function viewPainel(v){
   const catMap={}, catPlan={};
   dadosHoras.forEach(h=>{ catMap[h.categoriaId||""]=(catMap[h.categoriaId||""]||0)+(+h.horas||0); });
   planPer.filter(x=>!ST.dashColab||x.colaboradorId===ST.dashColab).forEach(x=>{ catPlan[x.categoriaId||""]=(catPlan[x.categoriaId||""]||0)+x.horas; });
-  const catData=DB.data.categorias.map(c=>({label:c.nome,value:catMap[c.id]||0,color:c.cor,
+  const catData=DB.data.categorias.map(c=>({label:c.nome,value:catMap[c.id]||0,color:corCatGraf(c),
       title:`${c.nome}\nExecutadas: ${fmtH(catMap[c.id]||0)}\nPlanejadas no período: ${fmtH(catPlan[c.id]||0)}`}))
     .filter(d=>d.value>0);
   /* série temporal por categoria (para as barras empilhadas) */
@@ -4625,6 +4647,7 @@ function viewPainel(v){
       <div class="at">${a.rotulo?`<div class="alert-head"><span class="alert-tag ${a.sev==="danger"?"danger":a.sev==="info"?"info":"warn"}">${esc(a.rotulo)}</span>${a.meta?`<span class="alert-meta">${esc(a.meta)}</span>`:""}</div>`:""}
         <div class="t">${esc(a.rotulo&&String(a.titulo).startsWith(a.rotulo+": ")?String(a.titulo).slice(a.rotulo.length+2):a.titulo)}</div>
         <div class="d">${(a.secao==="sprint"&&a.descHtml)?`<span class="proj-chip">${a.descHtml}</span>`:(a.descHtml||esc(a.desc))}</div>
+        ${(()=>{ const pj=getProjeto(a.projetoId); return (pj&&pj.cliente)?`<div class="alert-cli"><span>Cliente:</span> ${esc(pj.cliente)}</div>`:""; })()}
         ${respHtml}${notasHtml}${faltaHtml}</div>
       <span class="badge ${a.sev==="danger"?"b-danger":a.sev==="info"?"b-info":"b-warn"}">${a.tipo==="fisico"?"Físico":a.tipo==="financeiro"?"Financeiro":a.tipo==="duplicada"?"Duplicada":"Reunião"}</span>
       ${mcsBtnHtml}${acoesHtml}</div>`;
@@ -5467,7 +5490,7 @@ function abrirOrigemHoras(){
   desenhar();
 }
 function serieHorasPorCategoria(){
-  function catColor(cid){ const c=getCategoria(cid); return c?c.cor:"#c7cfd6"; }
+  function catColor(cid){ const c=getCategoria(cid); return c?corCatGraf(c):"#c7cfd6"; }
   function catNome(cid){ return cid?nomeCategoria(cid):"Sem categoria"; }
   function buildBuckets(labels, bucketOfFn){
     const buckets=labels.map(l=>({label:l,total:0,map:{}}));
@@ -5574,15 +5597,16 @@ function viewPortfolio(v){
       <td><div style="font-weight:600">${esc(p.nome)}</div>
         <div style="font-size:11.5px;color:var(--ink-faint)">${p.codigo?`<b style="color:var(--ink)">${esc(p.codigo)}</b>`:""}${(!ehCapt&&p.cliente)?(p.codigo?" · ":"")+esc(p.cliente):""}</div></td>
       ${ehCapt?`<td style="font-size:12.5px">${esc(p.cliente||"—")}</td>
-      <td style="font-size:12.5px">${esc(p.pontoFocal||"—")}</td>`:""}
-      <td>${statusBadge(statusCalculado(p))}</td>
+      <td style="font-size:12.5px">${esc(p.pontoFocal||"—")}</td>
+      <td>${statusCaptacaoBadge(p.statusCaptacao)}</td>`:`<td>${statusBadge(statusCalculado(p))}</td>`}
       <td style="font-size:12px;color:var(--ink-soft)">${fmtDate(p.dataInicio)}<br>↓ ${fmtDate(p.dataFim)}</td>
       <td class="num">${fmtBRL(p.receita)}</td>
       ${verFin?`<td class="num">${fmtBRL(desp)}</td>
       <td class="num"><b style="color:${margem==null?"var(--ink-faint)":margem<0?"var(--danger)":"var(--ok)"}">${margem==null?"—":fmtNum(margem,1)+"%"}</b></td>`:""}
       <td><div style="display:flex;align-items:center;gap:8px">
-        <div class="pbar ${pcls}" style="flex:1"><div style="width:${prog}%"></div></div>
+        <div class="pbar ${pcls}" style="${ehCapt?"flex:0 0 60px":"flex:1"}"><div style="width:${prog}%"></div></div>
         <span style="font-size:11.5px;font-weight:600;width:34px">${prog}%</span></div></td>
+      ${ehCapt?`<td>${statusBadge(statusCalculado(p))}</td>`:""}
       <td class="actions">
         ${podeEditarDados()?`<button class="btn-icon" data-edit="${p.id}" title="Editar">✎</button>`:""}
         ${isGestor()?`<button class="btn-icon" data-move="${p.id}" title="Mover de sessão">⇄</button>`:""}
@@ -5607,10 +5631,10 @@ function viewPortfolio(v){
   </div>
   <div class="card table-wrap">
     <table><thead><tr>
-      <th>Projeto</th>${ehCapt?`<th>Cliente</th><th>Ponto Focal</th>`:""}<th>Status</th><th>Período</th>
+      <th${ehCapt?' style="width:26%"':""}>Projeto</th>${ehCapt?`<th style="width:12%">Cliente</th><th style="width:11%">Ponto Focal</th>`:""}<th${ehCapt?' style="width:14%"':""}>${ehCapt?"Status de captação":"Status"}</th><th>Período</th>
       <th class="num">Receita</th>${verFin?`<th class="num">Despesas</th><th class="num">Margem</th>`:""}
-      <th style="min-width:140px">Andamento</th><th></th>
-    </tr></thead><tbody>${rows||`<tr><td colspan="${(verFin?8:6)+(ehCapt?2:0)}" style="text-align:center;color:var(--ink-faint);padding:30px">Nenhum projeto encontrado.</td></tr>`}</tbody></table>
+      <th style="min-width:${ehCapt?96:140}px">Andamento</th>${ehCapt?`<th style="width:9%">Status do projeto</th>`:""}<th></th>
+    </tr></thead><tbody>${rows||`<tr><td colspan="${(verFin?8:6)+(ehCapt?3:0)}" style="text-align:center;color:var(--ink-faint);padding:30px">Nenhum projeto encontrado.</td></tr>`}</tbody></table>
   </div>`;
 
   $("#q").oninput=e=>{ ST.search.portfolio=e.target.value; viewPortfolio(v); };
@@ -5746,7 +5770,7 @@ function projResumo(c,p){
   const totalHCat=Object.values(catMapP).reduce((s,v)=>s+v,0);
   const catProjData=Object.keys(catMapP).map(cid=>{
     const cat=getCategoria(cid);
-    return {label:cat?cat.nome:"—",value:catMapP[cid],color:cat?cat.cor:"#8a98a6"};
+    return {label:cat?cat.nome:"—",value:catMapP[cid],color:cat?corCatGraf(cat):"#8a98a6"};
   }).sort((a,b)=>b.value-a.value);
 
   const catProjTabela = catProjData.length ? `
@@ -8158,7 +8182,7 @@ function abrirAcessosPessoa(c){
 
 function viewConfig(v){
   const cats=DB.data.categorias.map((c,i)=>`<tr>
-    <td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${c.cor};vertical-align:-1px;margin-right:7px"></span>${esc(c.nome)}</td>
+    <td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${corCatGraf(c)};vertical-align:-1px;margin-right:7px"></span>${esc(c.nome)}</td>
     <td class="actions"><button class="btn-icon" data-edcat="${c.id}">✎</button>
       <button class="btn-icon del" data-dlcat="${c.id}">🗑</button></td></tr>`).join("");
   const rubs=DB.data.rubricas.map(r=>`<tr>
