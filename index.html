@@ -1268,8 +1268,22 @@ const logoImg=(t,w,extra)=>`<img data-logo="${t}" src="${logoSrc(t)}" alt="SENAI
 document.querySelectorAll("img[data-logo]").forEach(i=>{ if(!i.getAttribute("src")) i.src=logoSrc(i.dataset.logo); });
 /* PALETA SENAI dos gráficos: azul institucional, laranja de destaque, ciano, tons de azul e cinza.
    Ordenada para que fatias vizinhas tenham bom contraste. */
-const PALETA_SENAI=["#164194","#e84910","#43bdd9","#0f2c66","#f3ab15","#6b86c9","#0e7a8c","#f08a5d",
-  "#8a98a6","#2a5cb8","#4c3189","#a9bde3","#2f8f4e","#c67a12","#4a5a6b","#9fd9e8"];
+const PALETA_SENAI=["#164194",  /* azul SENAI */
+  "#f3ab15",  /* amarelo âmbar */
+  "#8e6bc7",  /* roxo médio */
+  "#e84910",  /* laranja SENAI */
+  "#43bdd9",  /* ciano */
+  "#4c3189",  /* roxo escuro */
+  "#ffe08a",  /* amarelo claro */
+  "#2f8f4e",  /* verde */
+  "#f4a58a",  /* salmão */
+  "#8a98a6",  /* cinza */
+  "#0e7a8c",  /* turquesa */
+  "#c9b3ec",  /* lilás claro */
+  "#a67c00",  /* mostarda */
+  "#a9bde3",  /* azul gelo */
+  "#0f2c66",  /* azul marinho */
+  "#9fd9e8"]; /* ciano claro */
 const PALETTE=PALETA_SENAI;
 /* cor da categoria nos gráficos: segue a paleta SENAI pela posição da categoria na lista.
    Para voltar a usar as cores cadastradas em Configurações, troque para false. */
@@ -3186,7 +3200,7 @@ function stackedBarChart(data,opts){
       if(seg.value<=0) return;
       const h=(seg.value/max)*chartH;
       const y=yCursor-h;
-      bars+=`<rect x="${x}" y="${y}" width="${bw}" height="${Math.max(h,0.5)}" fill="${seg.color}"><title>${esc(seg.nome)}: ${fmtNum(seg.value,1)}h</title></rect>`;
+      bars+=`<rect x="${x}" y="${y}" width="${bw}" height="${Math.max(h,0.5)}" fill="${seg.color}" stroke="#fff" stroke-width="1"><title>${esc(seg.nome)}: ${fmtNum(seg.value,1)}h</title></rect>`;
       yCursor=y;
     });
     if(!d.segs||!d.segs.length){
